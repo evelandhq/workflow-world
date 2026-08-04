@@ -125,6 +125,12 @@ export function createWorld(
      * contract test asserts the two still agree against the installed eve.
      */
     specVersion: SPEC_VERSION_CURRENT,
+    /**
+     * Declared so the runtime knows hook token retention is honoured here. A
+     * World that stays silent is treated as not supporting it, which was the
+     * previous state — and worse than that, the field was accepted and dropped.
+     */
+    capabilities: { hookRetention: { active: true } },
     ...storage,
     ...streamer,
     ...queue,

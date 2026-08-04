@@ -64,7 +64,7 @@ import {
   validateUlidTimestamp,
   WorkflowRunSchema,
 } from "@workflow/world";
-import { and, asc, desc, eq, gt, inArray, lt, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
 import { monotonicFactory } from "ulid";
 import { type Drizzle, Schema } from "./drizzle/index.js";
 import type { SerializedContent } from "./drizzle/schema.js";
@@ -94,6 +94,26 @@ import { compact } from "./util.js";
  * grows its event log without bound. Mirrors `@workflow/world-local`'s
  * `getMaxEventsPerRun`, including the 25,000 default, so the two agree.
  */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Ceiling on how far ahead a caller may push a hook's token retention.
+ *
+ * A retained token keeps a row alive after its run has finished, so an unbounded
+ * value is an unbounded lease on shared storage. Upstream's default is 30 days;
+ * matched here so a workflow behaves the same on either world.
+ */
+function getHookRetentionLimitMs(): number {
+  const days = Number(process.env.WORKFLOW_POSTGRES_HOOK_RETENTION_LIMIT_DAYS ?? 30);
+  if (!Number.isFinite(days) || days <= 0) {
+    throw new WorkflowWorldError(
+      "WORKFLOW_POSTGRES_HOOK_RETENTION_LIMIT_DAYS must be a positive number",
+      { status: 400 },
+    );
+  }
+  return days * DAY_MS;
+}
+
 const DEFAULT_MAX_EVENTS_PER_RUN = 25_000;
 
 function getMaxEventsPerRun(): number {
@@ -464,6 +484,15 @@ async function handleLegacyEventPostgres(
 }
 
 export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage["events"] {
+  const hookRetentionLimitMs = getHookRetentionLimitMs();
+  /**
+   * A hook is only collectable once its retention has lapsed. NULL means the
+   * caller never asked for any, which is the overwhelming majority.
+   */
+  const hookRetentionEnded = or(
+    isNull(Schema.hooks.tokenRetentionUntil),
+    lte(Schema.hooks.tokenRetentionUntil, sql`now()`),
+  );
   const ulid = monotonicFactory();
   const { events } = Schema;
 
@@ -535,6 +564,24 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
 
   return {
     async create(runId, data, params): Promise<EventResult> {
+      // Refuse rather than silently clamp: a caller that asked for 90 days and
+      // was given 30 would believe its token was reserved for three months.
+      if (
+        data.eventType === "hook_created" &&
+        (data as { eventData?: { tokenRetentionUntil?: Date } }).eventData?.tokenRetentionUntil !==
+          undefined
+      ) {
+        const requested = new Date(
+          (data as { eventData: { tokenRetentionUntil: Date } }).eventData.tokenRetentionUntil,
+        ).getTime();
+        if (requested > Date.now() + hookRetentionLimitMs) {
+          throw new WorkflowWorldError(
+            `Hook minimum retention cannot exceed ${String(hookRetentionLimitMs / DAY_MS)} days in the Postgres World.`,
+            { status: 400 },
+          );
+        }
+      }
+
       let eventId: string | undefined;
       const getEventId = () => (eventId ??= `wevt_${ulid()}`);
 
@@ -1006,11 +1053,16 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
         }
         // Delete all hooks and waits for this run to allow token reuse
         await Promise.all([
-          drizzle
-            .delete(Schema.hooks)
-            .where(
-              and(eq(Schema.hooks.tenantId, tenantId), eq(Schema.hooks.runId, effectiveRunId)),
+          drizzle.delete(Schema.hooks).where(
+            and(
+              eq(Schema.hooks.tenantId, tenantId),
+              eq(Schema.hooks.runId, effectiveRunId),
+              // A retained token outlives its run on purpose: that is the whole
+              // point of `tokenRetentionUntil`, and deleting the row here would
+              // free the token for immediate reuse.
+              hookRetentionEnded,
             ),
+          ),
           drizzle
             .delete(Schema.waits)
             .where(
@@ -1063,11 +1115,16 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
         }
         // Delete all hooks and waits for this run to allow token reuse
         await Promise.all([
-          drizzle
-            .delete(Schema.hooks)
-            .where(
-              and(eq(Schema.hooks.tenantId, tenantId), eq(Schema.hooks.runId, effectiveRunId)),
+          drizzle.delete(Schema.hooks).where(
+            and(
+              eq(Schema.hooks.tenantId, tenantId),
+              eq(Schema.hooks.runId, effectiveRunId),
+              // A retained token outlives its run on purpose: that is the whole
+              // point of `tokenRetentionUntil`, and deleting the row here would
+              // free the token for immediate reuse.
+              hookRetentionEnded,
             ),
+          ),
           drizzle
             .delete(Schema.waits)
             .where(
@@ -1113,11 +1170,16 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
         }
         // Delete all hooks and waits for this run to allow token reuse
         await Promise.all([
-          drizzle
-            .delete(Schema.hooks)
-            .where(
-              and(eq(Schema.hooks.tenantId, tenantId), eq(Schema.hooks.runId, effectiveRunId)),
+          drizzle.delete(Schema.hooks).where(
+            and(
+              eq(Schema.hooks.tenantId, tenantId),
+              eq(Schema.hooks.runId, effectiveRunId),
+              // A retained token outlives its run on purpose: that is the whole
+              // point of `tokenRetentionUntil`, and deleting the row here would
+              // free the token for immediate reuse.
+              hookRetentionEnded,
             ),
+          ),
           drizzle
             .delete(Schema.waits)
             .where(
@@ -1537,6 +1599,7 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
           metadata?: any;
           isWebhook?: boolean;
           isSystem?: boolean;
+          tokenRetentionUntil?: Date;
         };
 
         // Check for duplicate token using prepared statement
@@ -1654,6 +1717,7 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
               specVersion: effectiveSpecVersion,
               isWebhook: eventData.isWebhook,
               isSystem: eventData.isSystem ?? false,
+              tokenRetentionUntil: eventData.tokenRetentionUntil,
             })
             .onConflictDoNothing()
             .returning();
@@ -1988,6 +2052,15 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
 
 export function createHooksStorage(drizzle: Drizzle, tenantId: string): Storage["hooks"] {
   const { hooks } = Schema;
+  /**
+   * A token resolves while its retention is still in the future, even though the
+   * owning run has finished — that is what retention is for. Without the
+   * retention clause a retained hook would be found only for as long as its run
+   * was live, which is the behaviour retention exists to change.
+   *
+   * Scoped by tenant as well as token: guessing another tenant's token resolves
+   * to nothing rather than to their hook.
+   */
   const getByToken = drizzle
     .select()
     .from(hooks)

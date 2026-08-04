@@ -203,6 +203,12 @@ export const hooks = schema.table(
     projectId: varchar("project_id").notNull(),
     environment: varchar("environment").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    /**
+     * Keeps the token reserved past the owning run's end. NULL means no
+     * retention, which is what every row had before the column existed and what
+     * the consuming predicates read as "delete with the run".
+     */
+    tokenRetentionUntil: timestamp("token_retention_until", { withTimezone: true }),
     /** @deprecated */
     metadataJson: jsonb("metadata").$type<SerializedContent>(),
     metadata: Cbor<SerializedContent>()("metadata_cbor"),

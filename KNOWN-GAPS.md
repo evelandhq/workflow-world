@@ -4,9 +4,10 @@ Open problems in this package, with the evidence for each. Nothing here is
 speculative — every item was observed, and the ones that were _expected_ but did
 not survive measurement say so.
 
-The blocking gap (G1, per-run serialization) is closed. What remains is one
-narrower correctness item — message-level redelivery, recorded under G1 — and the
-hook token retention feature (G5).
+Every gap identified so far is closed. The entries below are kept as the record of
+what was wrong, how it was measured, and which choices were deliberate — several
+of them document a decision (bounded rather than durable dedup; refuse rather than
+clamp) that would otherwise read as an oversight.
 
 ---
 
@@ -144,23 +145,23 @@ multi-minute step under renewal pressure is still untested.
 
 ---
 
-## G5 — hook `tokenRetentionUntil` is accepted and silently discarded
+## G5 — RESOLVED: hook token retention is implemented
 
-**Status:** open. Needs a migration. **Evidence:** measured.
+`tokenRetentionUntil` on `hook_created` now persists in a `token_retention_until`
+column (migration `0003_hook_token_retention.sql`, nullable, `IF NOT EXISTS`), and
+the three run-termination deletes carry a `hookRetentionEnded` predicate so a
+retained hook outlives its run instead of being collected with it. `getByToken`
+resolves a retained token after the run has finished, which is the point of the
+feature. `capabilities: { hookRetention: { active: true } }` is declared, because a
+World that stays silent is treated as not supporting it.
 
-`tokenRetentionUntil` is a valid field on `hook_created` in the pinned
-`@workflow/world`, but there is no `token_retention_until` column in
-`src/drizzle/schema.ts` or in `migrations/`, and no
-`WORKFLOW_POSTGRES_HOOK_RETENTION_LIMIT_DAYS` handling. So a caller asking for
-retention gets no error, the value is dropped, and `run_completed` /
-`run_failed` / `run_cancelled` delete the hook regardless — the token becomes
-immediately reusable.
+A request beyond `WORKFLOW_POSTGRES_HOOK_RETENTION_LIMIT_DAYS` (default 30,
+matching upstream) is **refused rather than clamped**: a caller that asked for 90
+days and was quietly given 30 would believe its token was reserved for three
+months. A non-positive limit throws at construction.
 
-Silently discarding a field a caller set is the risky part; failing loudly would
-at least be actionable. Upstream implements the whole thing. Four upstream tests
-are dropped for this.
-
----
+`hook_disposed` still deletes unconditionally — that is an explicit dispose, not
+end-of-run collection, and retention is not meant to override it.
 
 ## G6 — resolved during the source-bug sweep
 
