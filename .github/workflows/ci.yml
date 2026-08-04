@@ -56,7 +56,8 @@ jobs:
         include:
           # The default gate. At these settings no lease renewal ever fires — the
           # longest dispatch is far shorter than the interval — which is why the
-          # other three variants exist. See KNOWN-GAPS.md G7.
+          # other variants exist. Renewal across a genuinely long dispatch is
+          # `scripts/long-step-lease.mjs`, run by hand: it takes minutes.
           - name: default
             renew_interval: ""
             renew_fail: ""

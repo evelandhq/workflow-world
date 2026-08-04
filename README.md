@@ -4,9 +4,9 @@ A natively multi-tenant [Workflow SDK](https://github.com/vercel/workflow) World
 backed by one shared PostgreSQL database, plus the dispatcher that drives it from
 outside the executor process.
 
-> **Experimental, `0.x`.** Not ready for production traffic — see
-> [KNOWN-GAPS.md](./KNOWN-GAPS.md). The one open gap is that no test has yet run
-> a step long enough to need a lease renewal, not a known defect.
+> **Experimental, `0.x`.** No open gaps are known — the ones that were tracked
+> are closed and covered by the suites under [Tests](#tests) — but this has
+> carried no production traffic yet, and that is the risk that remains.
 
 ## What problem this solves
 
@@ -146,8 +146,9 @@ World, which conformance never loads an eve to check.
 before this package was extracted from the Eveland monorepo. Its decisions ledger
 and its record of what was empirically proven are still the reasons the
 architecture looks like this; its integration plan is not, and the preamble says
-which parts to ignore. [KNOWN-GAPS.md](./KNOWN-GAPS.md) is authoritative wherever
-the two disagree.
+which parts to ignore. Where it and the code disagree, the code and the suite
+that covers it are authoritative — several gaps that document still calls open
+have since been closed here.
 
 ## Relationship to upstream
 
