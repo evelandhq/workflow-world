@@ -4,8 +4,9 @@ Open problems in this package, with the evidence for each. Nothing here is
 speculative — every item was observed, and the ones that were _expected_ but did
 not survive measurement say so.
 
-The blocking gap (G1, per-run serialization) is closed. What remains is coverage
-and one narrower correctness item — message-level redelivery — recorded under G1.
+The blocking gap (G1, per-run serialization) is closed. What remains is one
+narrower correctness item — message-level redelivery, recorded under G1 — and the
+hook token retention feature (G5).
 
 ---
 
@@ -140,3 +141,55 @@ multi-minute step under renewal pressure is still untested.
   dispatcher starts clean and then polls a database nothing writes to, or 401s
   every dispatch. Both ends now read one ordered list, and
   `src/env-contract.test.ts` asserts that every name is honoured by both.
+
+---
+
+## G5 — hook `tokenRetentionUntil` is accepted and silently discarded
+
+**Status:** open. Needs a migration. **Evidence:** measured.
+
+`tokenRetentionUntil` is a valid field on `hook_created` in the pinned
+`@workflow/world`, but there is no `token_retention_until` column in
+`src/drizzle/schema.ts` or in `migrations/`, and no
+`WORKFLOW_POSTGRES_HOOK_RETENTION_LIMIT_DAYS` handling. So a caller asking for
+retention gets no error, the value is dropped, and `run_completed` /
+`run_failed` / `run_cancelled` delete the hook regardless — the token becomes
+immediately reusable.
+
+Silently discarding a field a caller set is the risky part; failing loudly would
+at least be actionable. Upstream implements the whole thing. Four upstream tests
+are dropped for this.
+
+---
+
+## G6 — resolved during the source-bug sweep
+
+Each was found by porting upstream's suite, and each is covered by a test that
+was verified to fail without the fix:
+
+- **`hook_received` on a finished run.** No branch in the terminal-run guard, so
+  it fell through to the generic INSERT. Both paths now take the run row with
+  `FOR UPDATE`; the legacy path needed it most, because legacy runs are routed
+  before the terminal validation block is reached and so were unguarded entirely.
+- **Duplicate or late `run_created`.** `onConflictDoNothing()` returned no row and
+  the code fell through, leaving `result.run` undefined where eve's `start()`
+  asserts it and appending a second `run_created` to the log. Now throws
+  `EntityConflictError`, which `start()` already treats as benign.
+- **eve's queue namespace ignored.** `WORKFLOW_QUEUE_NAMESPACE` is live in the
+  installed runtime; a deployment that set it had eve registering
+  `__<ns>_wkf_workflow_*` while this world addressed `__wkf_workflow_*`, and every
+  message dead-lettered on a non-retryable 400. The namespace now travels on the
+  message, because the dispatcher runs in a different process and its own
+  environment holds the host's value, not the tenant's.
+- **`runs.getMany` unimplemented.** Optional in the interface, but omitting it
+  meant callers fell back to one query per id on eve's batched replay path. Now
+  implemented, tenant-scoped, with a test that it cannot reach across tenants.
+- **`close()` was not idempotent.** node-postgres is strict — a second
+  `pool.end()` raises "Called end on pool more than once" and the streamer's
+  LISTEN client raises "Client was closed and is not queryable" — so a shutdown
+  path and an error path both calling `close()` turned a correct teardown into a
+  thrown error. Both layers now guard. Pool _ownership_ was already right and is
+  now asserted: a caller-supplied pool survives, a world-created one is ended.
+- **`parseInt(env ?? "") ?? 50` yielded NaN**, the fallback being unreachable
+  because NaN is not nullish. Masked downstream by a `Number.isFinite` guard, so
+  shipped behaviour was correct while `resolveConfig` alone was not.

@@ -76,13 +76,26 @@ export const listenChannel = async (
 
   client.on("notification", onNotification);
 
+  // `close` has to be idempotent. `createWorld().close()` is reachable more than
+  // once in practice — a shutdown path and an error path can both call it, and a
+  // supervisor may signal twice — and the second call used to throw "Client was
+  // closed and is not queryable" from the `UNLISTEN`, because the client had
+  // already ended.
+  let closed = false;
+
   return {
     close: async () => {
+      if (closed) return;
+      closed = true;
       client.removeListener("notification", onNotification);
       try {
         await client.query(`UNLISTEN "${channel}"`);
+      } catch {
+        // Best-effort: `client.end()` below stops delivery regardless, and a
+        // connection that has already gone away cannot be un-listened. Failing
+        // here would turn a successful teardown into a thrown error.
       } finally {
-        await client.end();
+        await client.end().catch(() => {});
       }
     },
   };

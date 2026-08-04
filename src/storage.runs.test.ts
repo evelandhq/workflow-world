@@ -229,6 +229,71 @@ describe.skipIf(!testUrl)("runs storage (postgres)", () => {
     });
   });
 
+  describe("getMany", () => {
+    it("returns requested runs in order and keeps missing IDs as null", async () => {
+      const first = await createRun(events, {
+        deploymentId: "deployment-123",
+        workflowName: "first-workflow",
+        input: new Uint8Array([1]),
+      });
+      const second = await createRun(events, {
+        deploymentId: "deployment-123",
+        workflowName: "second-workflow",
+        input: new Uint8Array([2]),
+      });
+
+      const getMany = runs.getMany;
+      if (!getMany) throw new Error("runs.getMany is not implemented");
+      const result = await getMany([second.runId, "wrun_missing", first.runId, second.runId], {
+        resolveData: "none",
+      });
+
+      // Position is preserved and a miss is `null` in place rather than dropped,
+      // so the caller can line results up against what it asked for.
+      expect(result.map((run) => run?.runId ?? null)).toEqual([
+        second.runId,
+        null,
+        first.runId,
+        second.runId,
+      ]);
+      expect(result[0]?.input).toBeUndefined();
+      expect(result[2]?.output).toBeUndefined();
+    });
+
+    it("does not reach across tenants", async () => {
+      // Not an upstream test — upstream has one tenant. The batched read is a new
+      // query, and every read here has to be tenant-scoped.
+      const own = await createRun(events, {
+        deploymentId: "deployment-123",
+        workflowName: "own-workflow",
+        input: new Uint8Array([1]),
+      });
+      const otherTenant = "prj_port_runs_other";
+      await ensureTenantPartitions(pool, otherTenant);
+      const otherEvents = createEventsStorage(createClient(pool), otherTenant);
+      const foreign = await createRun(otherEvents, {
+        deploymentId: "deployment-123",
+        workflowName: "foreign-workflow",
+        input: new Uint8Array([2]),
+      });
+
+      try {
+        const getMany = runs.getMany;
+        if (!getMany) throw new Error("runs.getMany is not implemented");
+        const result = await getMany([own.runId, foreign.runId]);
+        expect(result.map((run) => run?.runId ?? null)).toEqual([own.runId, null]);
+      } finally {
+        await dropTenantPartitions(pool, otherTenant).catch(() => {});
+      }
+    });
+
+    it("returns an empty array without querying for an empty request", async () => {
+      const getMany = runs.getMany;
+      if (!getMany) throw new Error("runs.getMany is not implemented");
+      await expect(getMany([])).resolves.toEqual([]);
+    });
+  });
+
   describe("update via events", () => {
     it("should update run status to running via run_started event", async () => {
       const created = await createRun(events, {

@@ -64,7 +64,7 @@ import {
   validateUlidTimestamp,
   WorkflowRunSchema,
 } from "@workflow/world";
-import { and, asc, desc, eq, gt, lt, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { monotonicFactory } from "ulid";
 import { type Drizzle, Schema } from "./drizzle/index.js";
 import type { SerializedContent } from "./drizzle/schema.js";
@@ -178,6 +178,39 @@ export function createRunsStorage(drizzle: Drizzle, tenantId: string): Storage["
       const resolveData = params?.resolveData ?? "all";
       return filterRunData(parsed, resolveData);
     }) as Storage["runs"]["get"],
+    /**
+     * Batched read. Optional in the `Storage` interface, but omitting it is not
+     * free: callers fall back to one `get` query per id, and eve reads runs in
+     * batches on the replay path.
+     *
+     * Tenant-scoped like every other read. Duplicate ids collapse into a single
+     * query and a miss comes back as `null` in position rather than being dropped,
+     * so the caller can still line results up against what it asked for.
+     */
+    getMany: (async (ids, params) => {
+      const uniqueIds = [...new Set(ids)];
+      if (uniqueIds.length === 0) {
+        return [];
+      }
+
+      const values = await drizzle
+        .select()
+        .from(runs)
+        .where(and(eq(Schema.runs.tenantId, tenantId), inArray(runs.runId, uniqueIds)));
+      const resolveData = params?.resolveData ?? "all";
+      const runsById = new Map(
+        values.map((value) => {
+          value.output ||= value.outputJson;
+          value.input ||= value.inputJson;
+          value.executionContext ||= value.executionContextJson;
+          value.error ||= parseErrorJson(value.errorJson);
+          const parsed = WorkflowRunSchema.parse(deserializeRunError(compact(value)));
+          return [value.runId, filterRunData(parsed, resolveData)] as const;
+        }),
+      );
+
+      return ids.map((id) => runsById.get(id) ?? null);
+    }) as NonNullable<Storage["runs"]["getMany"]>,
     list: (async (params) => {
       const limit = params?.pagination?.limit ?? 20;
       const fromCursor = params?.pagination?.cursor;

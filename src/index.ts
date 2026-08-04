@@ -112,6 +112,7 @@ export function createWorld(
       ...(maxPoolSize !== undefined ? { max: maxPoolSize } : {}),
     });
 
+  let closed = false;
   const drizzle = createClient(pool);
   const queue = createQueue(resolved, pool);
   const storage = createStorage(drizzle, resolved.tenantId);
@@ -171,8 +172,19 @@ export function createWorld(
       });
     },
     async close() {
+      // Idempotent, and it has to be: a shutdown path and an error path can both
+      // reach here, and a supervisor may signal twice. node-postgres is
+      // unforgiving about the repeat — `pool.end()` throws "Called end on pool
+      // more than once", and the streamer's LISTEN client throws "Client was
+      // closed and is not queryable" — so a second close used to fail loudly
+      // after having done its job correctly the first time.
+      if (closed) return;
+      closed = true;
       await streamer.close();
       await queue.close();
+      // Only a pool this world created. A caller-supplied pool belongs to the
+      // caller, who is very likely still serving that project's other traffic
+      // through it.
       if (pool !== config.pool) {
         await pool.end();
       }
