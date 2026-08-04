@@ -56,20 +56,38 @@ jobs:
         include:
           # The default gate. At these settings no lease renewal ever fires — the
           # longest dispatch is far shorter than the interval — which is why the
-          # other two variants exist. See KNOWN-GAPS.md G3.
+          # other three variants exist. See KNOWN-GAPS.md G7.
           - name: default
             renew_interval: ""
             renew_fail: ""
+            lease_ttl: ""
           # Forces the renewal path to run for real.
           - name: fast-lease-renewal
             renew_interval: "100"
             renew_fail: ""
-          # The control API refuses every renewal: the dispatcher must abort the
-          # held POST rather than let a step run on unprotected, and graphile must
-          # retry it to completion.
+            lease_ttl: ""
+          # The control API refuses every renewal, with the lease TTL left wide.
+          # The dispatcher must ABSORB those refusals: the tolerance is
+          # `floor(ttl / interval) - 2` = 1798 consecutive misses here, and no
+          # dispatch gets past 6, so every held POST must still run to
+          # completion. This is the regression guard on the original fix —
+          # aborting on the first failed renewal turned one 503 from the control
+          # API into a burned graphile attempt, and three of those dead-letter
+          # the run.
           - name: lease-renewal-refused
             renew_interval: "100"
             renew_fail: "1"
+            lease_ttl: ""
+          # Same refusal, but a TTL narrow enough that the refusals outrun it:
+          # tolerance drops to 1, so the second consecutive miss must ABORT the
+          # held POST rather than let a step keep running on a lease the platform
+          # no longer honours. graphile then has to retry the aborted job to
+          # completion. The pair is the point — the variant above proves a blip
+          # is survived, this one proves sustained failure is not ignored.
+          - name: lease-renewal-refused-past-ttl
+            renew_interval: "100"
+            renew_fail: "1"
+            lease_ttl: "300"
     services:
       postgres:
         image: postgres:17-alpine
@@ -96,6 +114,7 @@ jobs:
           # Empty means "unset": `positiveNumber` falls back on a non-positive
           # parse, and the stub compares STUB_RENEW_FAIL against "1".
           WORKFLOW_DISPATCHER_LEASE_RENEW_INTERVAL_MS: ${{ matrix.renew_interval }}
+          WORKFLOW_DISPATCHER_ACTIVATION_LEASE_TTL_MS: ${{ matrix.lease_ttl }}
           STUB_RENEW_FAIL: ${{ matrix.renew_fail }}
 
   e2e:

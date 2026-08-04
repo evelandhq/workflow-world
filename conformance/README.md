@@ -24,14 +24,19 @@ executors would collide on bind.
 
 ## What it does and does not prove
 
-Proves: the World satisfies upstream's spec in external mode, and the dispatch
-contract is enforced (eve's generated flow route calls _this_ package's
-`createQueueHandler`, so a wrong runtime secret produces a 401 and a dead
-letter — see `dispatch-guard.test.mts`).
+Proves: the World satisfies upstream's spec in external mode, and every dispatch
+in the run went out through the real out-of-process path.
 
-Does **not** prove correctness under concurrent delivery for one run. Every test
-in upstream's suite is a single sequential invoke, so it cannot see duplicate
-step execution. That is `r1.test.mts`'s job, and it is a separate gate.
+Does **not** prove the dispatch guard. A wrong runtime secret producing a 401,
+and the dead letter that follows it, are covered by `src/queue.test.ts` and
+`src/dispatcher/dispatch-loop.integration.test.ts` in the default suite. That
+eve's own generated flow route reaches _this_ package's `createQueueHandler` is
+[e2e-tests/](../e2e-tests/)'s job, since conformance never loads an eve.
+
+Does **not** prove correctness under concurrent delivery for one run either.
+Every test in upstream's suite is a single sequential invoke, so it cannot see
+duplicate step execution. That is `serialization.test.mts`'s job, and it is a
+separate gate in this same project.
 
 ## Running it
 

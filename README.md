@@ -5,7 +5,8 @@ backed by one shared PostgreSQL database, plus the dispatcher that drives it fro
 outside the executor process.
 
 > **Experimental, `0.x`.** Not ready for production traffic — see
-> [KNOWN-GAPS.md](./KNOWN-GAPS.md), starting with G1.
+> [KNOWN-GAPS.md](./KNOWN-GAPS.md). The one open gap is that no test has yet run
+> a step long enough to need a lease renewal, not a known defect.
 
 ## What problem this solves
 
