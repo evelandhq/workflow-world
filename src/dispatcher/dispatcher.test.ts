@@ -6,6 +6,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ActivationClient, ActivationOutcome } from "./activation-client.js";
 import {
   createFairness,
+  createMessageDedup,
+  type DispatchOutcome,
   dispatchMessage,
   readRunId,
   resolveAffinity,
@@ -294,5 +296,109 @@ describe("fairness", () => {
     fairness.release("p_alpha");
     expect(fairness.forbiddenFlags()).toEqual([]);
     expect(fairness.snapshot()).toEqual({});
+  });
+});
+
+/**
+ * Message-level dedup, restoring the parity `external` mode lost: the World's
+ * embedded task handler keeps a completed-key set and an in-flight map, and both
+ * are unreachable once no in-process runner is registered.
+ */
+describe("createMessageDedup", () => {
+  const completed = (): DispatchOutcome => ({ type: "completed" });
+
+  test("runs a message with no idempotency key every time", async () => {
+    // Nothing stable to key on. Ordering for these is the per-run graphile
+    // queue's job, not this cache's.
+    const dedup = createMessageDedup();
+    let calls = 0;
+    const execute = async () => {
+      calls += 1;
+      return completed();
+    };
+
+    await dedup.run(undefined, execute);
+    await dedup.run(undefined, execute);
+
+    expect(calls).toBe(2);
+  });
+
+  test("suppresses a repeat delivery of a completed message", async () => {
+    const dedup = createMessageDedup();
+    let calls = 0;
+    const execute = async () => {
+      calls += 1;
+      return completed();
+    };
+
+    expect(await dedup.run("key-1", execute)).toEqual({ type: "completed" });
+    // `undefined` is how the handler learns there is nothing left to do.
+    expect(await dedup.run("key-1", execute)).toBeUndefined();
+    expect(calls).toBe(1);
+  });
+
+  test("collapses two concurrent deliveries of the same message", async () => {
+    const dedup = createMessageDedup();
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const execute = async () => {
+      calls += 1;
+      await gate;
+      return completed();
+    };
+
+    const first = dedup.run("key-2", execute);
+    const second = dedup.run("key-2", execute);
+    release();
+    await Promise.all([first, second]);
+
+    expect(calls).toBe(1);
+  });
+
+  test("keeps a failed message deliverable", async () => {
+    // The critical asymmetry: suppressing on failure would let one blip swallow
+    // the message permanently.
+    const dedup = createMessageDedup();
+    let calls = 0;
+    const execute = async (): Promise<DispatchOutcome> => {
+      calls += 1;
+      return calls === 1 ? { type: "retry", reason: "transient" } : completed();
+    };
+
+    expect(await dedup.run("key-3", execute)).toEqual({ type: "retry", reason: "transient" });
+    expect(await dedup.run("key-3", execute)).toEqual({ type: "completed" });
+    expect(calls).toBe(2);
+  });
+
+  test("a dead-lettered message is not suppressed either", async () => {
+    const dedup = createMessageDedup();
+    const outcome = await dedup.run("key-4", async () => ({
+      type: "dead-letter" as const,
+      reason: "gone",
+    }));
+    expect(outcome).toEqual({ type: "dead-letter", reason: "gone" });
+    expect(dedup.stats().completed).toBe(0);
+  });
+
+  test("evicts the oldest key once the bound is reached", async () => {
+    // Bounded on purpose: this is a waste filter, not a durable ledger, and it
+    // must not grow without limit in a long-lived process.
+    const dedup = createMessageDedup({ limit: 2 });
+    for (const key of ["a", "b", "c"]) {
+      await dedup.run(key, async () => completed());
+    }
+    expect(dedup.stats().completed).toBe(2);
+
+    // "a" was evicted, so it runs again; "c" is still remembered.
+    let reran = false;
+    await dedup.run("a", async () => {
+      reran = true;
+      return completed();
+    });
+    expect(reran).toBe(true);
+    expect(await dedup.run("c", async () => completed())).toBeUndefined();
   });
 });

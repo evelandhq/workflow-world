@@ -4,12 +4,14 @@ import { makeWorkerUtils, run, type Runner, type WorkerUtils } from "graphile-wo
 import type { Pool } from "pg";
 import {
   createFairness,
+  createMessageDedup,
   createRunLookup,
   dispatchMessage,
   readRunId,
   type DispatchOutcome,
   type DispatcherDeps,
   type Fairness,
+  type MessageDedup,
 } from "./dispatcher.js";
 
 /**
@@ -32,6 +34,7 @@ export type DispatcherRuntime = {
   runner: Runner;
   workerUtils: WorkerUtils;
   fairness: Fairness;
+  dedup: MessageDedup;
   stop(): Promise<void>;
 };
 
@@ -44,6 +47,7 @@ export async function startDispatcher(input: {
   const { pool, config } = input;
   const workerUtils = await makeWorkerUtils({ pgPool: pool });
   const fairness = createFairness({ maxInFlightPerTenant: config.maxInFlightPerTenant });
+  const dedup = createMessageDedup();
   const log = input.deps.log ?? (() => {});
 
   const reenqueue: DispatcherDeps["reenqueue"] = async ({ jobName, message, delaySeconds }) => {
@@ -117,7 +121,14 @@ export async function startDispatcher(input: {
     try {
       let outcome: DispatchOutcome;
       try {
-        outcome = await dispatchMessage({ message, jobName, queueName, attempt }, deps);
+        // `undefined` means the dedup swallowed it: already completed, or a
+        // concurrent delivery of the same message that we waited on. Either way
+        // there is nothing left to do and nothing to report.
+        const deduped = await dedup.run(message.idempotencyKey, () =>
+          dispatchMessage({ message, jobName, queueName, attempt }, deps),
+        );
+        if (!deduped) return;
+        outcome = deduped;
       } catch (error) {
         // dispatchMessage can throw rather than return — a database error in
         // the run lookup, a rejected activation fetch. Treating that as an
@@ -188,6 +199,7 @@ export async function startDispatcher(input: {
     runner,
     workerUtils,
     fairness,
+    dedup,
     async stop() {
       clearInterval(queueGcTimer);
       await runner.stop();

@@ -5,6 +5,7 @@ export { deriveMaxInFlightPerTenant, resolveDispatcherConfig } from "./config.js
 export type { DispatcherConfiguration } from "./config.js";
 export {
   createFairness,
+  createMessageDedup,
   createRunLookup,
   dispatchMessage,
   readRunId,
@@ -15,6 +16,7 @@ export type {
   DispatchOutcome,
   DispatcherDeps,
   Fairness,
+  MessageDedup,
   RunLookup,
 } from "./dispatcher.js";
 export { withRenewedLease } from "./lease.js";
