@@ -9,7 +9,12 @@
  * here rather than silently working.
  *
  * Two knobs the CI matrix uses:
- *   STUB_RENEW_FAIL=1   every renew returns 500 — exercises the abort path
+ *   STUB_RENEW_FAIL=1   every renew returns 500. Which half of the dispatcher's
+ *     renewal handling this reaches is set by the TTL, not by this flag: the
+ *     tolerance is `floor(ttl / interval) - 2` consecutive refusals, so at the
+ *     default TTL (1798, and no dispatch here gets past 6) every refusal is
+ *     absorbed, while `WORKFLOW_DISPATCHER_ACTIVATION_LEASE_TTL_MS=300` drops it
+ *     to 1 and the abort fires. The CI matrix runs both.
  *   STUB_ACTIVATE_FAIL_N=k  the first k activations return 503
  */
 import http from "node:http";

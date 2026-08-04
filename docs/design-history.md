@@ -38,17 +38,18 @@ because rewriting a record defeats the point of keeping one.
    describes a topology that no longer exists.
 
 4. **Several §16 divergences have themselves been superseded**, because the gaps
-   they recorded were subsequently fixed here. The current state of every known
-   gap — including the ones this document was still calling open — is
-   [KNOWN-GAPS.md](../KNOWN-GAPS.md), which is authoritative where the two
-   disagree.
+   they recorded were subsequently fixed here.
+   [KNOWN-GAPS.md](../KNOWN-GAPS.md) lists what is still open and is
+   authoritative where the two disagree; a gap this document calls open and that
+   file does not list was closed, and the commit that closed it is the record.
 
 5. **One correction to §8/§16's failure semantics.** The design assumed the
    embedded runner's in-process guards were the reference behaviour to preserve.
    They cannot be: a process-local map cannot serialize work across N dispatcher
    processes. Per-run ordering moved into Postgres (a per-run graphile queue) and
    message dedup is a deliberately bounded in-process filter that matches
-   embedded mode rather than exceeding it. See KNOWN-GAPS.md G1.
+   embedded mode rather than exceeding it. The reasoning for that bound is
+   recorded on `createMessageDedup` in `src/dispatcher/dispatcher.ts`.
 
 ---
 
