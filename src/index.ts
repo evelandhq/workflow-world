@@ -159,8 +159,8 @@ export function createWorld(
      * Resolving it properly needs promotion state, which lives in the control
      * plane rather than the workflow database, and reaching for it from inside
      * a tenant process would break the rule that agents and the platform
-     * rendezvous only in Postgres. Left as-is deliberately; §16 of the design
-     * records it as unfinished rather than as implementing Phase 3c.
+     * rendezvous only in Postgres. Left as-is deliberately, and recorded as the
+     * one known limitation in `docs/design.md`.
      */
     async resolveLatestDeploymentId() {
       return resolved.deploymentId;

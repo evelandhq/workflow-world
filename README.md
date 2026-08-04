@@ -140,15 +140,12 @@ for what it structurally cannot prove. [e2e-tests/](./e2e-tests/) is the other
 half — it builds a released eve and proves eve can resolve, bundle and drive this
 World, which conformance never loads an eve to check.
 
-## Where the design came from
+## Design
 
-[docs/design-history.md](./docs/design-history.md) is the design record, written
-before this package was extracted from the Eveland monorepo. Its decisions ledger
-and its record of what was empirically proven are still the reasons the
-architecture looks like this; its integration plan is not, and the preamble says
-which parts to ignore. Where it and the code disagree, the code and the suite
-that covers it are authoritative — several gaps that document still calls open
-have since been closed here.
+[docs/design.md](./docs/design.md) is why the architecture is shaped this way:
+the two failures that forced orchestration out of the executor process, the
+invariants that hold the tenancy boundary together, the dispatch contract and its
+failure semantics, and what is deliberately left for later.
 
 ## Relationship to upstream
 
