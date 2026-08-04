@@ -125,6 +125,15 @@ whole out-of-process path rather than just the storage layer. See
 [conformance/README.md](./conformance/README.md) for how it closes the loop, and
 for what it structurally cannot prove.
 
+## Where the design came from
+
+[docs/design-history.md](./docs/design-history.md) is the design record, written
+before this package was extracted from the Eveland monorepo. Its decisions ledger
+and its record of what was empirically proven are still the reasons the
+architecture looks like this; its integration plan is not, and the preamble says
+which parts to ignore. [KNOWN-GAPS.md](./KNOWN-GAPS.md) is authoritative wherever
+the two disagree.
+
 ## Relationship to upstream
 
 The storage, streamer, queue and Drizzle schema modules are derived from
