@@ -163,7 +163,11 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Pack
-        run: npm pack --pack-destination /tmp/wfw
+        # `--pack-destination` does not create the directory; npm opens the
+        # tarball for writing and fails with ENOENT if it is missing.
+        run: |
+          mkdir -p /tmp/wfw
+          npm pack --pack-destination /tmp/wfw
       - name: Install the tarball into a clean project and import it
         run: |
           mkdir -p /tmp/wfw-smoke && cd /tmp/wfw-smoke
