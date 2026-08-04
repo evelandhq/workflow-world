@@ -49,6 +49,7 @@ import {
   DISPATCH_VERSION_HEADER,
   FLOW_JOB_NAME,
   readRuntimeSecretFromEnv,
+  runQueueName,
   RUNTIME_SECRET_HEADER,
   secretMatches,
 } from "./dispatch-contract.js";
@@ -254,6 +255,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     headers,
     delaySeconds,
     jobKey,
+    runId,
   }: {
     queueId: string;
     body: Buffer | Uint8Array;
@@ -263,6 +265,8 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     headers?: Record<string, string>;
     delaySeconds?: number;
     jobKey?: string;
+    /** Present for a workflow invoke; absent for anything the schema rejects. */
+    runId?: string;
   }) {
     const utils = workerUtils;
     if (!utils) {
@@ -289,6 +293,9 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       {
         ...(jobKey ? { jobKey } : {}),
         ...(runAt ? { runAt } : {}),
+        // Serializes concurrent deliveries for one run. Without it two claimed
+        // jobs replay the same run's event log at the same time.
+        ...(runId ? { queueName: runQueueName(tenantId, runId) } : {}),
         maxAttempts: 3,
         // Read by the dispatcher's `forbiddenFlags` callback to throttle a
         // tenant that is already at its in-flight cap, without starving others.
@@ -544,6 +551,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     const { id: queueId } = parseQueueName(queue);
     const body = transport.serialize(message) as Buffer;
     const messageId = MessageId.parse(`msg_${generateMessageId()}`);
+    const invoke = WorkflowInvokePayloadSchema.safeParse(message);
     await addGraphileJob({
       queueId,
       body,
@@ -553,6 +561,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       headers: opts?.headers,
       delaySeconds: opts?.delaySeconds,
       jobKey: opts?.idempotencyKey ?? messageId,
+      ...(invoke.success ? { runId: invoke.data.runId } : {}),
     });
     return { messageId };
   };
@@ -570,10 +579,11 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       QueuePayloadSchema.parse(body);
       // Unconditional now: there is only the workflow queue kind, so every
       // message that parses as a workflow invoke gets a serialization key.
-      const workflowRunSerializationKey = ((): string | undefined => {
-        const workflowInvoke = WorkflowInvokePayloadSchema.safeParse(body);
-        return workflowInvoke.success ? `workflow:${workflowInvoke.data.runId}` : undefined;
-      })();
+      const parsedInvoke = WorkflowInvokePayloadSchema.safeParse(body);
+      const serializedRunId = parsedInvoke.success ? parsedInvoke.data.runId : undefined;
+      const workflowRunSerializationKey = serializedRunId
+        ? `workflow:${serializedRunId}`
+        : undefined;
       const executeTask = async (): Promise<"completed" | "rescheduled"> => {
         const result = await executeMessageOverHttp({
           queueName,
@@ -599,6 +609,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
             headers: messageData.headers,
             delaySeconds: result.timeoutSeconds,
             jobKey: messageData.idempotencyKey ?? messageData.messageId,
+            ...(serializedRunId ? { runId: serializedRunId } : {}),
           });
           return "rescheduled";
         }

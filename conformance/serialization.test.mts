@@ -7,52 +7,33 @@ import { reenqueueActiveRunsForAllTenants } from "../src/dispatcher/boot-recover
 import { PACKAGE_NAME, resolveConformanceDatabaseUrl } from "./env.mts";
 
 /**
- * A MANUAL PROBE, not a gate. Named `.probe.mts` so the conformance project's
- * `*.test.mts` glob does not pick it up.
+ * Per-run serialization under concurrent delivery — the gap upstream's
+ * conformance suite structurally cannot see, because every test in it is a single
+ * sequential invoke.
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * WHY IT IS NOT A GATE: the detector below does not isolate what it claims to.
- *
- * Measured over three runs of the CONTROL — a clean run with zero injected
- * duplicates — on this configuration:
- *
- *   run 1  no overshoot
- *   run 2  no overshoot
- *   run 3  values [1,2,3,4,5,9,10,…,23] for 20 steps → overshoot [21,22,23]
- *
- * So an ordinary external-mode run already re-executes step bodies during
- * replay, without any duplicate delivery: the module-level counter advances for
- * a body whose result is then discarded. The overshoot signal therefore conflates
- * ordinary replay with the duplicate-concurrent-delivery bug, and the reproduction
- * that was thought to demonstrate R1 quantitatively ("20 steps, 23 body
- * executions") is not distinguishable from the control.
- *
- * The GATE case was correspondingly flaky: overshoot in 2 of 3 runs.
- *
- * R1 itself is still real — that rests on the code paths, not on this detector.
- * See KNOWN-GAPS.md. What is missing is a *deterministic* observation of it, and
- * that needs a detector keyed on committed side effects rather than on a
- * process-local counter.
- * ─────────────────────────────────────────────────────────────────────────────
- *
- * Every test in `createTestSuite` is one sequential `invoke`, so none of them
- * ever produces two concurrent deliveries for a single run. In `external` mode
- * that is exactly the hole: the embedded task handler's `inflightWorkflowRuns`
- * guard (and its `completedMessages` / `inflightMessages` siblings) live inside
- * `createTaskHandler`, which is only registered by `setupListeners`, which is
- * only reachable through `startRunnerWhenExecutorIsReady` — and that returns
- * immediately when `runner === "external"`. The dispatcher replaces none of
- * them: its `addJob` passes no graphile `queueName`, and `fairness.acquire` runs
- * inside the handler *after* the claim.
+ * In `external` mode the World starts no in-process runner, so the embedded task
+ * handler's `inflightWorkflowRuns` guard is unreachable — and a process-local map
+ * could not serve N dispatchers anyway. The replacement is a per-run graphile
+ * queue (`runQueueName`), applied by all three enqueue paths: the World's own
+ * send, the dispatcher's reschedule, and boot recovery.
  *
  * `workflows/noop.ts`'s `brokenWf` is the detector. `noop` is a `'use step'`
- * function returning a module-level counter, so the run's output is one number
- * per step. A value above the step count can only come from a step body that ran
- * an extra time — a duplicate side effect, not merely a duplicated event.
+ * function returning a module-level counter, so the output is one number per
+ * step and a value above the step count means a step body ran an extra time — a
+ * duplicate side effect, not merely a duplicated event.
  *
  * Deliberately NOT asserted through the event log: the correlated-event unique
  * index absorbs the losing insert, so the log looks perfect while bodies run
- * twice. An event-shaped assertion here would pass and hide the bug.
+ * twice. An event-shaped assertion would pass and hide the bug.
+ *
+ * ── History, because it explains the shape of these two tests ────────────────
+ * Before per-run serialization, the GATE below overshot by 3 body executions in
+ * 2 of 3 runs — and so did the CONTROL, occasionally, because eve's replay can
+ * re-execute an uncommitted step body on its own. That made overshoot alone an
+ * unusable signal, so the CONTROL is not decoration: it is what distinguishes
+ * "duplicate delivery" from "ordinary replay". Both are now clean, and
+ * `flowInvocations` for the duplicated case fell from 34–63 to 16–18, because
+ * serializing the deliveries removed the redundant replays entirely.
  */
 
 type BrokenWfOutput = { numbers: number[] };
@@ -92,10 +73,10 @@ async function runBrokenWf(options: {
 }
 
 /**
- * The control, and it is load-bearing: the overshoot detector only means
- * something if a clean external run records exactly `1..N`. Without this, a
- * future runtime change that made `brokenWf` overshoot for an unrelated reason
- * would silently invalidate the gate below.
+ * The control, and it is load-bearing: overshoot only implicates duplicate
+ * delivery if a clean run does not overshoot on its own. Without this, a runtime
+ * change that made `brokenWf` overshoot for an unrelated reason would silently
+ * invalidate the gate below.
  */
 test(
   "CONTROL: a clean external run executes each step body exactly once",
@@ -111,22 +92,15 @@ test(
 );
 
 /**
- * KNOWN FAILURE — `test.fails` asserts the body throws.
- *
- * R1 is open, so this reproduction is expected to detect duplicate execution.
- * When per-run serialization lands, `test.fails` itself starts failing, which
- * forces this to be flipped to a plain `test` — the gap cannot be quietly fixed
- * or quietly forgotten.
- *
- * Nothing here is hand-built. `reenqueueActiveRunsForAllTenants` IS the
+ * The gate. Nothing here is hand-built. `reenqueueActiveRunsForAllTenants` IS the
  * dispatcher's own boot sweep; its jobKey is `msg_recover_<runId>`, which
  * collapses only against another sweep, never against the World's own flow job
  * (whose jobKey is a fresh ULID per send). So a sweep overlapping a live run adds
  * a genuine second concurrent delivery through production code — the ordinary
  * case of a dispatcher restarting while work is in flight.
  */
-test.fails(
-  "GATE (expected to fail until R1 is fixed): a boot sweep during a live run must not duplicate step bodies",
+test(
+  "a boot sweep during a live run does not duplicate step bodies",
   { timeout: 120_000 },
   async () => {
     const pool = new Pool({ connectionString: resolveConformanceDatabaseUrl(), max: 6 });

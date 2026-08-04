@@ -33,6 +33,8 @@ export type DispatcherDeps = {
   runtimeSecret: string;
   dispatchTimeoutMs: number;
   leaseRenewIntervalMs: number;
+  /** The TTL the control plane issues; sets how many missed renewals fit. */
+  activationLeaseTtlMs: number;
   reenqueue: (input: {
     jobName: string;
     message: MessageData;
@@ -146,8 +148,13 @@ export async function dispatchMessage(
       client: deps.activation,
       leaseId: activation.activation.leaseId,
       renewIntervalMs: deps.leaseRenewIntervalMs,
-      onRenewFailure: (leaseId) =>
-        deps.log?.("activation lease renewal failed", { leaseId, tenantId: message.tenantId }),
+      leaseTtlMs: deps.activationLeaseTtlMs,
+      onRenewFailure: (leaseId, consecutiveFailures) =>
+        deps.log?.("activation lease renewal failed", {
+          leaseId,
+          tenantId: message.tenantId,
+          consecutiveFailures,
+        }),
     },
     (signal) =>
       postVqsMessage({

@@ -10,6 +10,7 @@ export type DispatcherConfiguration = {
   dispatchTimeoutMs: number;
   leaseRenewIntervalMs: number;
   activationLeaseTtlMs: number;
+  queueGcIntervalMs: number;
 };
 
 /**
@@ -109,6 +110,10 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
       deriveMaxInFlightPerTenant({ cpuCoreCount: os.cpus().length }),
     ),
     dispatchTimeoutMs: positiveNumber(env.WORKFLOW_DISPATCHER_DISPATCH_TIMEOUT_MS, 900_000),
+    // Reclaims the per-run graphile queue rows. Five minutes is arbitrary but
+    // safe: the sweep only deletes queues with no jobs left, so running it more
+    // often costs a query and running it less lets rows sit around.
+    queueGcIntervalMs: positiveNumber(env.WORKFLOW_DISPATCHER_QUEUE_GC_INTERVAL_MS, 300_000),
     leaseRenewIntervalMs,
     activationLeaseTtlMs,
   };

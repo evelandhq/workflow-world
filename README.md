@@ -90,19 +90,20 @@ honoured by only one end is a silent failure rather than a loud one.
 
 ### Host side (read by the dispatcher)
 
-| variable                                      | default            | meaning                                                                               |
-| --------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------- |
-| `WORKFLOW_WORLD_URL`                          | —                  | same database as above                                                                |
-| `WORKFLOW_WORLD_BOOTSTRAP_URL`                | —                  | override when the host and the containers reach one database by different hostnames   |
-| `WORKFLOW_DISPATCHER_ACTIVATION_API_URL`      | —                  | the host's activation API. Required                                                   |
-| `WORKFLOW_DISPATCHER_ACTIVATION_TOKEN`        | —                  | bearer token for it. Required unless `NODE_ENV=development`                           |
-| `WORKFLOW_DISPATCHER_POOL_SIZE`               | `10`               | the authority: graphile takes one connection per running job plus one held for LISTEN |
-| `WORKFLOW_DISPATCHER_CONCURRENCY`             | `poolSize - 1`     | must be below the pool size, and is checked                                           |
-| `WORKFLOW_DISPATCHER_POLL_INTERVAL_MS`        | `500`              |                                                                                       |
-| `WORKFLOW_DISPATCHER_MAX_INFLIGHT_PER_TENANT` | derived from cores | fairness ceiling, not a throttle                                                      |
-| `WORKFLOW_DISPATCHER_DISPATCH_TIMEOUT_MS`     | `900000`           | a backstop against a wedged executor. Liveness is the lease renewal's job             |
-| `WORKFLOW_DISPATCHER_ACTIVATION_LEASE_TTL_MS` | `180000`           | must match what the host's control API issues                                         |
-| `WORKFLOW_DISPATCHER_LEASE_RENEW_INTERVAL_MS` | `TTL / 3`          | must be well below the TTL, and is checked                                            |
+| variable                                      | default            | meaning                                                                                                  |
+| --------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------- |
+| `WORKFLOW_WORLD_URL`                          | —                  | same database as above                                                                                   |
+| `WORKFLOW_WORLD_BOOTSTRAP_URL`                | —                  | override when the host and the containers reach one database by different hostnames                      |
+| `WORKFLOW_DISPATCHER_ACTIVATION_API_URL`      | —                  | the host's activation API. Required                                                                      |
+| `WORKFLOW_DISPATCHER_ACTIVATION_TOKEN`        | —                  | bearer token for it. Required unless `NODE_ENV=development`                                              |
+| `WORKFLOW_DISPATCHER_POOL_SIZE`               | `10`               | the authority: graphile takes one connection per running job plus one held for LISTEN                    |
+| `WORKFLOW_DISPATCHER_CONCURRENCY`             | `poolSize - 1`     | must be below the pool size, and is checked                                                              |
+| `WORKFLOW_DISPATCHER_POLL_INTERVAL_MS`        | `500`              |                                                                                                          |
+| `WORKFLOW_DISPATCHER_MAX_INFLIGHT_PER_TENANT` | derived from cores | fairness ceiling, not a throttle                                                                         |
+| `WORKFLOW_DISPATCHER_DISPATCH_TIMEOUT_MS`     | `900000`           | a backstop against a wedged executor. Liveness is the lease renewal's job                                |
+| `WORKFLOW_DISPATCHER_ACTIVATION_LEASE_TTL_MS` | `180000`           | must match what the host's control API issues                                                            |
+| `WORKFLOW_DISPATCHER_LEASE_RENEW_INTERVAL_MS` | `TTL / 3`          | must be well below the TTL, and is checked. Transient failures are absorbed while the lease has headroom |
+| `WORKFLOW_DISPATCHER_QUEUE_GC_INTERVAL_MS`    | `300000`           | reclaims the per-run graphile queue rows; graphile does not free them on its own                         |
 
 The dispatcher binds no port. Readiness is the literal line
 `workflow-dispatcher: ready` on stdout — a stable contract, matched by supervisors

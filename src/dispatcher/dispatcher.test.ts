@@ -85,6 +85,7 @@ function deps(overrides: Partial<DispatcherDeps> = {}): DispatcherDeps {
     runLookup: async () => null,
     runtimeSecret: "s3cret",
     dispatchTimeoutMs: 5_000,
+    activationLeaseTtlMs: 180_000,
     leaseRenewIntervalMs: 60_000,
     reenqueue: vi.fn(async () => {}),
     onDeadLetter: vi.fn(async () => {}),

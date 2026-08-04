@@ -4,89 +4,73 @@ Open problems in this package, with the evidence for each. Nothing here is
 speculative — every item was observed, and the ones that were _expected_ but did
 not survive measurement say so.
 
-This package is not ready to run production traffic. G1 is the blocker.
+The blocking gap (G1, per-run serialization) is closed. What remains is coverage
+and one narrower correctness item — message-level redelivery — recorded under G1.
 
 ---
 
-## G1 — `external` mode has no per-run serialization, and no message-level dedup
+## G1 — RESOLVED: `external` mode serializes deliveries per run
 
-**Status:** open, blocking. **Evidence:** code paths, verified by reading.
+Fixed by giving every run its own graphile queue. graphile executes jobs sharing a
+`queueName` strictly one at a time, which is the guarantee `external` mode
+otherwise lost: the embedded task handler's `inflightWorkflowRuns` map is
+unreachable when no in-process runner is registered, and a process-local map could
+not coordinate N dispatchers anyway.
 
-In `embedded` mode the task handler holds three guards, all declared in
-`src/queue.ts`:
+`runQueueName(tenantId, runId)` has one definition, in `src/dispatch-contract.ts`,
+because all three enqueue paths must derive it identically or the serialization is
+silently partial: the World's own send, the dispatcher's reschedule, and boot
+recovery. Those are the only three `addJob` call sites in the package.
 
-| Guard                     | Declared           | Used       | Protects against                                      |
-| ------------------------- | ------------------ | ---------- | ----------------------------------------------------- |
-| `inflightWorkflowRuns`    | `queue.ts:227`     | `:627-636` | two replays mutating one run's event log concurrently |
-| `completedMessages` (LRU) | `queue.ts:234-236` | `:645-665` | redelivery of a message already completed             |
-| `inflightMessages`        | `queue.ts:229`     | `:645-665` | concurrent delivery of the same message               |
+### Measured, not assumed
 
-All three live inside `createTaskHandler`, which is registered only by
-`setupListeners`, which is reachable only through
-`startRunnerWhenExecutorIsReady` — and that returns immediately when
-`runner === "external"`. Every path into `setupListeners` is downstream of that
-same gate, so in external mode all three are dead code.
+`src/dispatcher/run-serialization.integration.test.ts` asserts the mechanism
+against a real database rather than trusting the documentation:
 
-The dispatcher replaces none of them:
+- six jobs sharing a run queue at concurrency 8 → peak observed overlap **1**;
+- six jobs in _distinct_ run queues → peak overlap **> 1**, so the fix did not
+  turn the dispatcher into a single-threaded queue;
+- a drained run queue leaves its `_private_job_queues` row behind, and
+  `GC_JOB_QUEUES` removes it.
 
-- `src/dispatcher/runner.ts` — `addJob` passes `jobKey`, `runAt`, `maxAttempts`
-  and `flags`, but **no graphile `queueName`**, so graphile's own per-queue
-  serialization is unused.
-- `fairness.acquire` runs _inside_ the handler, after the claim, so it bounds
-  in-flight work per tenant but does not order deliveries for one run.
+End to end, `conformance/serialization.test.mts` fires twelve duplicate deliveries
+for one live run through the **production** boot sweep (no hand-built
+`MessageData`) and asserts no step body runs twice. Before the fix it overshot by
+three body executions in 2 of 3 runs; after, it is clean in 5 of 5. Flow
+invocations for that case fell from 34–63 to 16–18, because serializing the
+deliveries removed the redundant replays outright.
 
-Duplicate delivery for one run is ordinary, not exotic:
+### Two things worth keeping in mind
 
-- The World's own flow enqueue uses `jobKey: idempotencyKey ?? messageId`
-  (`queue.ts:559`) where `messageId` is a fresh ULID per send. Two sends for one
-  run — two hooks resolving together, a step completion racing a hook resume —
-  are two independently claimable graphile jobs.
-- `reenqueueActiveRunsForAllTenants` uses `msg_recover_<runId>`
-  (`src/dispatcher/boot-recovery.ts`), which collapses only against another
-  sweep, never against a live World job. A dispatcher restarting while work is in
-  flight adds a delivery.
+**The naive detector does not work.** Overshoot alone cannot distinguish duplicate
+delivery from ordinary replay: eve can re-execute an uncommitted step body during
+a legitimate replay, so a _clean_ run occasionally overshot too. That is why the
+test keeps a control alongside the gate — the control is what makes the gate mean
+anything, and an earlier investigation's quantitative claim about R1 rested on a
+control that had never been run.
 
-**The fix cannot be upstream's `Map`.** It is per-process, and external mode has
-N dispatcher processes by design. Serialization has to move into Postgres — a
-run-keyed advisory lock, or a per-run graphile `queueName`. And because the
-`completedMessages` guard is dead too, ordering alone is not enough: a redelivered
-message would still execute twice in sequence, so the fix needs a message-level
-completion check as well.
+**Never assert this through the event log.** The correlated-event unique index
+absorbs the losing insert, so 8 concurrent duplicate deliveries against a
+300-step run produced a perfect event histogram and `duplicateCorrelatedEvents:
+0` while bodies were running twice. Side effects are the only honest signal.
 
-### What could not be reproduced deterministically
+### The queue rows do need sweeping
 
-An earlier investigation reported a quantitative reproduction: `brokenWf` from
-`@workflow/world-testing` has 20 steps whose bodies each increment a module-level
-counter, and a run with 12 injected duplicate deliveries recorded 23 body
-executions — overshoot `[21,22,23]` — while a clean control recorded exactly
-`1..20`.
+graphile does **not** reclaim a queue row when its last job completes — measured.
+One row per run would accumulate for ever, so `startDispatcher` runs
+`GC_JOB_QUEUES` on an interval (`WORKFLOW_DISPATCHER_QUEUE_GC_INTERVAL_MS`,
+default 5 minutes). Cheap and idempotent; it only deletes queues with no jobs
+left.
 
-**That control does not hold here.** Three runs of the control on this
-configuration (`conformance/serialization.probe.mts`):
+### Still open: message-level redelivery
 
-```
-run 1   no overshoot
-run 2   no overshoot
-run 3   values [1,2,3,4,5,9,10,…,23] for 20 steps → overshoot [21,22,23]
-```
-
-A clean external-mode run already re-executes step bodies during replay — the
-counter advances for a body whose result is then discarded. So the overshoot
-signal conflates ordinary replay with duplicate delivery, and it cannot be used
-as a gate. The duplicate-delivery case was correspondingly flaky: overshoot in 2
-of 3 runs.
-
-G1 therefore rests on the code paths above, which are not in doubt. What is
-missing is a deterministic detector, and it needs to key on a _committed_ side
-effect rather than a process-local counter.
-
-Note also that lowering `concurrency` from 50 to `poolSize - 1` = 9 (see G4)
-narrowed the race window. It did not close it, and must not be mistaken for a fix.
-
-**Reproduce:** `mv conformance/serialization.probe.mts conformance/serialization.test.mts`
-and run the conformance project.
-
----
+Ordering is now guaranteed; _deduplication_ of an already-completed message is
+not. The embedded handler's `completedMessages` LRU and `inflightMessages` map are
+dead in external mode for the same structural reason, and nothing replaces them.
+The consequence is bounded — a redelivered message replays the run rather than
+corrupting it, and replay is the runtime's normal mode — but it is not the same
+guarantee embedded mode gives. Closing it needs a durable per-message completion
+record, which is a schema change and belongs in its own change.
 
 ## G2 — RESOLVED: the server-supplied event limit is implemented
 
@@ -108,26 +92,26 @@ a run, mirroring `@workflow/world-local`'s three sites — same
 Note that upstream's `world-postgres` does **not** implement this, so it is a
 strict addition over the reference World rather than a port of it.
 
-## G3 — the activation lease renewal path is unexercised at default settings
+## G3 — PARTLY RESOLVED: renewal failures are tolerated; coverage still thin
 
-**Status:** open, needs CI coverage. **Evidence:** measured.
+`src/dispatcher/lease.ts` used to abort the in-flight dispatch on the **first**
+failed renewal. The TTL is several renewal intervals wide by construction —
+`resolveDispatcherConfig` defaults the interval to a third of the TTL and refuses
+a configuration where it is not well below — so one 503 from the control API left
+plenty of headroom, and aborting turned a blip into a burned graphile attempt.
+Three of those dead-letter the run.
 
-Across every conformance run the stub reports `renew: 0`: the longest single
-dispatch is well under the default 60s renewal interval, so no renewal ever
-fires. Lease renewal is the most package-specific logic here — it is what keeps a
-long step's executor alive — and it ships untested by the default gate.
+Renewal failures are now absorbed while the lease still has headroom, and the
+dispatch is aborted only once sustained failure means it is about to lapse. A
+success resets the tolerance, so alternating pass/fail cannot keep a dying lease
+alive indefinitely. With no `leaseTtlMs` supplied the first failure still aborts,
+preserving the old, safe default. Four tests in `lease.test.ts` cover those cases.
 
-The stub already has the knobs (`STUB_RENEW_FAIL=1`, and the interval is
-`WORKFLOW_DISPATCHER_LEASE_RENEW_INTERVAL_MS`). What is missing is a CI matrix
-that runs the suite a second and third time with a fast interval and with forced
-renewal failure.
-
-Related: `src/dispatcher/lease.ts` aborts on the **first** failed renewal. With a
-180s TTL and 60s renewals there is room for two more attempts before the lease
-could actually expire, so one flaky response to the control API currently burns a
-graphile attempt. It should retry inside the TTL.
-
----
+**Still thin:** at default settings no renewal fires at all during a conformance
+run (`renew: 0` every time — the longest dispatch is far shorter than the 60s
+interval), so the CI matrix runs the suite twice more with a 100ms interval and
+with renewal forced to fail. That exercises the path but not a long step; a real
+multi-minute step under renewal pressure is still untested.
 
 ## G4 — resolved during the move, recorded so the reasoning is not lost
 

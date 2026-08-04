@@ -109,12 +109,20 @@ describe.skipIf(!testUrl)("dispatch loop", () => {
     dispatcherPool = new Pool({ connectionString: testUrl, max: 4 });
     dispatcher = await startDispatcher({
       pool: dispatcherPool,
-      config: { concurrency: 4, pollIntervalMs: 100, maxInFlightPerTenant: 4 },
+      config: {
+        concurrency: 4,
+        pollIntervalMs: 100,
+        maxInFlightPerTenant: 4,
+        // Long enough that the sweep never fires during the test; its own
+        // behaviour is covered by run-serialization.integration.test.ts.
+        queueGcIntervalMs: 3_600_000,
+      },
       deps: {
         activation,
         runtimeSecret: RUNTIME_SECRET,
         dispatchTimeoutMs: 10_000,
         leaseRenewIntervalMs: 60_000,
+        activationLeaseTtlMs: 180_000,
       },
     });
   }, 120_000);

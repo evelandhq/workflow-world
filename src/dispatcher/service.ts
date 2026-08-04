@@ -70,12 +70,14 @@ export async function startDispatcherService(
       concurrency: config.concurrency,
       pollIntervalMs: config.pollIntervalMs,
       maxInFlightPerTenant: config.maxInFlightPerTenant,
+      queueGcIntervalMs: config.queueGcIntervalMs,
     },
     deps: {
       activation,
       runtimeSecret,
       dispatchTimeoutMs: config.dispatchTimeoutMs,
       leaseRenewIntervalMs: config.leaseRenewIntervalMs,
+      activationLeaseTtlMs: config.activationLeaseTtlMs,
       log: (message, meta) =>
         telemetry.emit({
           severity: "info",

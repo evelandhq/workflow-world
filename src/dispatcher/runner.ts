@@ -17,7 +17,7 @@ import {
  * mode. Embedded-mode jobs carry a per-tenant suffix and are deliberately not
  * claimed here — they belong to that deployment's own in-process runner.
  */
-import { FLOW_JOB_NAME } from "../dispatch-contract.js";
+import { FLOW_JOB_NAME, runQueueName } from "../dispatch-contract.js";
 
 export { FLOW_JOB_NAME };
 
@@ -25,6 +25,7 @@ export type DispatcherConfig = {
   concurrency: number;
   pollIntervalMs: number;
   maxInFlightPerTenant: number;
+  queueGcIntervalMs: number;
 };
 
 export type DispatcherRuntime = {
@@ -46,9 +47,14 @@ export async function startDispatcher(input: {
   const log = input.deps.log ?? (() => {});
 
   const reenqueue: DispatcherDeps["reenqueue"] = async ({ jobName, message, delaySeconds }) => {
+    const runId = readRunId(message);
     await workerUtils.addJob(jobName, MessageData.encode(message), {
       jobKey: message.idempotencyKey ?? message.messageId,
       runAt: new Date(Date.now() + delaySeconds * 1000),
+      // Same per-run serialization the World applies on the first delivery. A
+      // reschedule that omitted it would be concurrently claimable against the
+      // run it belongs to.
+      ...(runId ? { queueName: runQueueName(message.tenantId, runId) } : {}),
       maxAttempts: 3,
       flags: [`project:${message.tenantId}`],
     });
@@ -159,11 +165,26 @@ export async function startDispatcher(input: {
     },
   });
 
+  // Per-run serialization gives every run its own graphile queue, and graphile
+  // does not reclaim the queue row when the last job in it finishes (measured —
+  // see run-serialization.integration.test.ts). Left alone that is one permanent
+  // `_private_job_queues` row per workflow run, so the sweep is not optional.
+  //
+  // Cheap and idempotent, so a fixed interval beats trying to be clever about
+  // when it is needed. `unref` so it never holds the process open.
+  const queueGcTimer = setInterval(() => {
+    void workerUtils.cleanup({ tasks: ["GC_JOB_QUEUES"] }).catch((error: unknown) => {
+      log("job queue cleanup failed", { error: String(error) });
+    });
+  }, config.queueGcIntervalMs);
+  queueGcTimer.unref();
+
   return {
     runner,
     workerUtils,
     fairness,
     async stop() {
+      clearInterval(queueGcTimer);
       await runner.stop();
       await workerUtils.release();
     },

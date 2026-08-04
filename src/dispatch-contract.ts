@@ -28,6 +28,33 @@ export const DISPATCH_VERSION = 1;
  */
 export const FLOW_JOB_NAME = "eveland_wf_flows";
 
+/**
+ * graphile queue name that serializes every delivery for one run.
+ *
+ * graphile executes jobs sharing a `queueName` strictly one at a time, which is
+ * exactly the guarantee `external` mode otherwise loses. In `embedded` mode the
+ * task handler holds an in-process `inflightWorkflowRuns` map for this, but that
+ * map is unreachable when no in-process runner is registered — and it could not
+ * work anyway, because a process-local map cannot coordinate N dispatchers.
+ *
+ * Duplicate deliveries for one run are ordinary, not exotic: the World's own
+ * enqueue uses a fresh ULID per send, so two sends for one run are two
+ * independently claimable jobs, and boot recovery's `msg_recover_<runId>` key
+ * collapses only against another sweep.
+ *
+ * Every enqueue path must derive the name the same way or the serialization is
+ * silently partial, so it has exactly one definition. Tenant-scoped because run
+ * ids come from the runtime and two tenants could in principle mint the same one.
+ *
+ * One caveat, measured rather than assumed: graphile does NOT reclaim the queue
+ * row when the last job in it completes. `_private_job_queues` keeps one row per
+ * distinct run for ever, so the dispatcher runs graphile's own `GC_JOB_QUEUES`
+ * cleanup periodically. Without that sweep this design is a slow table leak.
+ */
+export function runQueueName(tenantId: string, runId: string): string {
+  return `wfrun:${tenantId}:${runId}`;
+}
+
 export const DISPATCH_VERSION_HEADER = "x-eveland-dispatch-version";
 export const RUNTIME_SECRET_HEADER = "x-eveland-runtime-secret";
 export const TENANT_HEADER = "x-eveland-project-id";
