@@ -119,11 +119,18 @@ EVELAND_WORKFLOW_WORLD_TEST_URL=postgres://…/wfw_test npm test
 WORKFLOW_WORLD_CONFORMANCE_URL=postgres://…/wfw_conformance npm run test:conformance
 ```
 
+```bash
+# a real eve agent, built and driven for each supported eve version
+WORKFLOW_WORLD_E2E_URL=postgres://…/postgres npm run test:e2e
+```
+
 The conformance project is the gate that matters: it runs
 `@workflow/world-testing` against `runner: external`, so a green run exercises the
 whole out-of-process path rather than just the storage layer. See
 [conformance/README.md](./conformance/README.md) for how it closes the loop, and
-for what it structurally cannot prove.
+for what it structurally cannot prove. [e2e-tests/](./e2e-tests/) is the other
+half — it builds a released eve and proves eve can resolve, bundle and drive this
+World, which conformance never loads an eve to check.
 
 ## Where the design came from
 

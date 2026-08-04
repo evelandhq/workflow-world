@@ -17,6 +17,7 @@ export default defineConfig({
     // never be alive at once. One file at a time, one fork.
     fileParallelism: false,
     pool: "forks",
-    poolOptions: { forks: { singleFork: true } },
+    // Vitest 4 moved these to the top level of `test`.
+    forks: { singleFork: true },
   },
 });

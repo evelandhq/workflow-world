@@ -1,0 +1,2 @@
+# Per-version scratch builds: an npm install and an `eve build` per eve version.
+.work/

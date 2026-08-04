@@ -98,6 +98,41 @@ jobs:
           WORKFLOW_DISPATCHER_LEASE_RENEW_INTERVAL_MS: ${{ matrix.renew_interval }}
           STUB_RENEW_FAIL: ${{ matrix.renew_fail }}
 
+  e2e:
+    name: Real eve agent (${{ matrix.eve }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Which eve version broke is the diagnostic; do not cancel the others.
+      fail-fast: false
+      matrix:
+        # Mirrors e2e-tests/eve-versions.mts. Keep the two in step — the file is
+        # what the suite reads; this list is only what CI pays for.
+        eve: ["0.29.5"]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: wfw
+          POSTGRES_PASSWORD: wfw
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      # Points at `postgres` because the suite creates a database per eve version
+      # and connects to that.
+      WORKFLOW_WORLD_E2E_URL: postgres://wfw:wfw@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Build a real eve agent and drive one turn through this World
+        run: npm run test:e2e
+
   pack:
     name: Tarball contract
     runs-on: ubuntu-latest
