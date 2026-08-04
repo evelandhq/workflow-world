@@ -88,29 +88,25 @@ and run the conformance project.
 
 ---
 
-## G2 — the server-supplied event limit is not implemented
+## G2 — RESOLVED: the server-supplied event limit is implemented
 
-**Status:** open, needs a dependency bump first. **Evidence:** measured.
+`@workflow/world-testing`'s `eventLimit` suite now passes (both `turbo=1` and
+`turbo=0`), and it is called explicitly from `conformance/spec.test.mts` because
+`createTestSuite` does not include it.
 
-`@workflow/world-testing`'s `eventLimit` suite requires a runaway run to fail with
-`errorCode === 'MAX_EVENTS_EXCEEDED'` under `WORKFLOW_MAX_EVENTS`. Against this
-World the run completes instead. Both variants (`turbo=1`, `turbo=0`) fail.
+`EventResult.maxEvents` is documented in `@workflow/world` as "server-owned max
+event count for the run (run-lifecycle responses); the runtime enforces it". The
+World reports it; the runtime compares the loaded event count against it and
+fails the run with `MAX_EVENTS_EXCEEDED`. A World that omits the field leaves the
+runtime with no ceiling at all, so a runaway workflow grows its log without
+bound.
 
-It is version skew, not a regression:
+`src/storage.ts` now attaches it on all four `events.create` responses that carry
+a run, mirroring `@workflow/world-local`'s three sites — same
+`WORKFLOW_MAX_EVENTS` override and same 25,000 default, so the two agree.
 
-- our `@workflow/world` pin is `5.0.0-beta.19`, whose `dist/` has **zero**
-  occurrences of `stateEventCount`, `WORKFLOW_MAX_EVENTS` or
-  `MAX_EVENTS_EXCEEDED`;
-- the harness (`5.0.0-beta.39`) bundles a runtime that enforces the limit and
-  expects the World to report `stateEventCount`;
-- upstream's own `world-postgres` does not implement it either — same zero hits
-  across its `src/`. That is why the aggregate `createTestSuite` does not call
-  `eventLimit`.
-
-Currently `describe.skip`'d in `conformance/spec.test.mts` with the reason inline.
-Bump the `@workflow/world` pin, un-skip, then implement `stateEventCount`.
-
----
+Note that upstream's `world-postgres` does **not** implement this, so it is a
+strict addition over the reference World rather than a port of it.
 
 ## G3 — the activation lease renewal path is unexercised at default settings
 

@@ -38,7 +38,18 @@ export type DispatcherDeps = {
     message: MessageData;
     delaySeconds: number;
   }) => Promise<void>;
-  onDeadLetter: (input: { message: MessageData; reason: string }) => Promise<void>;
+  /**
+   * `jobName`/`queueName` are optional only because a caller may not have them;
+   * the handler does, and passing them is what makes a dead-letter row
+   * diagnosable. Recording `message.id` for both — the bare sub-queue id — was
+   * the previous behaviour and told you nothing you did not already have.
+   */
+  onDeadLetter: (input: {
+    message: MessageData;
+    reason: string;
+    jobName?: string;
+    queueName?: string;
+  }) => Promise<void>;
   log?: (message: string, meta?: Record<string, unknown>) => void;
 };
 
@@ -92,7 +103,6 @@ export async function dispatchMessage(
     message: MessageData;
     jobName: string;
     queueName: string;
-    route: "flow" | "step";
     attempt: number;
   },
   deps: DispatcherDeps,
@@ -142,7 +152,6 @@ export async function dispatchMessage(
     (signal) =>
       postVqsMessage({
         endpointPort: activation.activation.endpointPort,
-        route: input.route,
         queueName: input.queueName,
         messageId: message.messageId,
         attempt: input.attempt,

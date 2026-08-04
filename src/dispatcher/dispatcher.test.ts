@@ -95,8 +95,7 @@ function deps(overrides: Partial<DispatcherDeps> = {}): DispatcherDeps {
 // Mirrors what runner.ts builds. The helper used to pass `msg.id` — the same
 // mistake the production path had — which is precisely why the test suite went
 // green against a queue name eve would have rejected with a 400.
-const fullQueueName = (msg: MessageData, route: "flow" | "step" = "flow") =>
-  `${getQueueTopicPrefix(route === "flow" ? "workflow" : "step")}${msg.id}`;
+const fullQueueName = (msg: MessageData) => `${getQueueTopicPrefix("workflow")}${msg.id}`;
 
 const dispatch = (d: DispatcherDeps, msg = message(), attempt = 1) =>
   dispatchMessage(
@@ -104,7 +103,6 @@ const dispatch = (d: DispatcherDeps, msg = message(), attempt = 1) =>
       message: msg,
       jobName: "eveland_wf_flows",
       queueName: fullQueueName(msg),
-      route: "flow",
       attempt,
     },
     d,

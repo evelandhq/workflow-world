@@ -36,22 +36,13 @@ test("this World's specVersion matches what the test runtime demands", async () 
 createTestSuite(PACKAGE_NAME);
 
 /**
- * Not part of `createTestSuite`, and it does not pass — deliberately left
- * visible rather than dropped.
+ * Not part of `createTestSuite`, so it has to be called explicitly — and it is
+ * worth calling: it is the one place the per-run event ceiling is exercised, and
+ * that ceiling is the World's responsibility, not the runtime's.
  *
- * The harness (`@workflow/world-testing` 5.0.0-beta.39) carries a runtime that
- * enforces `WORKFLOW_MAX_EVENTS` and expects the World to report a
- * `stateEventCount`. Our `@workflow/world` pin is 5.0.0-beta.19, whose dist has
- * no mention of `stateEventCount`, `WORKFLOW_MAX_EVENTS` or
- * `MAX_EVENTS_EXCEEDED` at all — the feature landed upstream after it. So a
- * runaway run completes here instead of failing with `MAX_EVENTS_EXCEEDED`.
- *
- * Upstream's own `world-postgres` does not implement it either (its src has zero
- * hits for any of those names), which is why the aggregate suite skips it.
- *
- * Un-skip when the `@workflow/world` pin is bumped; the failure is then a real
- * missing capability rather than version skew. Tracked in KNOWN-GAPS.md.
+ * Upstream's `world-postgres` does not implement it at all, so this suite is a
+ * strict addition to what the reference World satisfies.
  */
-describe.skip("server-supplied event limit (requires a newer @workflow/world pin)", () => {
+describe("server-supplied event limit", () => {
   eventLimit(PACKAGE_NAME);
 });

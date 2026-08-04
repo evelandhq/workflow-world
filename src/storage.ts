@@ -83,6 +83,25 @@ import { compact } from "./util.js";
  * `hydrateRunError` can't process. Callers that need to inspect the raw
  * legacy payload should read the `errorJson` column directly.
  */
+/**
+ * Per-run event ceiling, reported on every `events.create` response that carries
+ * a run. The runtime enforces it — `EventResult.maxEvents` is documented as
+ * "server-owned max event count for the run (run-lifecycle responses); the
+ * runtime enforces it" — and fails the run with `MAX_EVENTS_EXCEEDED` once the
+ * loaded event count reaches the ceiling.
+ *
+ * A World that omits it leaves the runtime with no limit, so a runaway workflow
+ * grows its event log without bound. Mirrors `@workflow/world-local`'s
+ * `getMaxEventsPerRun`, including the 25,000 default, so the two agree.
+ */
+const DEFAULT_MAX_EVENTS_PER_RUN = 25_000;
+
+function getMaxEventsPerRun(): number {
+  const raw = process.env.WORKFLOW_MAX_EVENTS;
+  const parsed = raw !== undefined ? Number(raw) : Number.NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_EVENTS_PER_RUN;
+}
+
 function parseErrorJson(_errorJson: string | null): SerializedData | null {
   return null;
 }
@@ -669,9 +688,11 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
           };
           const parsed = EventSchema.parse(result);
           const resolveData = params?.resolveData ?? "all";
+          const lifecycleRun = fullRun ? deserializeRunError(compact(fullRun)) : undefined;
           return {
             event: stripEventDataRefs(parsed, resolveData),
-            run: fullRun ? deserializeRunError(compact(fullRun)) : undefined,
+            run: lifecycleRun,
+            ...(lifecycleRun ? { maxEvents: getMaxEventsPerRun() } : {}),
           };
         }
 
@@ -843,7 +864,10 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
             .where(and(eq(Schema.runs.tenantId, tenantId), eq(Schema.runs.runId, effectiveRunId)))
             .limit(1);
           if (fullRun) {
-            return { run: deserializeRunError(compact(fullRun)) };
+            return {
+              run: deserializeRunError(compact(fullRun)),
+              maxEvents: getMaxEventsPerRun(),
+            };
           }
         }
 
@@ -1534,6 +1558,7 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
               run,
               step,
               hook: undefined,
+              ...(run ? { maxEvents: getMaxEventsPerRun() } : {}),
             };
           }
         } else {
@@ -1750,6 +1775,7 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
         cursor,
         hasMore,
         ...(stepCreatedLazily ? { stepCreated: true } : {}),
+        ...(run ? { maxEvents: getMaxEventsPerRun() } : {}),
       };
     },
     async get(runId: string, eventId: string, params?: GetEventParams): Promise<Event> {

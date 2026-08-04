@@ -17,8 +17,9 @@ import {
  * mode. Embedded-mode jobs carry a per-tenant suffix and are deliberately not
  * claimed here — they belong to that deployment's own in-process runner.
  */
-export const FLOW_JOB_NAME = "eveland_wf_flows";
-export const STEP_JOB_NAME = "eveland_wf_steps";
+import { FLOW_JOB_NAME } from "../dispatch-contract.js";
+
+export { FLOW_JOB_NAME };
 
 export type DispatcherConfig = {
   concurrency: number;
@@ -53,7 +54,12 @@ export async function startDispatcher(input: {
     });
   };
 
-  const onDeadLetter: DispatcherDeps["onDeadLetter"] = async ({ message, reason }) => {
+  const onDeadLetter: DispatcherDeps["onDeadLetter"] = async ({
+    message,
+    reason,
+    jobName,
+    queueName,
+  }) => {
     await pool.query(
       `insert into workflow.dispatch_dead_letters
          (tenant_id, deployment_id, run_id, message_id, job_name, queue_name, attempt, reason, payload)
@@ -63,8 +69,8 @@ export async function startDispatcher(input: {
         message.deploymentId,
         readRunId(message) ?? null,
         message.messageId,
-        message.id,
-        message.id,
+        jobName ?? null,
+        queueName ?? null,
         message.attempt,
         reason,
         JSON.stringify(MessageData.encode(message)),
@@ -84,55 +90,56 @@ export async function startDispatcher(input: {
     onDeadLetter,
   };
 
-  const makeHandler =
-    (jobName: string, route: "flow" | "step") => async (payload: unknown, helpers: unknown) => {
-      const message = MessageData.parse(payload);
-      const attempt = readAttempt(helpers) ?? message.attempt;
-      const isFinalAttempt = readIsFinalAttempt(helpers);
-      // `MessageData.id` is only the sub-queue id: the enqueue path ran it
-      // through `parseQueueName`, which strips the `__wkf_<kind>_` prefix. eve's
-      // handler rejects a name without that prefix outright ("Unhandled
-      // queue", 400), and a 400 is non-retryable — so sending the bare id
-      // dead-letters every message. The embedded runner rebuilds the full name
-      // for the same reason.
-      const queueName = `${getQueueTopicPrefix(route === "flow" ? "workflow" : "step")}${message.id}`;
+  const makeHandler = (jobName: string) => async (payload: unknown, helpers: unknown) => {
+    const message = MessageData.parse(payload);
+    const attempt = readAttempt(helpers) ?? message.attempt;
+    const isFinalAttempt = readIsFinalAttempt(helpers);
+    // `MessageData.id` is only the sub-queue id: the enqueue path ran it
+    // through `parseQueueName`, which strips the `__wkf_<kind>_` prefix. eve's
+    // handler rejects a name without that prefix outright ("Unhandled
+    // queue", 400), and a 400 is non-retryable — so sending the bare id
+    // dead-letters every message. The embedded runner rebuilds the full name
+    // for the same reason.
+    const queueName = `${getQueueTopicPrefix("workflow")}${message.id}`;
 
-      fairness.acquire(message.tenantId);
+    fairness.acquire(message.tenantId);
+    try {
+      let outcome: DispatchOutcome;
       try {
-        let outcome: DispatchOutcome;
-        try {
-          outcome = await dispatchMessage({ message, jobName, queueName, route, attempt }, deps);
-        } catch (error) {
-          // dispatchMessage can throw rather than return — a database error in
-          // the run lookup, a rejected activation fetch. Treating that as an
-          // ordinary retryable outcome keeps the final-attempt dead-letter
-          // below on the path; letting it propagate meant the last attempt
-          // vanished with no record, which is precisely the silent loss the
-          // dead-letter table exists to prevent.
-          outcome = { type: "retry", reason: `Dispatch threw: ${String(error)}` };
-        }
-
-        if (outcome.type === "completed" || outcome.type === "rescheduled") return;
-
-        if (outcome.type === "dead-letter") {
-          await deps.onDeadLetter({ message, reason: outcome.reason });
-          return; // Terminal: returning stops graphile from retrying.
-        }
-
-        // Retryable. On the last attempt graphile would otherwise drop the job
-        // silently, so record it before throwing.
-        if (isFinalAttempt) {
-          await deps.onDeadLetter({
-            message,
-            reason: `Retries exhausted. Last failure: ${outcome.reason}`,
-          });
-          return;
-        }
-        throw new Error(outcome.reason);
-      } finally {
-        fairness.release(message.tenantId);
+        outcome = await dispatchMessage({ message, jobName, queueName, attempt }, deps);
+      } catch (error) {
+        // dispatchMessage can throw rather than return — a database error in
+        // the run lookup, a rejected activation fetch. Treating that as an
+        // ordinary retryable outcome keeps the final-attempt dead-letter
+        // below on the path; letting it propagate meant the last attempt
+        // vanished with no record, which is precisely the silent loss the
+        // dead-letter table exists to prevent.
+        outcome = { type: "retry", reason: `Dispatch threw: ${String(error)}` };
       }
-    };
+
+      if (outcome.type === "completed" || outcome.type === "rescheduled") return;
+
+      if (outcome.type === "dead-letter") {
+        await deps.onDeadLetter({ message, reason: outcome.reason, jobName, queueName });
+        return; // Terminal: returning stops graphile from retrying.
+      }
+
+      // Retryable. On the last attempt graphile would otherwise drop the job
+      // silently, so record it before throwing.
+      if (isFinalAttempt) {
+        await deps.onDeadLetter({
+          message,
+          reason: `Retries exhausted. Last failure: ${outcome.reason}`,
+          jobName,
+          queueName,
+        });
+        return;
+      }
+      throw new Error(outcome.reason);
+    } finally {
+      fairness.release(message.tenantId);
+    }
+  };
 
   const runner = await run({
     pgPool: pool,
@@ -148,8 +155,7 @@ export async function startDispatcher(input: {
     // the runner picks up someone else's work instead of queueing behind it.
     forbiddenFlags: () => fairness.forbiddenFlags(),
     taskList: {
-      [FLOW_JOB_NAME]: makeHandler(FLOW_JOB_NAME, "flow"),
-      [STEP_JOB_NAME]: makeHandler(STEP_JOB_NAME, "step"),
+      [FLOW_JOB_NAME]: makeHandler(FLOW_JOB_NAME),
     },
   });
 

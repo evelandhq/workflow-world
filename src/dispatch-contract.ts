@@ -14,6 +14,20 @@
  */
 export const DISPATCH_VERSION = 1;
 
+/**
+ * The graphile task name the World enqueues to and the dispatcher claims from.
+ *
+ * Both ends have to agree on it, so it lives here rather than in either half.
+ * In `embedded` mode the World suffixes it per tenant (see `getJobQueueName`);
+ * in `external` mode the name is shared, because the dispatcher deliberately
+ * claims across all tenants.
+ *
+ * There is one name because `@workflow/world` has one queue kind. Up to
+ * 5.0.0-beta.22 there was also a `'step'` kind with its own queue; beta.23
+ * removed it, and the runtime now runs steps inline inside the flow handler.
+ */
+export const FLOW_JOB_NAME = "eveland_wf_flows";
+
 export const DISPATCH_VERSION_HEADER = "x-eveland-dispatch-version";
 export const RUNTIME_SECRET_HEADER = "x-eveland-runtime-secret";
 export const TENANT_HEADER = "x-eveland-project-id";
@@ -25,8 +39,13 @@ export const VQS_QUEUE_NAME_HEADER = "x-vqs-queue-name";
 export const VQS_MESSAGE_ID_HEADER = "x-vqs-message-id";
 export const VQS_MESSAGE_ATTEMPT_HEADER = "x-vqs-message-attempt";
 
-/** Route segment for each queue kind, under `/.well-known/workflow/v1/`. */
-export type DispatchRoute = "flow" | "step";
+/**
+ * Route segment under `/.well-known/workflow/v1/`.
+ *
+ * Only `flow` remains: `@workflow/utils`'s `WorkflowUrlRoute` dropped its
+ * `'step'` member alongside the queue kind, so there is nothing to select.
+ */
+export type DispatchRoute = "flow";
 
 export type DispatchRejection = { status: number; error: string };
 

@@ -29,7 +29,6 @@ export type VqsResult =
 
 export type VqsRequest = {
   endpointPort: number;
-  route: "flow" | "step";
   queueName: string;
   messageId: string;
   attempt: number;
@@ -46,7 +45,9 @@ export type VqsRequest = {
 export const WORKFLOW_ROUTE_BASE = "/.well-known/workflow/v1";
 
 export async function postVqsMessage(request: VqsRequest): Promise<VqsResult> {
-  const url = `http://127.0.0.1:${String(request.endpointPort)}${WORKFLOW_ROUTE_BASE}/${request.route}`;
+  // One route only: `WorkflowUrlRoute` lost its `'step'` member in
+  // `@workflow/world` 5.0.0-beta.23, alongside the queue kind.
+  const url = `http://127.0.0.1:${String(request.endpointPort)}${WORKFLOW_ROUTE_BASE}/flow`;
   const headers: Record<string, string> = {
     ...request.headers,
     "content-type": "application/json",

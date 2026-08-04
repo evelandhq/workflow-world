@@ -21,7 +21,7 @@ export { withRenewedLease } from "./lease.js";
 export { main } from "./main.js";
 export { consoleTelemetry } from "./observability.js";
 export type { DispatcherEvent, DispatcherTelemetry } from "./observability.js";
-export { FLOW_JOB_NAME, STEP_JOB_NAME, startDispatcher } from "./runner.js";
+export { FLOW_JOB_NAME, startDispatcher } from "./runner.js";
 export type { DispatcherConfig, DispatcherRuntime } from "./runner.js";
 export { resolveDispatchRuntimeSecret } from "./secrets.js";
 export { startDispatcherService } from "./service.js";

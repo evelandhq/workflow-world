@@ -27,7 +27,6 @@ import {
 } from "@workflow/utils";
 import { getWorkflowPort } from "@workflow/utils/get-port";
 import {
-  getQueuePrefixKind,
   getQueueTopicPrefix,
   MessageId,
   parseQueueName,
@@ -48,6 +47,7 @@ import {
   checkDispatchVersion,
   DEPLOYMENT_HEADER,
   DISPATCH_VERSION_HEADER,
+  FLOW_JOB_NAME,
   readRuntimeSecretFromEnv,
   RUNTIME_SECRET_HEADER,
   secretMatches,
@@ -104,14 +104,12 @@ type RunnerStart = { controller: AbortController; promise: Promise<void> };
 type LoopbackTarget = { hosts: string[]; port: number };
 
 /**
- * The Postgres queue works by creating two job types in graphile-worker:
- * - `workflow` for workflow jobs
- *   - `step` for step jobs
+ * One graphile task name carries every workflow message. Upstream once had a
+ * second one for steps; `@workflow/world` 5.0.0-beta.23 removed that queue kind
+ * because the runtime now runs steps inline inside the flow handler.
  *
- * When a message is queued, it is sent to graphile-worker with the appropriate job type.
- * When a job is processed, it is deserialized and then re-queued into the _local world_, showing that
- * we can reuse the local world, mix and match worlds to build
- * hybrid architectures, and even migrate between worlds.
+ * A claimed job is deserialized and handed to the *local* world's queue handler,
+ * which is how the executor half stays eve's code rather than ours.
  */
 export type PostgresQueue = Queue & {
   start(): Promise<void>;
@@ -162,12 +160,16 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
    * Embedded runners get a per-tenant job name so a shared database cannot let
    * one project's agent claim another's work. External runners share one name,
    * because the dispatcher deliberately claims across all tenants.
+   *
+   * There is exactly one job name because there is exactly one queue kind:
+   * `@workflow/world` 5.0.0-beta.23 reduced `QueueKind` to `'workflow'`, having
+   * removed the former `'step'` variant — the runtime now runs steps inline
+   * inside the flow handler instead of enqueueing them.
    */
-  function getJobQueueName(queuePrefix: QueuePrefix): string {
-    const kind = getQueuePrefixKind(queuePrefix) === "workflow" ? "flows" : "steps";
+  function getJobQueueName(): string {
     return config.runner === "embedded"
-      ? derivePartitionName(`eveland_wf_${kind}`, tenantId)
-      : `eveland_wf_${kind}`;
+      ? derivePartitionName(FLOW_JOB_NAME, tenantId)
+      : FLOW_JOB_NAME;
   }
 
   /**
@@ -244,7 +246,6 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
   }
 
   async function addGraphileJob({
-    queuePrefix,
     queueId,
     body,
     messageId,
@@ -254,7 +255,6 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     delaySeconds,
     jobKey,
   }: {
-    queuePrefix: QueuePrefix;
     queueId: string;
     body: Buffer | Uint8Array;
     messageId: MessageId;
@@ -275,7 +275,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
         : undefined;
 
     await utils.addJob(
-      getJobQueueName(queuePrefix),
+      getJobQueueName(),
       MessageData.encode({
         id: queueId,
         data: Buffer.from(body),
@@ -409,10 +409,6 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     runnerStart = { controller, promise };
   }
 
-  function getQueueRoute(queueName: ValidQueueName): "flow" | "step" {
-    return parseQueueName(queueName).kind === "workflow" ? "flow" : "step";
-  }
-
   async function executeMessageOverHttp({
     queueName,
     messageId,
@@ -437,9 +433,8 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     if (!baseUrl) {
       throw new Error("Unable to resolve base URL for workflow queue.");
     }
-    const pathname = getQueueRoute(queueName);
-
-    const response = await fetch(createWorkflowUrl(baseUrl, { type: pathname }), {
+    // One route: `WorkflowUrlRoute` no longer has a `'step'` member.
+    const response = await fetch(createWorkflowUrl(baseUrl, { type: "flow" }), {
       method: "POST",
       duplex: "half",
       headers,
@@ -545,11 +540,11 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
 
   const queue: Queue["queue"] = async (queue, message, opts) => {
     await start();
-    const { prefix: queuePrefix, id: queueId } = parseQueueName(queue);
+    // Only the sub-queue id is stored; the delivery side rebuilds the prefix.
+    const { id: queueId } = parseQueueName(queue);
     const body = transport.serialize(message) as Buffer;
     const messageId = MessageId.parse(`msg_${generateMessageId()}`);
     await addGraphileJob({
-      queuePrefix,
       queueId,
       body,
       messageId,
@@ -563,8 +558,6 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
   };
 
   function createTaskHandler(queue: QueuePrefix) {
-    const queueKind = getQueuePrefixKind(queue);
-
     return async (payload: unknown, helpers: unknown) => {
       const messageData = MessageData.parse(payload);
       const graphileAttempt = GraphileHelpers.safeParse(helpers);
@@ -575,16 +568,12 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       const bodyStream = Stream.Readable.toWeb(Stream.Readable.from([messageData.data]));
       const body = await transport.deserialize(bodyStream as ReadableStream<Uint8Array>);
       QueuePayloadSchema.parse(body);
-      const workflowRunSerializationKey =
-        queueKind === "workflow"
-          ? (() => {
-              const workflowInvoke = WorkflowInvokePayloadSchema.safeParse(body);
-              if (!workflowInvoke.success) {
-                return undefined;
-              }
-              return `workflow:${workflowInvoke.data.runId}`;
-            })()
-          : undefined;
+      // Unconditional now: there is only the workflow queue kind, so every
+      // message that parses as a workflow invoke gets a serialization key.
+      const workflowRunSerializationKey = ((): string | undefined => {
+        const workflowInvoke = WorkflowInvokePayloadSchema.safeParse(body);
+        return workflowInvoke.success ? `workflow:${workflowInvoke.data.runId}` : undefined;
+      })();
       const executeTask = async (): Promise<"completed" | "rescheduled"> => {
         const result = await executeMessageOverHttp({
           queueName,
@@ -602,7 +591,6 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
           // Schedule the follow-up job before we return so a crash cannot
           // lose the wake-up request.
           await addGraphileJob({
-            queuePrefix: queue,
             queueId: messageData.id,
             body: messageData.data,
             messageId: messageData.messageId,
@@ -670,9 +658,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
   async function setupListeners() {
     const taskList: Record<string, (payload: unknown, helpers: unknown) => Promise<void>> = {};
     const workflowPrefix = getQueueTopicPrefix("workflow");
-    const stepPrefix = getQueueTopicPrefix("step");
-    taskList[getJobQueueName(workflowPrefix)] = createTaskHandler(workflowPrefix);
-    taskList[getJobQueueName(stepPrefix)] = createTaskHandler(stepPrefix);
+    taskList[getJobQueueName()] = createTaskHandler(workflowPrefix);
 
     runner = await run({
       pgPool: pool,
