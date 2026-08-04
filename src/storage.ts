@@ -368,18 +368,49 @@ async function handleLegacyEventPostgres(
       // Legacy: Store event only (no entity mutation)
       // - wait_completed: for replay purposes
       // - hook_received: hooks exist via old system, just record the event
-      const [insertedEvent] = await drizzle
-        .insert(Schema.events)
-        .values({
-          tenantId,
-          runId,
-          eventId,
-          correlationId: data.correlationId,
-          eventType: data.eventType,
-          eventData: "eventData" in data ? data.eventData : undefined,
-          specVersion: SPEC_VERSION_CURRENT,
-        })
-        .returning({ createdAt: Schema.events.createdAt });
+      //
+      // `hook_received` additionally guards against a terminal transition that is
+      // either already committed or racing us. It matters more here than it looks:
+      // legacy runs are routed to this handler BEFORE the caller's terminal-run
+      // validation block runs, so without this check a cancelled legacy run
+      // accepts hooks indefinitely. `FOR UPDATE` takes the run row lock, blocking
+      // until any in-flight terminal UPDATE (including the legacy run_cancelled
+      // path above, which locks the same row) commits, then reads the post-commit
+      // status.
+      const insertLegacyEvent = (tx: Pick<Drizzle, "insert">) =>
+        tx
+          .insert(Schema.events)
+          .values({
+            tenantId,
+            runId,
+            eventId,
+            correlationId: data.correlationId,
+            eventType: data.eventType,
+            eventData: "eventData" in data ? data.eventData : undefined,
+            specVersion: SPEC_VERSION_CURRENT,
+          })
+          .returning({ createdAt: Schema.events.createdAt });
+
+      const [insertedEvent] =
+        data.eventType === "hook_received"
+          ? await drizzle.transaction(async (tx) => {
+              const [runRow] = await tx
+                .select({ status: Schema.runs.status })
+                .from(Schema.runs)
+                .where(and(eq(Schema.runs.tenantId, tenantId), eq(Schema.runs.runId, runId)))
+                .for("update")
+                .limit(1);
+              if (!runRow) {
+                throw new WorkflowRunNotFoundError(runId);
+              }
+              if (isTerminalWorkflowRunStatus(runRow.status)) {
+                throw new RunExpiredError(
+                  `Workflow run "${runId}" is already in terminal state "${runRow.status}"`,
+                );
+              }
+              return insertLegacyEvent(tx);
+            })
+          : await insertLegacyEvent(drizzle);
 
       const event = EventSchema.parse({
         ...data,
@@ -1690,6 +1721,47 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
             throw new EntityConflictError(`Wait "${data.correlationId}" already completed`);
           }
         }
+      }
+
+      // Handle hook_received: append the event only while the run is non-terminal.
+      // `hook_received` has no branch in the terminal-run guard above — it neither
+      // transitions the run nor creates an entity — so without this the generic
+      // INSERT below would happily append it after a concurrent run_completed /
+      // run_failed / run_cancelled had already committed. `FOR UPDATE` takes the
+      // run row lock inside this transaction, so it blocks on any in-flight
+      // terminal transition (which locks the same row) and then sees the
+      // post-commit status. Same linearization step_started gets from its guarded
+      // UPDATE.
+      if (data.eventType === "hook_received") {
+        value = await drizzle.transaction(async (tx) => {
+          const [runRow] = await tx
+            .select({ status: Schema.runs.status })
+            .from(Schema.runs)
+            .where(and(eq(Schema.runs.tenantId, tenantId), eq(Schema.runs.runId, effectiveRunId)))
+            .for("update")
+            .limit(1);
+          if (!runRow) {
+            throw new WorkflowRunNotFoundError(effectiveRunId);
+          }
+          if (isTerminalWorkflowRunStatus(runRow.status)) {
+            throw new RunExpiredError(
+              `Workflow run "${effectiveRunId}" is already in terminal state "${runRow.status}"`,
+            );
+          }
+          const [eventValue] = await tx
+            .insert(events)
+            .values({
+              tenantId,
+              runId: effectiveRunId,
+              eventId: getEventId(),
+              correlationId: data.correlationId,
+              eventType: data.eventType,
+              eventData: storedEventData,
+              specVersion: effectiveSpecVersion,
+            })
+            .returning({ createdAt: events.createdAt });
+          return eventValue;
+        });
       }
 
       try {
