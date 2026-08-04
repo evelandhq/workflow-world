@@ -38,10 +38,10 @@ because rewriting a record defeats the point of keeping one.
    describes a topology that no longer exists.
 
 4. **Several §16 divergences have themselves been superseded**, because the gaps
-   they recorded were subsequently fixed here.
-   [KNOWN-GAPS.md](../KNOWN-GAPS.md) lists what is still open and is
-   authoritative where the two disagree; a gap this document calls open and that
-   file does not list was closed, and the commit that closed it is the record.
+   they recorded were subsequently fixed here. Every gap this document calls
+   open has since been closed; the commit that closed each one is the record,
+   and the suite that keeps it closed is named in that commit. Where this
+   document and the code disagree, the code wins.
 
 5. **One correction to §8/§16's failure semantics.** The design assumed the
    embedded runner's in-process guards were the reference behaviour to preserve.
