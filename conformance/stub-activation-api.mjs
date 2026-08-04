@@ -88,6 +88,15 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    // Read-only, and not part of the control-plane surface the dispatcher
+    // talks to. It exists because a *successful* renewal is otherwise
+    // invisible until the SIGTERM report: `scripts/long-step-lease.mjs` has to
+    // read the tally while the run is still in flight.
+    if (req.method === "GET" && path === "/internal/stats") {
+      json(res, 200, { ...stats, liveLeases: liveLeases.size });
+      return;
+    }
+
     const release = /^\/internal\/runtime\/activations\/([^/]+)$/.exec(path);
     if (req.method === "DELETE" && release) {
       stats.release += 1;
