@@ -844,9 +844,22 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
           })
           .onConflictDoNothing()
           .returning();
-        if (runValue) {
-          run = deserializeRunError(compact(runValue));
+        // No row back means the run already exists — typically because the
+        // resilient start path (a `run_started` for a run that did not exist yet)
+        // won a TOCTOU race and created it.
+        //
+        // Surfacing the conflict matters twice over. eve's `start()` asserts
+        // `result.run` and already treats `EntityConflictError` as benign, so
+        // returning `{ run: undefined }` handed it a value it cannot use and no
+        // typed error to branch on. And falling through reached the generic event
+        // INSERT below, which appended a SECOND `run_created` to the log —
+        // `run_created` is outside the dedup partial index (its predicate covers
+        // only step/hook/wait/attr events), so nothing stopped it, and replay
+        // would then see two.
+        if (!runValue) {
+          throw new EntityConflictError(`Workflow run "${effectiveRunId}" already exists`);
         }
+        run = deserializeRunError(compact(runValue));
       }
 
       // Handle run_started event: update run status

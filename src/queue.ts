@@ -156,6 +156,8 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     },
   };
   const generateMessageId = monotonicFactory();
+  // Resolved once. `undefined` yields upstream's default `__wkf_workflow_`.
+  const queueNamespace = config.queueNamespace;
 
   /**
    * Embedded runners get a per-tenant job name so a shared database cannot let
@@ -289,6 +291,9 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
         headers,
         tenantId,
         deploymentId: config.deploymentId,
+        // Recorded so the delivery side can rebuild the exact prefix; the
+        // dispatcher must not re-resolve it from its own environment.
+        ...(queueNamespace !== undefined ? { queueNamespace } : {}),
       }),
       {
         ...(jobKey ? { jobKey } : {}),
@@ -668,7 +673,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
 
   async function setupListeners() {
     const taskList: Record<string, (payload: unknown, helpers: unknown) => Promise<void>> = {};
-    const workflowPrefix = getQueueTopicPrefix("workflow");
+    const workflowPrefix = getQueueTopicPrefix("workflow", queueNamespace);
     taskList[getJobQueueName()] = createTaskHandler(workflowPrefix);
 
     runner = await run({

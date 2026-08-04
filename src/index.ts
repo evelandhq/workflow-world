@@ -1,5 +1,5 @@
 import type { Storage, World } from "@workflow/world";
-import { SPEC_VERSION_CURRENT } from "@workflow/world";
+import { resolveQueueNamespace, SPEC_VERSION_CURRENT } from "@workflow/world";
 import { Pool } from "pg";
 import {
   type EvelandWorldConfig,
@@ -67,6 +67,7 @@ function resolveConfig(config: EvelandWorldConfig): ResolvedWorldConfig {
     "WORKFLOW_WORLD_TENANT_ID",
   );
   assertValidTenantId(tenantId);
+  const queueNamespace = resolveQueueNamespace(config.queueNamespace);
   return {
     tenantId,
     deploymentId: required(
@@ -78,11 +79,17 @@ function resolveConfig(config: EvelandWorldConfig): ResolvedWorldConfig {
     runner:
       config.runner ??
       resolveRunnerMode(process.env.WORKFLOW_WORLD_RUNNER ?? process.env.EVELAND_WORKFLOW_RUNNER),
+    // `resolveQueueNamespace` is upstream's own resolver, so the fallback to
+    // `WORKFLOW_QUEUE_NAMESPACE` matches exactly what eve's runtime does.
+    ...(queueNamespace !== undefined ? { queueNamespace } : {}),
     ...(config.port !== undefined ? { port: config.port } : {}),
+    // `??` cannot express this: `parseInt("")` is NaN, which is not nullish, so
+    // the fallback was unreachable and an unset variable produced NaN. A
+    // `Number.isFinite` guard in `createWorld` rescued it, but only there —
+    // `resolveConfig` on its own handed NaN to graphile.
     queueConcurrency:
       config.queueConcurrency ??
-      parseInt(process.env.WORKFLOW_POSTGRES_WORKER_CONCURRENCY || "", 10) ??
-      50,
+      (Number.parseInt(process.env.WORKFLOW_POSTGRES_WORKER_CONCURRENCY ?? "", 10) || 50),
     ...(config.streamFlushIntervalMs !== undefined
       ? { streamFlushIntervalMs: config.streamFlushIntervalMs }
       : {}),

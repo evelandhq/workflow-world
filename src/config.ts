@@ -23,6 +23,16 @@ export type EvelandWorldConfig = PgConnectionConfig & {
   deploymentId?: string;
   /** Falls back to `EVELAND_WORKFLOW_RUNNER`, then `embedded`. */
   runner?: WorkflowRunnerMode;
+  /**
+   * eve's queue namespace. Falls back to `WORKFLOW_QUEUE_NAMESPACE`.
+   *
+   * Nothing to do with tenancy — tenancy is the `tenant_id` column, and
+   * prefix-based isolation is deliberately never used for it. This is eve's own
+   * queue naming: when a namespace is set, the runtime registers handlers for
+   * `__<namespace>_wkf_workflow_*`, and a queue name we build without it
+   * addresses a queue that executor does not own.
+   */
+  queueNamespace?: string;
   /** Port of the local eve executor, for embedded dispatch. */
   port?: number;
   queueConcurrency?: number;
@@ -42,6 +52,8 @@ export type ResolvedWorldConfig = {
   tenantId: string;
   deploymentId: string;
   runner: WorkflowRunnerMode;
+  /** Resolved once at construction; `undefined` means the default prefix. */
+  queueNamespace?: string;
   port?: number;
   queueConcurrency: number;
   streamFlushIntervalMs?: number;

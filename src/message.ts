@@ -29,5 +29,22 @@ export const MessageData = z.object({
   deploymentId: z
     .string()
     .describe("Deployment that enqueued the message; the dispatcher's affinity hint"),
+  /**
+   * eve's queue namespace, as resolved by the *enqueuing* deployment.
+   *
+   * It has to travel on the message. `id` holds only the bare sub-queue id —
+   * `parseQueueName` strips the prefix at enqueue — so the delivery side has to
+   * rebuild `__<namespace>_wkf_workflow_<id>`, and the dispatcher runs in a
+   * different process from the deployment. Resolving `WORKFLOW_QUEUE_NAMESPACE`
+   * from the dispatcher's own environment would read the host's value, not the
+   * tenant's, and address a queue that executor does not own.
+   *
+   * Optional so a message enqueued before this field existed still parses; absent
+   * means the default prefix, which is what every deployment gets today.
+   */
+  queueNamespace: z
+    .string()
+    .optional()
+    .describe("eve queue namespace resolved by the enqueuing deployment"),
 });
 export type MessageData = z.infer<typeof MessageData>;

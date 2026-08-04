@@ -1,5 +1,6 @@
 import { SPEC_VERSION_CURRENT, type WorkflowRun } from "@workflow/world";
 import { Pool } from "pg";
+import { ulid } from "ulid";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "./drizzle/index.js";
 import { dropTenantPartitions, ensureTenantPartitions, runMigrations } from "./index.js";
@@ -159,6 +160,51 @@ describe.skipIf(!testUrl)("runs storage (postgres)", () => {
       });
 
       expect(run.attributes).toEqual({ [key]: "literal" });
+    });
+
+    /**
+     * Restored: the fork used to swallow this. `.onConflictDoNothing()` returned
+     * no row, so the code left `run` undefined and fell through to the generic
+     * event INSERT — a duplicate `run_created` landed in the log, and eve's
+     * `start()`, which asserts `result.run`, got `undefined` with no typed error
+     * to branch on.
+     */
+    it("rejects a duplicate run_created with EntityConflictError", async () => {
+      const runId = `wrun_${ulid()}`;
+      const runData = {
+        deploymentId: "deployment-123",
+        workflowName: "test-workflow",
+        input: new Uint8Array([1, 2]),
+      };
+      await events.create(runId, { eventType: "run_created", eventData: runData });
+
+      await expect(
+        events.create(runId, { eventType: "run_created", eventData: runData }),
+      ).rejects.toMatchObject({ name: "EntityConflictError" });
+    });
+
+    it("rejects run_created when resilient start already created the run", async () => {
+      // `start()` races `events.create(run_created)` against `world.queue()`. When
+      // the worker dequeues first, `run_started` on a not-yet-existent run takes
+      // the resilient start path and creates the run itself. The late
+      // `run_created` must lose loudly: `start()` treats EntityConflictError as
+      // benign, while a silent no-op both fails its `run` assertion and appends a
+      // duplicate `run_created` to the log.
+      const runId = `wrun_${ulid()}`;
+      const runData = {
+        deploymentId: "deployment-123",
+        workflowName: "test-workflow",
+        input: new Uint8Array([1, 2]),
+      };
+      await events.create(runId, { eventType: "run_started", eventData: runData });
+
+      await expect(
+        events.create(runId, { eventType: "run_created", eventData: runData }),
+      ).rejects.toMatchObject({ name: "EntityConflictError" });
+
+      // Exactly one, which is what falling through broke.
+      const result = await events.list({ runId, pagination: { sortOrder: "asc" } });
+      expect(result.data.filter((event) => event.eventType === "run_created")).toHaveLength(1);
     });
   });
 

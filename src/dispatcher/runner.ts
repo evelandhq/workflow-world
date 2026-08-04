@@ -106,7 +106,12 @@ export async function startDispatcher(input: {
     // queue", 400), and a 400 is non-retryable — so sending the bare id
     // dead-letters every message. The embedded runner rebuilds the full name
     // for the same reason.
-    const queueName = `${getQueueTopicPrefix("workflow")}${message.id}`;
+    //
+    // The namespace comes off the MESSAGE, not from this process's environment.
+    // The dispatcher runs on the host; `WORKFLOW_QUEUE_NAMESPACE` here would be
+    // the host's value, and addressing `__wkf_workflow_*` at an executor that
+    // registered `__<ns>_wkf_workflow_*` is an unhandled queue every time.
+    const queueName = `${getQueueTopicPrefix("workflow", message.queueNamespace)}${message.id}`;
 
     fairness.acquire(message.tenantId);
     try {
