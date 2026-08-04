@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  static:
+    name: Lint, format, typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run fmt:check
+      - run: npm run typecheck
+      - run: npm run build
+
+  test:
+    name: Unit and integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: wfw
+          POSTGRES_PASSWORD: wfw
+          POSTGRES_DB: wfw_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      EVELAND_WORKFLOW_WORLD_TEST_URL: postgres://wfw:wfw@127.0.0.1:5432/wfw_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  conformance:
+    name: Conformance, external mode (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Do not fail fast: which variant broke is the whole diagnostic.
+      fail-fast: false
+      matrix:
+        include:
+          # The default gate. At these settings no lease renewal ever fires — the
+          # longest dispatch is far shorter than the interval — which is why the
+          # other two variants exist. See KNOWN-GAPS.md G3.
+          - name: default
+            renew_interval: ""
+            renew_fail: ""
+          # Forces the renewal path to run for real.
+          - name: fast-lease-renewal
+            renew_interval: "100"
+            renew_fail: ""
+          # The control API refuses every renewal: the dispatcher must abort the
+          # held POST rather than let a step run on unprotected, and graphile must
+          # retry it to completion.
+          - name: lease-renewal-refused
+            renew_interval: "100"
+            renew_fail: "1"
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: wfw
+          POSTGRES_PASSWORD: wfw
+          POSTGRES_DB: wfw_conformance
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      WORKFLOW_WORLD_CONFORMANCE_URL: postgres://wfw:wfw@127.0.0.1:5432/wfw_conformance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Run upstream's suite against runner=external
+        run: npm run test:conformance
+        env:
+          # Empty means "unset": `positiveNumber` falls back on a non-positive
+          # parse, and the stub compares STUB_RENEW_FAIL against "1".
+          WORKFLOW_DISPATCHER_LEASE_RENEW_INTERVAL_MS: ${{ matrix.renew_interval }}
+          STUB_RENEW_FAIL: ${{ matrix.renew_fail }}
+
+  pack:
+    name: Tarball contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Pack
+        run: npm pack --pack-destination /tmp/wfw
+      - name: Install the tarball into a clean project and import it
+        run: |
+          mkdir -p /tmp/wfw-smoke && cd /tmp/wfw-smoke
+          npm init -y >/dev/null
+          npm install /tmp/wfw/*.tgz
+          # The published resolution, not the workspace one.
+          node --input-type=module -e '
+            import { createWorld, runMigrations, ensureTenantPartitions } from "@evelandhq/workflow-world";
+            import { main } from "@evelandhq/workflow-world/dispatcher";
+            for (const [name, value] of Object.entries({ createWorld, runMigrations, ensureTenantPartitions, main })) {
+              if (typeof value !== "function") throw new Error(`${name} is not exported`);
+            }
+            console.log("exports ok");
+          '
+          # Migrations ship as files, not just as code that references them.
+          test -f node_modules/@evelandhq/workflow-world/migrations/0001_initial.sql
+          # The licence obligations are part of the artifact, not of the repo.
+          test -f node_modules/@evelandhq/workflow-world/LICENSE
+          test -f node_modules/@evelandhq/workflow-world/NOTICE
+          grep -q "Apache License" node_modules/@evelandhq/workflow-world/LICENSE
+          grep -q "world-postgres" node_modules/@evelandhq/workflow-world/NOTICE
+          echo "tarball contract ok"
