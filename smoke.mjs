@@ -6,7 +6,7 @@ import {
   runMigrations,
   ensureTenantPartitions,
   dropTenantPartitions,
-} from "@eveland/workflow-world";
+} from "@evelandhq/workflow-world";
 
 const connectionString = process.env.WW_URL;
 const admin = new Pool({ connectionString, max: 1 });
