@@ -15,7 +15,7 @@ import {
 } from "./dispatcher.js";
 
 /**
- * Job names must match what `@eveland/workflow-world` enqueues in external
+ * Job names must match what `@evelandhq/workflow-world` enqueues in external
  * mode. Embedded-mode jobs carry a per-tenant suffix and are deliberately not
  * claimed here — they belong to that deployment's own in-process runner.
  */
