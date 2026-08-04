@@ -58,7 +58,8 @@
     "lint": "oxlint",
     "prepack": "npm run build",
     "test:conformance": "npm run build && vitest run --config conformance/vitest.config.mts",
-    "test:e2e": "vitest run --config e2e-tests/vitest.config.mts"
+    "test:e2e": "vitest run --config e2e-tests/vitest.config.mts",
+    "check:long-step": "npm run build && node scripts/long-step-lease.mjs"
   },
   "dependencies": {
     "@workflow/errors": "5.0.0-beta.14",

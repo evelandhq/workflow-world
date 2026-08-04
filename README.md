@@ -125,6 +125,13 @@ WORKFLOW_WORLD_CONFORMANCE_URL=postgres://…/wfw_conformance npm run test:confo
 WORKFLOW_WORLD_E2E_URL=postgres://…/postgres npm run test:e2e
 ```
 
+```bash
+# by hand, not in CI: one dispatch held open for 200s against the production
+# lease settings, plus the control that proves the renewals are what kept it
+# alive. Minutes per run, which is why it is not in the matrix.
+WORKFLOW_WORLD_LEASE_CHECK_URL=postgres://…/wfw_lease npm run check:long-step
+```
+
 The conformance project is the gate that matters: it runs
 `@workflow/world-testing` against `runner: external`, so a green run exercises the
 whole out-of-process path rather than just the storage layer. See
