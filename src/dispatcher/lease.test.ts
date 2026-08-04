@@ -211,8 +211,15 @@ describe("withRenewedLease tolerates transient renewal failures", () => {
           }),
       );
 
+      // Attached before the timers run, for the reason given in the abort test
+      // above: the rejection lands during the flush, so asserting afterwards
+      // leaves it momentarily unhandled and fails the whole run on a stray
+      // warning — vitest exits non-zero on unhandled rejections even when every
+      // test passes.
+      const rejects = expect(promise).rejects.toThrow(/could not be renewed/);
+
       await vi.advanceTimersByTimeAsync(12_000);
-      await expect(promise).rejects.toThrow(/could not be renewed/);
+      await rejects;
       expect(String(aborted)).toContain("lease_dead");
     } finally {
       vi.useRealTimers();
@@ -231,8 +238,12 @@ describe("withRenewedLease tolerates transient renewal failures", () => {
           }),
       );
 
+      // Same ordering requirement as the two tests above: handler first, then
+      // let the timers fire.
+      const rejects = expect(promise).rejects.toThrow(/could not be renewed/);
+
       await vi.advanceTimersByTimeAsync(1_500);
-      await expect(promise).rejects.toThrow(/could not be renewed/);
+      await rejects;
       expect(activation.renew).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
