@@ -8,7 +8,7 @@
  *
  * Six upstream tests in this range are deliberately absent because the
  * behaviour they assert does not exist at our pins (`@workflow/world`
- * 5.0.0-beta.23): the four `tokenRetentionUntil` retention tests (no retention
+ * 5.0.0-beta.24): the four `tokenRetentionUntil` retention tests (no retention
  * column, and `hook_created` drops the field), and the two that expect
  * `hook_received` to raise `RunExpiredError` on a run that reached a terminal
  * state (there is no such guard on either the current-spec or legacy path).

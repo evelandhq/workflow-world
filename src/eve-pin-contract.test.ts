@@ -82,13 +82,16 @@ describe("@workflow/* pins track the installed eve", () => {
    */
   const EXEMPT_FROM_EVE_PINS: Record<string, string> = {
     // The conformance harness, and deliberately not part of the runtime pairing:
-    // it ships its *own* runtime bundle and tracks a separate release line
-    // (beta.39, which itself pins @workflow/world beta.24 while we run beta.23).
+    // it ships its *own* runtime bundle and tracks a separate release line. That
+    // line happens to agree with ours today (beta.39 pins @workflow/world
+    // beta.24, which is what eve 0.30 installs), but the agreement is a
+    // coincidence of timing, not a constraint — the harness releases on its own
+    // cadence and has sat a version ahead of eve before.
     // Forcing it onto eve's set would mean testing against a runtime eve does not
-    // ship. The coexistence is verified rather than assumed — several copies of
-    // @workflow/world live in the tree during a conformance run, and
-    // conformance/spec.test.mts asserts our specVersion equals the one the
-    // harness runtime demands, which is the property that actually matters.
+    // ship. The agreement is verified rather than assumed: conformance/spec.test.mts
+    // asserts our specVersion equals the one the harness runtime demands, which is
+    // the property that actually matters and the one that survives the harness
+    // drifting ahead again and re-nesting its own @workflow/world in the tree.
     "@workflow/world-testing": "test-only harness; ships its own runtime bundle",
   };
 
