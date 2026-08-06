@@ -32,7 +32,7 @@ type EventsStorage = ReturnType<typeof createEventsStorage>;
 
 /**
  * `hook_conflict`'s `conflictingRunId` is not declared on the `Event` union in
- * the pinned @workflow/world 5.0.0-beta.23 (upstream reaches it through `any`).
+ * the pinned @workflow/world 5.0.0-beta.24 (upstream reaches it through `any`).
  * One narrowing helper keeps the cast out of the assertions.
  */
 function conflictData(event: Event | undefined): { token?: string; conflictingRunId?: string } {

@@ -151,6 +151,35 @@ that omits the field leaves a runaway workflow with no bound at all.
 not implemented; the first because Postgres batching is not the bottleneck, the
 other two because they belong to work that is out of scope below.
 
+Three optional members added in `@workflow/world` 5.0.0-beta.24 (the line eve
+0.30 installs) are left unimplemented on purpose. Each one fails open, and the
+reasons differ enough to be worth recording:
+
+- **`getEnvironment()`** exists so a run's creating environment can travel on its
+  queue message and a consuming deployment can notice it was handed a message
+  from a different one. Eveland has no environment dimension for a World to
+  report — a deployment serves exactly one project, and the tenant predicate is
+  the boundary — so returning anything here would manufacture a distinction that
+  does not exist. Upstream expects Postgres-backed Worlds to omit it.
+- **`capabilities.hookResumeDedup`** is the backend half of `resumeHook()`'s
+  parallel fast path: the producer's direct write and the queue consumer's
+  re-ensure both carry one `resumeId`, and the backend must collapse them onto a
+  single `hook_received`. There is no `(runId, resumeId)` constraint here — the
+  events table's uniqueness is on `(tenant, run, correlation, type)` for entity
+  creation, which is a different key — so the capability stays unset and the
+  runtime keeps the sequential single-writer path. Declaring it without the
+  constraint would duplicate a `hook_received` on replay. Adding the constraint
+  is a real option later; it is a migration, not a flag.
+- **`CreateEventParams.computeInstanceId`** is ambient per-event identity, read
+  back through the analytics surface. It is dropped for the same reason
+  `requestId` already is: this World does not implement `analytics`, so there is
+  nothing to read it back through.
+
+The same release grew `hookInput` and `preconditionReinvocations` on the queue
+payload and `environment` on `RunInput`. None of them reach this package: the vqs
+body is carried as opaque bytes on `MessageData.data`, and only eve's own handler
+parses it.
+
 ## Data model
 
 ### The tenancy column is `tenant_id`
