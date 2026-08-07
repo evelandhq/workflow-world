@@ -8,6 +8,7 @@
       "draft": false,
       "prerelease": false,
       "include-v-in-tag": true,
+      "extra-files": ["src/dispatcher/build-info.ts"],
       "changelog-sections": [
         { "type": "feat", "section": "Features" },
         { "type": "fix", "section": "Fixes" },
