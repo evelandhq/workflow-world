@@ -140,6 +140,40 @@ for what it structurally cannot prove. [e2e-tests/](./e2e-tests/) is the other
 half — it builds a released eve and proves eve can resolve, bundle and drive this
 World, which conformance never loads an eve to check.
 
+## Following eve
+
+An eve release is almost never a reason to do anything here. What matters is not
+that eve shipped, but whether the `@workflow/*` set it installs moved — and that
+happens about once per eve **minor line**, not per release. Between 0.29.0 and
+0.31.0 it moved exactly once, at 0.30.0, then sat still through nine patch
+releases and a minor.
+
+Two versions with very different cadences are easy to conflate:
+
+- **`eve` is a devDependency.** It exists so `src/eve-pin-contract.test.ts` has
+  something to read the expected `@workflow/*` versions out of. Consumers never
+  resolve it, so bumping it alone is not a reason to release — it can ride along
+  with the next real change.
+- **`@workflow/errors`, `@workflow/world` and `@workflow/world-local` are real
+  dependencies.** When those move, what consumers resolve moves with them, and
+  that is a release.
+
+The check runs weekly and files an issue only when a newer eve actually moves the
+set. Expect it to be silent for months:
+
+```bash
+npm run check:eve-drift
+```
+
+When it does fire, it is a heads-up rather than a deadline. Nothing can be
+deployed until Eveland's `packages/core/src/eve-compatibility.ts` verifies a
+version on that line, and the pin here should follow **that** version rather than
+npm's `latest` — the two are routinely different. Then bump the devDependency and
+let the contract test name what has to move with it; the things that actually
+break are `specVersion` (eve compiles a literal equality check) and
+`@workflow/world`'s major or prerelease tag, both of which survived the whole
+0.29 → 0.30 move untouched.
+
 ## Releasing
 
 Releases are cut by [release-please](https://github.com/googleapis/release-please),

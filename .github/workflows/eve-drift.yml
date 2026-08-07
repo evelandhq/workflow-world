@@ -1,0 +1,92 @@
+name: eve pin drift
+
+# Asks once a week whether a newer eve has started installing a different
+# `@workflow/*` set than we pin, and does nothing at all when the answer is no.
+#
+# The cadence is chosen to match the work, not the release feed. eve ships
+# often and almost none of it reaches this package: across 0.29.0 to 0.31.0 the
+# set moved exactly once, at 0.30.0, and sat still through nine later patches
+# and a minor. So this is expected to be silent for months at a time. If it ever
+# starts firing weekly, that is the signal to question the check, not to raise
+# the interval.
+#
+# It is a heads-up, never a gate. Nothing it reports can be deployed until
+# Eveland's compatibility window verifies a version on that line, so it must not
+# be able to fail CI or block a release — it only opens an issue.
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC. Nothing depends on the hour; a weekday morning just
+    # means a finding is seen while there is a week left to act on it.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eve-drift
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Compare our pins against newer eve releases
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The only write it needs, and only to file the heads-up.
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # No `npm ci`: the script reads package.json and the registry, and nothing
+      # else. Installing the tree would cost a minute a week to prove nothing.
+      - name: Check
+        id: check
+        run: |
+          set +e
+          report=$(node scripts/eve-pin-drift.mjs 2>&1)
+          code=$?
+          set -e
+          echo "$report"
+          {
+            echo "report<<REPORT_EOF"
+            echo "$report"
+            echo "REPORT_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          # 0 clean, 1 drift, 2 the check itself broke. Only 2 is a job failure:
+          # drift is a finding, and a finding is not a broken pipeline.
+          if [ "$code" = "2" ]; then exit 1; fi
+
+      - name: Open or refresh the heads-up issue
+        if: steps.check.outputs.code == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ steps.check.outputs.report }}
+        run: |
+          set -euo pipefail
+          # `gh issue create --label` fails on a label that does not exist, and
+          # this is the first thing that would ever use it.
+          gh label create eve-drift \
+            --description "A newer eve installs a different @workflow/* set than we pin" \
+            --color BFD4F2 2>/dev/null || true
+
+          body=$(printf '%s\n\n---\n\nFiled by `.github/workflows/eve-drift.yml`. Closing this is fine — it reopens on the next Monday that still finds drift.\n' "$REPORT")
+
+          # One open issue at a time. A weekly job that files a fresh issue for
+          # the same unchanged fact is exactly the noise this check exists to
+          # avoid, so an existing one is edited in place instead.
+          existing=$(gh issue list --state open --label eve-drift --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body "$body"
+            echo "Refreshed existing issue #$existing"
+          else
+            gh issue create \
+              --title "eve pin drift: a newer eve installs a different @workflow/* set" \
+              --label eve-drift \
+              --body "$body"
+          fi
