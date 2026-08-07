@@ -127,7 +127,7 @@ jobs:
       matrix:
         # Mirrors e2e-tests/eve-versions.mts. Keep the two in step — the file is
         # what the suite reads; this list is only what CI pays for.
-        eve: ["0.28.0", "0.30.6"]
+        eve: ["0.29.5", "0.31.0"]
     services:
       postgres:
         image: postgres:17-alpine
