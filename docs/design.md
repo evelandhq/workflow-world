@@ -147,9 +147,12 @@ is treated as not supporting it. And `events.create` reports `maxEvents` on ever
 response that carries a run, because the runtime enforces the ceiling and a World
 that omits the field leaves a runaway workflow with no bound at all.
 
-`streams.writeMulti`, `analytics` and `getEncryptionKeyForRun` are deliberately
-not implemented; the first because Postgres batching is not the bottleneck, the
-other two because they belong to work that is out of scope below.
+`streams.writeMulti` is implemented as one batched insert: chunk ids are
+monotonic ULIDs generated up front in input order, and readers sort by chunk id,
+so a single multi-row `INSERT` carries the whole batch without losing chunk
+ordering. The NOTIFY is still emitted per chunk. `analytics` and
+`getEncryptionKeyForRun` are deliberately not implemented; both belong to work
+that is out of scope below.
 
 Three optional members added in `@workflow/world` 5.0.0-beta.24 (the line eve
 0.30 installs) are left unimplemented on purpose. Each one fails open, and the
