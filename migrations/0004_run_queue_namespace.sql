@@ -1,0 +1,26 @@
+-- Durable queue namespace on the run.
+--
+-- eve registers its workflow handlers under a namespace: a deployment whose
+-- namespace is `acme` owns `__acme_wkf_workflow_<name>` and nothing else. The
+-- live enqueue path already carries that value on the message, because the
+-- deployment resolves it in its own process. The external dispatcher's boot
+-- sweep cannot: it rebuilds a message from a run row, on the host, where
+-- `WORKFLOW_QUEUE_NAMESPACE` is either unset or someone else's. Without a
+-- durable copy it addressed `__wkf_workflow_<name>`, eve answered 400
+-- "Unhandled queue", and a 400 is non-retryable — so every recovered run
+-- dead-lettered while staying active for the next boot to strand again.
+--
+-- Three states, deliberately:
+--
+--   '<ns>'  the run's deployment resolved that namespace
+--   ''      the run's deployment resolved none — the default prefix is correct
+--   NULL    unknown: written by code that did not record it
+--
+-- The empty string is a safe sentinel because a namespace must match
+-- `^[a-z][a-z0-9]*$` upstream, so it can never collide with a real one. NULL is
+-- kept distinct rather than folded into "no namespace" because the two are not
+-- the same claim: rows predating this column, and rows still being written by an
+-- older deployment mid-upgrade, are genuinely unknown. Boot recovery falls back
+-- to the default prefix for them and says so, instead of guessing quietly.
+ALTER TABLE "workflow"."workflow_runs"
+  ADD COLUMN IF NOT EXISTS "queue_namespace" varchar;

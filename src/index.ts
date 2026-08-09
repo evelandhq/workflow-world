@@ -33,10 +33,17 @@ export { reenqueueTenantRuns } from "./recovery.js";
 export { derivePartitionName, tenantStreamChannel } from "./tenant.js";
 export * from "./drizzle/schema.js";
 
-function createStorage(drizzle: Drizzle, tenantId: string): Storage {
+/**
+ * `queueNamespace` reaches storage because run creation is the only moment the
+ * value is knowable and durable at once. The external dispatcher rebuilds
+ * messages for active runs from their rows, in a process that has no access to
+ * this deployment's environment — so a namespace not recorded here is a
+ * namespace that boot recovery cannot honour.
+ */
+function createStorage(drizzle: Drizzle, tenantId: string, queueNamespace?: string): Storage {
   return {
     runs: createRunsStorage(drizzle, tenantId),
-    events: createEventsStorage(drizzle, tenantId),
+    events: createEventsStorage(drizzle, tenantId, queueNamespace),
     hooks: createHooksStorage(drizzle, tenantId),
     steps: createStepsStorage(drizzle, tenantId),
   };
@@ -115,7 +122,7 @@ export function createWorld(
   let closed = false;
   const drizzle = createClient(pool);
   const queue = createQueue(resolved, pool);
-  const storage = createStorage(drizzle, resolved.tenantId);
+  const storage = createStorage(drizzle, resolved.tenantId, resolved.queueNamespace);
   const streamer = createStreamer(pool, drizzle, resolved.tenantId);
 
   return {

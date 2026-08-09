@@ -39,8 +39,17 @@ export const MessageData = z.object({
    * from the dispatcher's own environment would read the host's value, not the
    * tenant's, and address a queue that executor does not own.
    *
-   * Optional so a message enqueued before this field existed still parses; absent
-   * means the default prefix, which is what every deployment gets today.
+   * Optional so a message enqueued before this field existed still parses.
+   *
+   * Absent means the default prefix — but only as the reading of a message whose
+   * producer is known to have had no namespace. It is not a safe inference about
+   * a deployment in general: eve bakes the namespace into the workflow bundle at
+   * build time, so a container with no `WORKFLOW_QUEUE_NAMESPACE` in its
+   * environment can still be serving a namespaced world, and namespaced
+   * deployments are the norm rather than the exception. Anything reconstructing
+   * a message rather than receiving one — see `dispatcher/boot-recovery.ts` —
+   * has to read the namespace from durable state, not from its own environment
+   * and not from this field's absence.
    */
   queueNamespace: z
     .string()

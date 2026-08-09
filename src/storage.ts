@@ -483,7 +483,21 @@ async function handleLegacyEventPostgres(
   }
 }
 
-export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage["events"] {
+export function createEventsStorage(
+  drizzle: Drizzle,
+  tenantId: string,
+  queueNamespace?: string,
+): Storage["events"] {
+  /**
+   * Stamped on the run at creation and never rewritten, because the run rows are
+   * the external dispatcher's only record of which topic this deployment's
+   * executor registered. `''` is the positive claim "this deployment has no
+   * namespace"; NULL is reserved for rows written by code that did not record
+   * one at all. Both inserts below use it, and both are `onConflictDoNothing`,
+   * so a later process replaying the same run cannot overwrite the provenance of
+   * the one that created it.
+   */
+  const runQueueNamespace = queueNamespace ?? "";
   const hookRetentionLimitMs = getHookRetentionLimitMs();
   /**
    * A hook is only collectable once its retention has lapsed. NULL means the
@@ -688,6 +702,7 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
                 executionContext: runInputData.executionContext,
                 attributes: runInputData.attributes,
                 status: "pending",
+                queueNamespace: runQueueNamespace,
               })
               .onConflictDoNothing()
               .returning();
@@ -952,6 +967,7 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
             executionContext: eventData.executionContext,
             attributes: eventData.attributes,
             status: "pending",
+            queueNamespace: runQueueNamespace,
           })
           .onConflictDoNothing()
           .returning();

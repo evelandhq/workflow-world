@@ -21,6 +21,18 @@ export async function reenqueueTenantRuns(input: {
   enqueue: Queue["queue"];
   tenantId: string;
 }): Promise<number> {
+  /**
+   * The default prefix here is not a namespace bug, though it reads like one.
+   * `enqueue` is the deployment's own `queue.queue`, which runs the name back
+   * through `parseQueueName` and keeps only the bare sub-queue id — the prefix
+   * is discarded, and the closure re-attaches this deployment's real namespace
+   * on the way out. So this call site cannot get the namespace wrong, and
+   * passing the resolved one would change nothing.
+   *
+   * The external dispatcher's sweep is the one that had to change, because it
+   * builds the message itself and has no such closure. See
+   * `dispatcher/boot-recovery.ts`.
+   */
   const workflowQueuePrefix = getQueueTopicPrefix("workflow");
   let reenqueued = 0;
 

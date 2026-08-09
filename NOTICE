@@ -63,6 +63,16 @@ Modifications made by Eveland:
      not-found guard (its sibling `getByToken` does guard), and both run-insert
      paths cast a keyed execution context to an array type.
 
+ 10. Durable queue namespace. A `queue_namespace` column on `workflow_runs`,
+     and a `queueNamespace` field on the queue message alongside the
+     `tenantId` and `deploymentId` fields item 5 requires. Upstream needs
+     neither: its runner is in-process, so the process that delivers a message
+     is the one that resolved the namespace, and it reads it straight from
+     `config.namespace` when registering listeners and when re-enqueueing on
+     startup. Splitting the runner out breaks that — the dispatcher runs on the
+     host and must take the namespace from the message, or for a run it is
+     reconstructing after the original job is gone, from the run row.
+
 The dispatcher (`src/dispatcher/`), the tenant provisioning and partition
 lifecycle (`src/tenant.ts`), the migration runner (`src/migrate.ts`) and the
 dispatch contract (`src/dispatch-contract.ts`) are original works of Eveland and

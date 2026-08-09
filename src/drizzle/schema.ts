@@ -81,6 +81,20 @@ export const runs = schema.table(
     deploymentId: varchar("deployment_id").notNull(),
     status: workflowRunStatus("status").notNull(),
     workflowName: varchar("name").notNull(),
+    /**
+     * eve's queue namespace, as resolved by the deployment that created the run.
+     *
+     * Immutable provenance, written once at creation. The external dispatcher's
+     * boot sweep reads it to rebuild the topic the executor actually registered;
+     * it runs on the host, so its own environment is the wrong authority and the
+     * run row is the only place the value survives once the original job is gone.
+     *
+     * `''` means the creating deployment had no namespace, which is a different
+     * claim from NULL — NULL is "written by code that did not record it", either
+     * a row predating the column or one from an older deployment still running
+     * mid-upgrade. See `migrations/0004_run_queue_namespace.sql`.
+     */
+    queueNamespace: varchar("queue_namespace"),
     specVersion: integer("spec_version"),
     /** @deprecated */
     executionContextJson: jsonb("execution_context").$type<Record<string, unknown>>(),

@@ -282,6 +282,64 @@ retention guard, partial so it stays small as terminal runs accumulate; and
 
 graphile's own tables live in the same database, in their own schema, untouched.
 
+### `queue_namespace` is provenance, not tenancy
+
+eve registers its workflow handlers under a namespace: a deployment whose
+namespace is `acme` owns `__acme_wkf_workflow_<name>` and nothing else. The
+namespace is eve's, baked into the workflow bundle at build time — so a
+container with no `WORKFLOW_QUEUE_NAMESPACE` in its environment can still be
+serving a namespaced world, and namespaced deployments are the norm.
+
+Live enqueue never had to store it: the deployment resolves the namespace in its
+own process and records it on the message, and the delivery side rebuilds the
+topic from there. Boot recovery is different. It reconstructs a message from a
+run row, on the host, after the original job is gone — no enqueue closure to read
+and no tenant environment to resolve from. Guessing the default prefix there
+addresses a topic the executor does not own, which eve refuses with a 400
+`Unhandled queue`; a 400 is terminal, so the run dead-letters and stays active
+for the next boot to strand again.
+
+So the value is stamped on the run at creation, in both production write paths
+(resilient start and `run_created`), and read back by the sweep. It is immutable
+provenance — the inserts are `onConflictDoNothing`, so a later process replaying
+the same run cannot overwrite what the creating deployment recorded.
+
+Three states, and the third is the point:
+
+| value  | meaning                                          |
+| ------ | ------------------------------------------------ |
+| `'ns'` | the creating deployment resolved that namespace  |
+| `''`   | it resolved none — the default prefix is correct |
+| `NULL` | unknown: written by code that did not record one |
+
+`''` is a safe sentinel because upstream requires a namespace to match
+`^[a-z][a-z0-9]*$`, so it can never collide with a real one. `NULL` is kept
+distinct rather than folded into "no namespace" because they are not the same
+claim — see [Upgrading past 0.3.0](#upgrading-past-030).
+
+This is **not** tenancy. Invariant 2 stands: prefix and namespace isolation leak,
+and tenancy is the `tenant_id` column. This column exists only so the platform
+can address the topic eve already chose.
+
+### Upgrading past 0.3.0
+
+`0.3.0` and earlier had nowhere to record the namespace, so every run they
+created reads back `NULL`. An older deployment still running mid-upgrade keeps
+writing `NULL` too — the world is baked into a release and is never upgraded in
+place.
+
+For those rows boot recovery falls back to the default prefix and **logs each
+one**, with a `runsWithUnknownQueueNamespace` count on the summary line. That is
+correct for an un-namespaced deployment and wrong for a namespaced one, and the
+package cannot tell which from the row alone. Deriving it is not an option: the
+namespace is eve's, and reimplementing how eve mints it would fork the algorithm
+against a version this package only pins.
+
+The supported procedure is therefore to drain: let active runs finish, or cancel
+them, before cutting over. The shared-world path has not carried production
+traffic, so an explicit drain is cheap here — and it is a stated policy with a
+test behind it rather than a silent "null means default".
+
 ## The dispatch contract
 
 One held `POST http://127.0.0.1:<endpointPort>/.well-known/workflow/v1/flow` per
