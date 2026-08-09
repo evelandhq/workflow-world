@@ -39,15 +39,36 @@ export async function reenqueueActiveRunsForAllTenants(input: {
     id: string;
     name: string;
     deployment_id: string;
+    queue_namespace: string | null;
   }>(
-    `select tenant_id, id, name, deployment_id
+    `select tenant_id, id, name, deployment_id, queue_namespace
        from workflow.workflow_runs
       where status in ('pending', 'running')
       order by tenant_id, created_at`,
   );
 
   let enqueued = 0;
+  let unknownNamespace = 0;
   for (const row of rows) {
+    // The namespace the run's own deployment resolved, recorded when the run was
+    // created. It cannot be resolved here: this process runs on the host, so
+    // `WORKFLOW_QUEUE_NAMESPACE` would be the host's value rather than the
+    // tenant's, and it cannot be derived from the run either — it is eve's, not
+    // ours, and reimplementing how eve mints it would fork the algorithm.
+    //
+    // NULL is not "no namespace". It is a row written by code that did not
+    // record one — from before the column, or from an older deployment still
+    // running mid-upgrade. The default prefix is the only available fallback and
+    // it is right for an un-namespaced deployment, but for a namespaced one the
+    // dispatch will be refused, so it is reported rather than assumed.
+    if (row.queue_namespace === null) {
+      unknownNamespace += 1;
+      input.log?.("recovering a run whose queue namespace was never recorded", {
+        runId: row.id,
+        tenantId: row.tenant_id,
+        deploymentId: row.deployment_id,
+      });
+    }
     const messageId = `msg_recover_${row.id}`;
     const message: MessageData = {
       // The BARE sub-queue id, exactly as the World's own enqueue path stores it.
@@ -61,6 +82,10 @@ export async function reenqueueActiveRunsForAllTenants(input: {
       messageId: messageId as MessageData["messageId"],
       tenantId: row.tenant_id,
       deploymentId: row.deployment_id,
+      // Absent, not empty, when there is no namespace: that is the wire shape
+      // the live enqueue path produces, and `getQueueTopicPrefix` rejects `''`
+      // rather than treating it as the default.
+      ...(row.queue_namespace ? { queueNamespace: row.queue_namespace } : {}),
     };
     try {
       await input.workerUtils.addJob(FLOW_JOB_NAME, MessageData.encode(message), {
@@ -84,7 +109,12 @@ export async function reenqueueActiveRunsForAllTenants(input: {
   }
 
   if (enqueued > 0) {
-    input.log?.("re-enqueued active runs on boot", { runs: enqueued });
+    input.log?.("re-enqueued active runs on boot", {
+      runs: enqueued,
+      // Surfaced as a count too, so an upgrade that stranded namespaced runs is
+      // visible in one line rather than only in the per-run entries above.
+      ...(unknownNamespace > 0 ? { runsWithUnknownQueueNamespace: unknownNamespace } : {}),
+    });
   }
   return enqueued;
 }
