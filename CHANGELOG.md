@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.3.0...workflow-world-v0.4.0) (2026-08-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* runs created before this version have no recorded queue namespace, and boot recovery can only fall back to the default prefix for them — which a namespaced deployment refuses with 400 "Unhandled queue". Drain or cancel active runs before upgrading. The dispatcher logs every run it recovers without a recorded namespace so an incomplete drain is visible rather than silent.
+
+### Fixes
+
+* keep the queue namespace when the dispatcher rebuilds a recovered run ([#13](https://github.com/evelandhq/workflow-world/issues/13)) ([79e2a1c](https://github.com/evelandhq/workflow-world/commit/79e2a1c948a16393e92cc4b6b1fc54785d4f28c5))
+
 ## [0.3.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.2.0...workflow-world-v0.3.0) (2026-08-09)
 
 
