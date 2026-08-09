@@ -22,9 +22,7 @@ const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
 /**
  * One tenant per ported file. Files share a database and only *files* are
  * serialized, so a tenant shared with another file would leak rows into the
- * assertions below — `list` counts every event a run owns, and
- * `listByCorrelationId` is scoped by tenant and correlation id only, with no
- * run in the predicate at all.
+ * assertions below — `list` counts every event a run owns.
  */
 const TENANT = "prj_port_events";
 
@@ -32,7 +30,7 @@ type EventsStorage = ReturnType<typeof createEventsStorage>;
 
 /**
  * `hook_conflict`'s `conflictingRunId` is not declared on the `Event` union in
- * the pinned @workflow/world 5.0.0-beta.24 (upstream reaches it through `any`).
+ * the pinned @workflow/world 5.0.0-beta.25 (upstream reaches it through `any`).
  * One narrowing helper keeps the cast out of the assertions.
  */
 function conflictData(event: Event | undefined): { token?: string; conflictingRunId?: string } {
@@ -105,10 +103,14 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
    * database, including whatever a concurrently-running suite provisioned.
    *
    * The reset is load-bearing, not hygiene. Every `list` assertion below counts
-   * exact rows, and the `listByCorrelationId` tests reuse fixed correlation ids
-   * (`corr_123`, `step-abc123`, `hook_test123`) that are unique per *tenant*,
-   * not per run — without the reset a second run of this file would find the
-   * previous run's rows under the same ids.
+   * exact rows, and the tests reuse fixed correlation ids (`corr_123`,
+   * `step-abc123`, `hook_test123`). Those are step and hook ids, and
+   * `workflow_steps` / `workflow_hooks` are keyed `(tenant_id, step_id)` /
+   * `(tenant_id, hook_id)` — unique per *tenant*, not per run — so without the
+   * reset a second run of this file would collide with the previous run's rows
+   * on creation. `listByCorrelationId` itself is run-scoped since
+   * `@workflow/world` 5.0.0-beta.25 made `runId` a required param, so it is the
+   * creation path, not the read path, that needs the clean slate.
    */
   async function deleteTenantRows() {
     for (const table of ["workflow_events", "workflow_steps", "workflow_hooks", "workflow_waits"]) {
@@ -356,6 +358,7 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
       });
 
       const result = await events.listByCorrelationId({
+        runId: testRunId,
         correlationId,
         pagination: {},
       });
@@ -369,7 +372,17 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
       expect(result.data[2]?.correlationId).toBe(correlationId);
     });
 
-    it("should list events across multiple runs with same correlation ID", async () => {
+    /**
+     * One correlationId, events owned by two runs — and each run sees only its
+     * own since `@workflow/world` 5.0.0-beta.25 made `runId` required here.
+     *
+     * Upstream's version of this asserted the opposite: that all three events
+     * came back from one call. That was the only reachable shape when the
+     * predicate was `(tenant, correlation)`, and it is what the required param
+     * deliberately ends. The cross-run write itself still happens, so the
+     * coverage is kept and split across the two runs rather than deleted.
+     */
+    it("scopes to the requested run when one correlation id spans runs", async () => {
       const correlationId = "hook-xyz789";
 
       // Create another run
@@ -404,18 +417,29 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
         correlationId,
       });
 
-      const result = await events.listByCorrelationId({
+      const owning = await events.listByCorrelationId({
+        runId: testRunId,
         correlationId,
         pagination: {},
       });
 
-      expect(result.data).toHaveLength(3);
-      expect(result.data[0]?.eventId).toBe(result1.event?.eventId);
-      expect(result.data[0]?.runId).toBe(testRunId);
-      expect(result.data[1]?.eventId).toBe(result2.event?.eventId);
-      expect(result.data[1]?.runId).toBe(run2.runId);
-      expect(result.data[2]?.eventId).toBe(result3.event?.eventId);
-      expect(result.data[2]?.runId).toBe(testRunId);
+      // The creating run sees its own two events, not the receive under run2.
+      expect(owning.data).toHaveLength(2);
+      expect(owning.data[0]?.eventId).toBe(result1.event?.eventId);
+      expect(owning.data[0]?.runId).toBe(testRunId);
+      expect(owning.data[1]?.eventId).toBe(result3.event?.eventId);
+      expect(owning.data[1]?.runId).toBe(testRunId);
+
+      // And the receiving run sees exactly the event it owns.
+      const receiving = await events.listByCorrelationId({
+        runId: run2.runId,
+        correlationId,
+        pagination: {},
+      });
+
+      expect(receiving.data).toHaveLength(1);
+      expect(receiving.data[0]?.eventId).toBe(result2.event?.eventId);
+      expect(receiving.data[0]?.runId).toBe(run2.runId);
     });
 
     it("should return empty list for non-existent correlation ID", async () => {
@@ -431,6 +455,7 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
       });
 
       const result = await events.listByCorrelationId({
+        runId: testRunId,
         correlationId: "non-existent-correlation-id",
         pagination: {},
       });
@@ -482,6 +507,7 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
 
       // Get first page (step_created, step_started, step_retrying)
       const page1 = await events.listByCorrelationId({
+        runId: testRunId,
         correlationId,
         pagination: { limit: 3 },
       });
@@ -492,6 +518,7 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
 
       // Get second page (step_started, step_completed)
       const page2 = await events.listByCorrelationId({
+        runId: testRunId,
         correlationId,
         pagination: { limit: 3, cursor: page1.cursor || undefined },
       });
@@ -520,6 +547,7 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
 
       // Note: resolveData parameter is ignored by the PG World storage implementation
       const result = await events.listByCorrelationId({
+        runId: testRunId,
         correlationId: "step-with-data",
         pagination: {},
       });
@@ -554,6 +582,7 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
       });
 
       const result = await events.listByCorrelationId({
+        runId: testRunId,
         correlationId,
         pagination: {},
       });
@@ -591,6 +620,7 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
       });
 
       const result = await events.listByCorrelationId({
+        runId: testRunId,
         correlationId,
         pagination: { sortOrder: "desc" },
       });
@@ -638,6 +668,7 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
       });
 
       const result = await events.listByCorrelationId({
+        runId: testRunId,
         correlationId: hookId,
         pagination: {},
       });

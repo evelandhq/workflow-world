@@ -52,13 +52,14 @@ to it. Skips cleanly when unset.
 
 Each enabled eve version costs an `npm install` plus a full `eve build`, so
 `eve-versions.mts` enables them deliberately rather than all at once. The supported
-window comes from Eveland's `packages/core/src/eve-compatibility.ts` — 0.29.5,
-0.30.6, 0.31.0 — and this package pins 0.30.6, whose `@workflow/*` set 0.31.0
-installs unchanged. `specVersion` agreement is still not the risk:
-`SPEC_VERSION_CURRENT` is 5 in both the `@workflow/world` beta.23 that 0.29.5
-carries and the beta.24 the newer lines install. The drift worth proving is
-`@workflow/world-local`, one patch back (beta.32 on 0.29.5 vs the beta.33 we
-pin), since this package wraps its `createQueueHandler` — so the enabled pair is
-the oldest and the newest line, not the middle.
+window comes from Eveland's `packages/core/src/eve-compatibility.ts`, and this
+package pins 0.31.3. A minor does not identify a `@workflow/*` set — 0.31.0 and
+0.31.1 install beta.24, and 0.31.2 moved to beta.25 — so the entries name exact
+patches, and the enabled ones cover each distinct set once (0.29.5 for beta.23,
+0.31.0 for beta.24, 0.31.3 for the beta.25 we pin). `specVersion` agreement is
+still not the risk: `SPEC_VERSION_CURRENT` is 5 in beta.23, beta.24 and beta.25
+alike. The drift worth proving is `@workflow/world-local`, now two patches back
+(beta.32 on 0.29.5 vs the beta.34 we pin), since this package wraps its
+`createQueueHandler` — so the oldest line stays the interesting one.
 
 `.work/` holds the per-version scratch builds and is gitignored.

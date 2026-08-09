@@ -327,7 +327,10 @@ describe.skipIf(!testUrl)("steps storage", () => {
         eventData: { stepName: "lazy-step", input: new Uint8Array([1]) },
       });
 
-      const evts = await events.listByCorrelationId({ correlationId: "lazy-step-2" });
+      const evts = await events.listByCorrelationId({
+        runId: testRunId,
+        correlationId: "lazy-step-2",
+      });
       const created = evts.data.find((e) => e.eventType === "step_created");
       const started = evts.data.find((e) => e.eventType === "step_started");
       expect(created).toBeDefined();
