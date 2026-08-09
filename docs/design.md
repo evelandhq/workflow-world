@@ -154,9 +154,9 @@ ordering. The NOTIFY is still emitted per chunk. `analytics` and
 `getEncryptionKeyForRun` are deliberately not implemented; both belong to work
 that is out of scope below.
 
-Three optional members added in `@workflow/world` 5.0.0-beta.24 (the line eve
-0.30 installs) are left unimplemented on purpose. Each one fails open, and the
-reasons differ enough to be worth recording:
+Three optional members added in `@workflow/world` 5.0.0-beta.24 are left
+unimplemented on purpose. Each one fails open, and the reasons differ enough to
+be worth recording:
 
 - **`getEnvironment()`** exists so a run's creating environment can travel on its
   queue message and a consuming deployment can notice it was handed a message
@@ -182,6 +182,46 @@ The same release grew `hookInput` and `preconditionReinvocations` on the queue
 payload and `environment` on `RunInput`. None of them reach this package: the vqs
 body is carried as opaque bytes on `MessageData.data`, and only eve's own handler
 parses it.
+
+5.0.0-beta.25 — the line eve 0.31.2 installs, and the one pinned here — added one
+required param and four more optional members. The required one, `runId` on
+`ListEventsByCorrelationIdParams`, is implemented; see
+`events.listByCorrelationId`. The optional four are unimplemented, and one of
+them is a live design question rather than a shrug:
+
+- **`capabilities.deploymentAffinity`** turns on the runtime's own affinity
+  guard: a misrouted delivery is re-routed to the run's deployment and ultimately
+  fails the run with `DEPLOYMENT_MISMATCH`. This World qualifies to declare it —
+  the guard is unsafe only for Worlds whose deployment id is synthetic or
+  version-tagged, and `queue.getDeploymentId` returns the real one. It stays
+  unset because the dispatcher already resolves affinity from the run row before
+  any delivery happens (`resolveAffinity`), so the guard would be a second
+  mechanism for a condition the first one is designed to make unreachable — and
+  the two disagree about the remedy: the dispatcher treats a terminal run's
+  straggler as droppable, while the guard ultimately fails the run. Declaring it
+  is worth doing only alongside evidence that misrouted deliveries actually
+  occur, which would mean the dispatcher's own routing has a hole worth fixing
+  directly.
+- **`queue.isDeploymentUnavailableError`** lets the runtime distinguish "this
+  deployment definitively cannot receive the message" from a transient failure.
+  The dispatcher already makes exactly that distinction on the activation
+  result — `not-activatable` dead-letters, `unavailable` retries — but it makes
+  it dispatcher-side, where the activation lease is, rather than inside the
+  World's queue surface. Nothing in the runtime path consults it here.
+- **`runs.cancelMany`** is a bulk cancel, capped at 500 ids. `@workflow/core`'s
+  `cancelRuns` falls back to bounded-concurrency single cancels when it is
+  absent, which is correct and is what happens today.
+- **`getRuntimeDeadline()`** reports when the hosting platform will terminate the
+  current invocation. On this platform a step's invocation is a held vqs POST
+  whose lifetime the dispatcher controls through lease renewal, so there is no
+  externally-imposed wall clock for the World to report.
+
+`CreateEventParams.preloadEvents` is an advisory opt-in on `hook_received` that a
+World MAY answer with the run's complete replay log. It is ignored, which the
+contract explicitly permits: the runtime observes that no usable preload came
+back and falls back to its `run_started` setup. Answering it demands the whole log
+read atomically with the `hook_received` write and `hasMore: false`, so it is a
+performance option to take deliberately, not a field to fill in.
 
 ## Data model
 

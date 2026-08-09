@@ -8,10 +8,14 @@
  * when the answer is no.
  *
  * Quiet is the point. eve ships often and almost none of it reaches this
- * package — across 0.29.0 to 0.31.0 the `@workflow/*` set moved exactly once, at
- * 0.30.0, and sat still through nine subsequent patch releases and a minor.
+ * package — across 0.29.0 to 0.31.3 the `@workflow/*` set moved twice, at 0.30.0
+ * and at 0.31.2, sitting still through roughly a dozen releases in between.
  * A check that fired on every eve release would be noise nobody reads; this one
  * fires roughly once per eve minor line, which is the real cadence of work here.
+ *
+ * Note that the 0.31.2 move landed mid-line, not on 0.31.0 — which is why this
+ * reports an exact version rather than a line, and why nothing here should infer
+ * a set from a minor.
  *
  *   node scripts/eve-pin-drift.mjs
  *

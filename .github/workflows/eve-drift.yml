@@ -4,11 +4,11 @@ name: eve pin drift
 # `@workflow/*` set than we pin, and does nothing at all when the answer is no.
 #
 # The cadence is chosen to match the work, not the release feed. eve ships
-# often and almost none of it reaches this package: across 0.29.0 to 0.31.0 the
-# set moved exactly once, at 0.30.0, and sat still through nine later patches
-# and a minor. So this is expected to be silent for months at a time. If it ever
-# starts firing weekly, that is the signal to question the check, not to raise
-# the interval.
+# often and almost none of it reaches this package: across 0.29.0 to 0.31.3 the
+# set moved twice, at 0.30.0 and at 0.31.2, sitting still through roughly a dozen
+# releases in between. So this is expected to be silent for months at a time. If
+# it ever starts firing weekly, that is the signal to question the check, not to
+# raise the interval.
 #
 # It is a heads-up, never a gate. Nothing it reports can be deployed until
 # Eveland's compatibility window verifies a version on that line, so it must not

@@ -145,8 +145,9 @@ World, which conformance never loads an eve to check.
 An eve release is almost never a reason to do anything here. What matters is not
 that eve shipped, but whether the `@workflow/*` set it installs moved — and that
 happens about once per eve **minor line**, not per release. Between 0.29.0 and
-0.31.0 it moved exactly once, at 0.30.0, then sat still through nine patch
-releases and a minor.
+0.31.3 it moved twice, at 0.30.0 and again at 0.31.2, sitting still through
+roughly a dozen releases in between. Note that neither move landed on a `.0`:
+0.31.0 and 0.31.1 both install the set 0.30.6 did, so a minor is not a set.
 
 Two versions with very different cadences are easy to conflate:
 
@@ -171,8 +172,11 @@ version on that line, and the pin here should follow **that** version rather tha
 npm's `latest` — the two are routinely different. Then bump the devDependency and
 let the contract test name what has to move with it; the things that actually
 break are `specVersion` (eve compiles a literal equality check) and
-`@workflow/world`'s major or prerelease tag, both of which survived the whole
-0.29 → 0.30 move untouched.
+`@workflow/world`'s major or prerelease tag, both of which survived the
+0.29 → 0.30 and 0.30 → 0.31 moves untouched. What did break on the latter was
+narrower and would not have been caught by reading version numbers: a param that
+had been optional became required. So typecheck against the candidate set before
+believing a bump is inert.
 
 ## Releasing
 

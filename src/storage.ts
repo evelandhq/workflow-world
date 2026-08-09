@@ -2014,6 +2014,20 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
         hasMore: all.length > limit,
       };
     },
+    /**
+     * `runId` became required on the params in `@workflow/world` 5.0.0-beta.25,
+     * so the predicate is now run-scoped as well as tenant-scoped.
+     *
+     * This narrows results rather than just restating them, and hooks are the
+     * case that proves it. The hook-existence lookup ahead of `hook_received` is
+     * keyed `(tenant_id, hook_id)` with no run in it, so a hook created under one
+     * run can be received under another — leaving one correlationId with events
+     * owned by two different runs. Before beta.25 this method returned all of
+     * them; now each run sees only its own. Steps cannot produce that shape
+     * (`workflow_steps` is keyed `(tenant_id, step_id)` and every step event is
+     * written under the owning run), which is why hooks are where the change is
+     * observable. See the cross-run coverage in `storage.events.test.ts`.
+     */
     async listByCorrelationId(params) {
       const limit = params?.pagination?.limit ?? 100;
       const sortOrder = params.pagination?.sortOrder || "asc";
@@ -2027,6 +2041,7 @@ export function createEventsStorage(drizzle: Drizzle, tenantId: string): Storage
         .where(
           and(
             eq(Schema.events.tenantId, tenantId),
+            eq(events.runId, params.runId),
             eq(events.correlationId, params.correlationId),
             map(params.pagination?.cursor, (c) => order.compare(events.eventId, c)),
           ),
