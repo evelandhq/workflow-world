@@ -127,8 +127,18 @@ export function createWorld(
 
   return {
     /**
-     * eve compiles a literal `world.specVersion !== 5` check per release, so
-     * this must track the `@workflow/world` line the package depends on. The
+     * eve compiles a `world.specVersion` check into every release, so this must
+     * track the `@workflow/world` line the package depends on. Through eve
+     * 0.33.1 (`@workflow/core` beta.40) that check is literal equality against
+     * the runtime's own `SPEC_VERSION_CURRENT`; beta.41 widened it to the range
+     * `[SPEC_VERSION_CURRENT, SPEC_VERSION_MAX_SUPPORTED]`, shipped as
+     * `>= 5 && <= 6`.
+     *
+     * The widening does not make the pin optional. It only relaxes the ceiling —
+     * the floor is still the runtime's current version, so a World pinned behind
+     * the runtime is rejected exactly as before, and the headroom above exists
+     * for a World that opts into a higher version than the default
+     * (`world-vercel` and its slot event ids) rather than for this one. The
      * contract test asserts the two still agree against the installed eve.
      */
     specVersion: SPEC_VERSION_CURRENT,
