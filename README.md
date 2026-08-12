@@ -186,12 +186,23 @@ deployed until Eveland's `packages/core/src/eve-compatibility.ts` verifies a
 version on that line, and the pin here should follow **that** version rather than
 npm's `latest` — the two are routinely different. Then bump the devDependency and
 let the contract test name what has to move with it; the things that actually
-break are `specVersion` (eve compiles a literal equality check) and
+break are `specVersion` (eve compiles the runtime's check into each release) and
 `@workflow/world`'s major or prerelease tag, both of which survived the
 0.29 → 0.30 and 0.30 → 0.31 moves untouched. What did break on the latter was
 narrower and would not have been caught by reading version numbers: a param that
 had been optional became required. So typecheck against the candidate set before
 believing a bump is inert.
+
+The shape of the `specVersion` check is itself not fixed. Through eve 0.33.1 it
+is literal equality against the runtime's `SPEC_VERSION_CURRENT`;
+`@workflow/core` beta.41, which eve 0.33.2 is the first release to install,
+widened it to the range `[SPEC_VERSION_CURRENT, SPEC_VERSION_MAX_SUPPORTED]` and
+ships it as `>= 5 && <= 6`. That is a loosening and cannot newly reject anything,
+but it loosens in one direction only: the floor is still the runtime's current
+version, so a World pinned behind it fails just as it did before. The headroom
+above is for a World that opts into a higher version than the default —
+`world-vercel` declares the slot-identity version so its runs get slot event ids
+— which this World does not do.
 
 ## Releasing
 

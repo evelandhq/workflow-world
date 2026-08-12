@@ -33,8 +33,11 @@
  * that moved the set for exactly this reason.
  *
  * `specVersion` agreement survives all of it — `SPEC_VERSION_CURRENT` is 5 in
- * beta.23, beta.24 and beta.25 alike — so eve's exact-equality runtime check
- * cannot reject the World on any line in the window. What is worth proving is
+ * beta.23, beta.24 and beta.25 alike — so eve's runtime check cannot reject the
+ * World on any line in the window. That check is exact equality through
+ * `@workflow/core` beta.40 and a `[current, max]` range from beta.41 on, and 5
+ * satisfies both, so the widening does not change which lines are safe here.
+ * What is worth proving is
  * the `world-local` skew, because this package wraps its `createQueueHandler`,
  * and that skew is now two patches wide (beta.32 on the oldest line against the
  * beta.34 we pin) rather than one. So the *oldest* line stays the interesting
