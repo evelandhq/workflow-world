@@ -12,11 +12,12 @@ import type {
   Streamer,
   StreamInfoResponse,
 } from "@workflow/world";
-import { and, asc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, eq, gt, lte, sql } from "drizzle-orm";
 import { Client, type Pool } from "pg";
 import { monotonicFactory } from "ulid";
 import * as z from "zod";
 import { type Drizzle, Schema } from "./drizzle/index.js";
+import { compactStreamChunk, createStreamRehydrator } from "./stream-compaction.js";
 import { tenantStreamChannel } from "./tenant.js";
 import { Mutex } from "./util.js";
 
@@ -106,7 +107,24 @@ export type PostgresStreamer = Streamer & {
   close(): Promise<void>;
 };
 
-export function createStreamer(pool: Pool, drizzle: Drizzle, tenantId: string): PostgresStreamer {
+export type StreamerOptions = {
+  /**
+   * Strip eve's per-delta accumulated snapshots (`messageSoFar` /
+   * `reasoningSoFar`) before persisting chunks. Read paths always rehydrate,
+   * so this only controls whether new writes are compact. See
+   * `stream-compaction.ts` for the full argument.
+   */
+  compactSnapshots?: boolean;
+};
+
+export function createStreamer(
+  pool: Pool,
+  drizzle: Drizzle,
+  tenantId: string,
+  options: StreamerOptions = {},
+): PostgresStreamer {
+  const compactSnapshots = options.compactSnapshots ?? true;
+  const compact = (chunk: Buffer): Buffer => (compactSnapshots ? compactStreamChunk(chunk) : chunk);
   const ulid = monotonicFactory();
   const events = new EventEmitter<{
     [key: `strm:${string}`]: [StreamChunkEvent];
@@ -179,7 +197,7 @@ export function createStreamer(pool: Pool, drizzle: Drizzle, tenantId: string): 
           chunkId,
           streamId: name,
           runId,
-          chunkData: toBuffer(chunk),
+          chunkData: compact(toBuffer(chunk)),
           eof: false,
         });
         await notifyStream(
@@ -212,7 +230,7 @@ export function createStreamer(pool: Pool, drizzle: Drizzle, tenantId: string): 
             chunkId: chunkIds[i]!,
             streamId: name,
             runId,
-            chunkData: toBuffer(chunk),
+            chunkData: compact(toBuffer(chunk)),
             eof: false,
           })),
         );
@@ -294,6 +312,27 @@ export function createStreamer(pool: Pool, drizzle: Drizzle, tenantId: string): 
         const hasMore = rows.length > limit;
         const pageRows = rows.slice(0, limit);
 
+        // Rehydrate compacted snapshots. Accumulation state is everything
+        // before the page, so a cursor resume warms the rehydrator on the
+        // prefix rows first. Compacted rows are delta-only, so the prefix
+        // scan reads O(final text) bytes, not O(n²).
+        const rehydrate = createStreamRehydrator();
+        if (cursorChunkId) {
+          const prefixRows = await drizzle
+            .select({ data: streams.chunkData })
+            .from(streams)
+            .where(
+              and(
+                eq(Schema.streams.tenantId, tenantId),
+                eq(streams.streamId, name),
+                eq(streams.eof, false),
+                lte(streams.chunkId, cursorChunkId as `chnk_${string}`),
+              ),
+            )
+            .orderBy(asc(streams.chunkId));
+          for (const row of prefixRows) rehydrate(row.data);
+        }
+
         // Check if stream is complete via a separate EOF query
         let streamDone = false;
         const [eofRow] = await drizzle
@@ -326,7 +365,7 @@ export function createStreamer(pool: Pool, drizzle: Drizzle, tenantId: string): 
 
         const chunks = pageRows.map((row, i) => ({
           index: baseIndex + i,
-          data: new Uint8Array(row.data),
+          data: new Uint8Array(rehydrate(row.data)),
         }));
 
         const nextCursor =
@@ -393,6 +432,7 @@ export function createStreamer(pool: Pool, drizzle: Drizzle, tenantId: string): 
             let lastChunkId = "";
             let offset = startIndex ?? 0;
             let buffer = [] as StreamChunkEvent[] | null;
+            const rehydrate = createStreamRehydrator();
 
             function enqueue(msg: { id: string; data: Uint8Array; eof: boolean }) {
               if (lastChunkId >= msg.id) {
@@ -400,13 +440,23 @@ export function createStreamer(pool: Pool, drizzle: Drizzle, tenantId: string): 
                 return;
               }
 
+              // Rehydrate before the offset gate: a skipped chunk's delta is
+              // still part of the accumulated text of the chunks after it.
+              const data = msg.data.byteLength
+                ? rehydrate(Buffer.isBuffer(msg.data) ? msg.data : Buffer.from(msg.data))
+                : msg.data;
+
               if (offset > 0) {
                 offset--;
+                // Advance the dedup watermark for skipped chunks too — a
+                // replayed duplicate would otherwise burn a second offset
+                // decrement and feed the accumulator the same delta twice.
+                lastChunkId = msg.id;
                 return;
               }
 
-              if (msg.data.byteLength) {
-                controller.enqueue(new Uint8Array(msg.data));
+              if (data.byteLength) {
+                controller.enqueue(new Uint8Array(data));
               }
               if (msg.eof) {
                 controller.close();

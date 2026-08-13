@@ -81,13 +81,31 @@ honoured by only one end is a silent failure rather than a loud one.
 
 ### Deployment side (read by the World)
 
-| variable                        | alias                              | meaning                                                                                                                                      |
-| ------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WORKFLOW_WORLD_URL`            | `EVELAND_WORKFLOW_WORLD_URL`       | the shared database. Required; there is no fallback chain, because falling back onto a single-tenant database is worse than failing to start |
-| `WORKFLOW_WORLD_TENANT_ID`      | `EVELAND_PROJECT_ID`               | this deployment's tenant                                                                                                                     |
-| `WORKFLOW_WORLD_DEPLOYMENT_ID`  | `EVELAND_DEPLOYMENT_ID`            | recorded on every run, so an in-flight run stays pinned to an executor that can still run it                                                 |
-| `WORKFLOW_WORLD_RUNNER`         | `EVELAND_WORKFLOW_RUNNER`          | `embedded` (default) or `external`                                                                                                           |
-| `WORKFLOW_WORLD_RUNTIME_SECRET` | `EVELAND_SCHEDULER_RUNTIME_SECRET` | authenticates platform dispatch                                                                                                              |
+| variable                           | alias                                | meaning                                                                                                                                      |
+| ---------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORKFLOW_WORLD_URL`               | `EVELAND_WORKFLOW_WORLD_URL`         | the shared database. Required; there is no fallback chain, because falling back onto a single-tenant database is worse than failing to start |
+| `WORKFLOW_WORLD_TENANT_ID`         | `EVELAND_PROJECT_ID`                 | this deployment's tenant                                                                                                                     |
+| `WORKFLOW_WORLD_DEPLOYMENT_ID`     | `EVELAND_DEPLOYMENT_ID`              | recorded on every run, so an in-flight run stays pinned to an executor that can still run it                                                 |
+| `WORKFLOW_WORLD_RUNNER`            | `EVELAND_WORKFLOW_RUNNER`            | `embedded` (default) or `external`                                                                                                           |
+| `WORKFLOW_WORLD_RUNTIME_SECRET`    | `EVELAND_SCHEDULER_RUNTIME_SECRET`   | authenticates platform dispatch                                                                                                              |
+| `WORKFLOW_WORLD_STREAM_COMPACTION` | `EVELAND_WORKFLOW_STREAM_COMPACTION` | `on` (default) or `off`: the emergency switch for stream snapshot compaction, see below                                                      |
+
+### Stream snapshot compaction
+
+eve persists one stream chunk per token delta, and each one carries the full
+accumulated message (`messageSoFar` / `reasoningSoFar`, vercel/eve#1441) — so a
+message's stored footprint is O(n²) in its delta count, measured 99.56%
+redundant in production. The World strips those snapshot fields before a chunk
+is written and re-accumulates them from the deltas on every read path, so the
+bytes consumers see are exactly the bytes eve wrote (verified byte-for-byte on
+5,515 production chunks) while storage stays O(n).
+
+Chunks that are not eve appended-events pass through both directions untouched,
+and any deviation from the expected serde framing falls back to pass-through —
+if eve changes its serialization, the World degrades to storing full chunks
+again rather than corrupting them. The switch above disables the write-side
+stripping only; rehydration is always on, and a stream written across the
+boundary (or across the switch being flipped) reads back correctly.
 
 ### Host side (read by the dispatcher)
 

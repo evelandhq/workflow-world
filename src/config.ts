@@ -41,6 +41,15 @@ export type EvelandWorldConfig = PgConnectionConfig & {
    * Default is 10ms. Set to 0 for immediate flushing.
    */
   streamFlushIntervalMs?: number;
+  /**
+   * Strip eve's per-delta accumulated snapshots from stream chunks before
+   * they are persisted (default true; see `stream-compaction.ts`). Falls back
+   * to `WORKFLOW_WORLD_STREAM_COMPACTION`, then
+   * `EVELAND_WORKFLOW_STREAM_COMPACTION` — set either to `off` to write
+   * uncompacted chunks again. Read-side rehydration is always on, so
+   * flipping this only affects new writes.
+   */
+  compactStreamSnapshots?: boolean;
 };
 
 /**
@@ -57,12 +66,29 @@ export type ResolvedWorldConfig = {
   port?: number;
   queueConcurrency: number;
   streamFlushIntervalMs?: number;
+  compactStreamSnapshots: boolean;
 };
 
 export function resolveRunnerMode(value: string | undefined): WorkflowRunnerMode {
   if (value === "external") return "external";
   if (value === "embedded" || value === undefined || value === "") return "embedded";
   throw new Error(`Invalid workflow runner mode "${value}": expected "embedded" or "external".`);
+}
+
+/**
+ * The emergency switch for write-side stream compaction. On by default;
+ * `off`/`false`/`0` disables it. Anything else is a typo worth failing on —
+ * an operator reaching for this switch is already mid-incident, and a value
+ * that silently means "still on" would be the worst possible answer.
+ */
+export function resolveStreamCompaction(value: string | undefined): boolean {
+  if (value === undefined || value === "" || value === "on" || value === "true" || value === "1") {
+    return true;
+  }
+  if (value === "off" || value === "false" || value === "0") return false;
+  throw new Error(
+    `Invalid stream compaction setting "${value}": expected "on"/"true"/"1" or "off"/"false"/"0".`,
+  );
 }
 
 /**
