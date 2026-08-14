@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.4.0...workflow-world-v0.5.0) (2026-08-14)
+
+
+### Features
+
+* add bounded workflow stream retention ([#17](https://github.com/evelandhq/workflow-world/issues/17)) ([ca62033](https://github.com/evelandhq/workflow-world/commit/ca62033fde4b404cc24112ffe2fdfbcf5d579558))
+
 ## [0.4.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.3.0...workflow-world-v0.4.0) (2026-08-09)
 
 
