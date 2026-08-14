@@ -160,15 +160,6 @@ export function createWorld(
       streamFlushIntervalMs: resolved.streamFlushIntervalMs,
     }),
     /**
-     * Deliberately left false even though external mode looks like the managed
-     * platform case this flag describes. eve reacts to `true` by calling
-     * `process.exit(1)` when a run exhausts its replay budget, and this process
-     * also serves the project's chat and scheduler traffic — recycling one run
-     * must not drop unrelated in-flight sessions. Failures surface through the
-     * event log instead.
-     */
-    processExitTriggersQueueRedelivery: false,
-    /**
      * Called by eve when a run is started with `deploymentId: 'latest'`.
      *
      * KNOWN LIMITATION. This returns the deployment this process *is*, not the
