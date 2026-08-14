@@ -24,7 +24,9 @@ import {
   WorkflowWorldError,
 } from "@workflow/errors";
 import type {
+  AnyEventRequest,
   AttributeChange,
+  CreateEventParams,
   Event,
   EventResult,
   ExperimentalSetAttributesResult,
@@ -577,7 +579,11 @@ export function createEventsStorage(
     .prepare("events_get_wait_for_validation");
 
   return {
-    async create(runId, data, params): Promise<EventResult> {
+    async create(
+      runId: string | null,
+      data: AnyEventRequest,
+      params?: CreateEventParams,
+    ): Promise<EventResult> {
       // Refuse rather than silently clamp: a caller that asked for 90 days and
       // was given 30 would believe its token was reserved for three months.
       if (
@@ -1945,35 +1951,42 @@ export function createEventsStorage(
 
       // For run_started: include all events so the runtime can skip
       // the initial events.list call and reduce TTFB.
-      let allEvents: Event[] | undefined;
-      let cursor: string | null | undefined;
-      let hasMore: boolean | undefined;
+      let eventPage: PaginatedResponse<Event> | undefined;
       if (data.eventType === "run_started" && run) {
         const eventRows = await drizzle
           .select()
           .from(Schema.events)
           .where(and(eq(Schema.events.tenantId, tenantId), eq(Schema.events.runId, effectiveRunId)))
           .orderBy(Schema.events.eventId);
-        allEvents = eventRows.map((e) => {
+        const allEvents = eventRows.map((e) => {
           e.eventData ||= e.eventDataJson;
           const parsed = EventSchema.parse(compact(e));
           return stripEventDataRefs(parsed, resolveData);
         });
-        cursor = allEvents.at(-1)?.eventId ?? null;
-        hasMore = false;
+        eventPage = {
+          data: allEvents,
+          cursor: allEvents.at(-1)?.eventId ?? null,
+          hasMore: false,
+        };
       }
 
-      return {
+      const eventResult: EventResult = {
         event: stripEventDataRefs(parsed, resolveData),
         run,
         step,
         hook,
         wait,
-        events: allEvents,
-        cursor,
-        hasMore,
         ...(stepCreatedLazily ? { stepCreated: true } : {}),
         ...(run ? { maxEvents: getMaxEventsPerRun() } : {}),
+      };
+      if (!eventPage) {
+        return eventResult;
+      }
+      return {
+        ...eventResult,
+        events: eventPage.data,
+        cursor: eventPage.cursor,
+        hasMore: eventPage.hasMore,
       };
     },
     async get(runId: string, eventId: string, params?: GetEventParams): Promise<Event> {

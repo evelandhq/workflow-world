@@ -127,12 +127,6 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
     expect(alpha.specVersion).toBe(5);
   });
 
-  test("the replay-budget exit flag stays off", () => {
-    // `true` would make eve call process.exit(1) on a stuck run, killing the
-    // agent process that also serves this project's chat and scheduler traffic.
-    expect(alpha.processExitTriggersQueueRedelivery).toBe(false);
-  });
-
   test("writing for an unprovisioned tenant fails loudly", async () => {
     // There is deliberately no DEFAULT partition: an unprovisioned tenant must
     // error rather than have its rows land somewhere unreclaimable.

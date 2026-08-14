@@ -115,22 +115,17 @@ Ranked by how expensive they are to violate.
 ## The World surface
 
 `World extends Queue, Streamer, Storage`. The required members are ported from
-the reference implementation with a tenant predicate added. Four optional ones
-carry decisions worth stating.
+the reference implementation with a tenant predicate added. The remaining
+optional members carry decisions worth stating.
 
-**`specVersion` is the literal `5`.** eve compiles a literal
-`world.specVersion !== 5` check per release, so this tracks the `@workflow/world`
-line the package depends on, and a contract test asserts the two still agree
-against the installed eve. The package must also declare `@workflow/world` (or
-`@workflow/core`) on a matching version line, because eve checks the manifest's
-major and prerelease tag before it ever loads the world.
-
-**`processExitTriggersQueueRedelivery` stays `false`.** Under an external runner
-it looks like it should be `true` — a failed POST _is_ redelivered by the
-platform, which is what the flag describes. But eve reacts to `true` by calling
-`process.exit(1)` when a run exhausts its replay budget, and that process is also
-serving the project's chat and scheduler traffic. Recycling one run must not drop
-unrelated in-flight sessions. Failures surface through the event log instead.
+**`specVersion` is the literal `5`.** eve compiles the runtime protocol check
+into every release. Through core beta.40 that was literal equality; beta.41 uses
+the inclusive range from `SPEC_VERSION_CURRENT` through
+`SPEC_VERSION_MAX_SUPPORTED`, currently 5–6. This World stays at the default 5,
+and a contract test deliberately requires equality with the installed runtime.
+The package must also declare `@workflow/world` (or `@workflow/core`) on a
+matching version line, because eve checks the manifest's major and prerelease
+tag before it ever loads the world.
 
 **`resolveLatestDeploymentId` is implemented but incomplete.** See
 [Known limitation](#known-limitation) below.
@@ -183,8 +178,8 @@ payload and `environment` on `RunInput`. None of them reach this package: the vq
 body is carried as opaque bytes on `MessageData.data`, and only eve's own handler
 parses it.
 
-5.0.0-beta.25 — the line eve 0.31.2 installs, and the one pinned here — added one
-required param and four more optional members. The required one, `runId` on
+5.0.0-beta.25 — first picked up by eve 0.31.2 — added one required param and four
+more optional members. The required one, `runId` on
 `ListEventsByCorrelationIdParams`, is implemented; see
 `events.listByCorrelationId`. The optional four are unimplemented, and one of
 them is a live design question rather than a shrug:
@@ -222,6 +217,15 @@ contract explicitly permits: the runtime observes that no usable preload came
 back and falls back to its `run_started` setup. Answering it demands the whole log
 read atomically with the `hook_received` write and `hasMore: false`, so it is a
 performance option to take deliberately, not a field to fill in.
+
+5.0.0-beta.26 — the line eve 0.35.0 through 0.37.1 install, and the one pinned
+here — makes the replay page on `EventResult` an all-or-none group. This World
+returns `events`, `cursor` and `hasMore` together for `run_started`, and omits all
+three keys for ordinary events. It also adds `capabilities.slotEventIds`, which
+stays unset: this World continues to mint ULID event ids. Slot ids repeat their
+identity across runs, so adopting them requires a tenant-aware slot allocation
+table and changing the event key from `(tenant_id, id)` to include `run_id`.
+That is a schema and migration project, not a compatibility flag.
 
 ## Data model
 

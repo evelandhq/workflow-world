@@ -187,11 +187,11 @@ World, which conformance never loads an eve to check.
 ## Following eve
 
 An eve release is almost never a reason to do anything here. What matters is not
-that eve shipped, but whether the `@workflow/*` set it installs moved — and that
-happens about once per eve **minor line**, not per release. Between 0.29.0 and
-0.31.3 it moved twice, at 0.30.0 and again at 0.31.2, sitting still through
-roughly a dozen releases in between. Note that neither move landed on a `.0`:
-0.31.0 and 0.31.1 both install the set 0.30.6 did, so a minor is not a set.
+that eve shipped, but whether the `@workflow/*` set it installs moved. The
+current supported window, 0.34.0 through 0.37.1, contains two sets: 0.34.0 uses
+world beta.25 and world-local beta.34, while 0.35.0 onward uses beta.26 and
+beta.35. Core stays on beta.41 throughout. Exact patches still matter: Workflow
+pins have moved within an eve minor line before, so a minor is not a set.
 
 Two versions with very different cadences are easy to conflate:
 
@@ -199,9 +199,9 @@ Two versions with very different cadences are easy to conflate:
   something to read the expected `@workflow/*` versions out of. Consumers never
   resolve it, so bumping it alone is not a reason to release — it can ride along
   with the next real change.
-- **`@workflow/errors`, `@workflow/world` and `@workflow/world-local` are real
-  dependencies.** When those move, what consumers resolve moves with them, and
-  that is a release.
+- **The `@workflow/*` runtime packages are real dependencies.** When those move,
+  what consumers resolve moves with them, so the change belongs in the next
+  release even if that release is intentionally deferred.
 
 The check runs weekly and files an issue only when a newer eve actually moves the
 set. Expect it to be silent for months:
@@ -214,13 +214,11 @@ When it does fire, it is a heads-up rather than a deadline. Nothing can be
 deployed until Eveland's `packages/core/src/eve-compatibility.ts` verifies a
 version on that line, and the pin here should follow **that** version rather than
 npm's `latest` — the two are routinely different. Then bump the devDependency and
-let the contract test name what has to move with it; the things that actually
-break are `specVersion` (eve compiles the runtime's check into each release) and
-`@workflow/world`'s major or prerelease tag, both of which survived the
-0.29 → 0.30 and 0.30 → 0.31 moves untouched. What did break on the latter was
-narrower and would not have been caught by reading version numbers: a param that
-had been optional became required. So typecheck against the candidate set before
-believing a bump is inert.
+let the contract test name what has to move with it. The 0.37.1 alignment kept
+`specVersion` and the package's major/prerelease line stable, but beta.26 made
+the `EventResult` preload fields an all-or-none group and added optional slot
+event ids. Neither detail is visible from version numbers alone, so typecheck and
+run a real eve build against the candidate set before believing a bump is inert.
 
 The shape of the `specVersion` check is itself not fixed. Through eve 0.33.1 it
 is literal equality against the runtime's `SPEC_VERSION_CURRENT`;

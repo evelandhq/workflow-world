@@ -166,6 +166,17 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
       expect(result.event?.createdAt).toBeInstanceOf(Date);
     });
 
+    it("omits pagination fields when no replay page is returned", async () => {
+      const result = await events.create(testRunId, {
+        eventType: "run_completed",
+        eventData: { output: new Uint8Array([1]) },
+      });
+
+      expect(Object.hasOwn(result, "events")).toBe(false);
+      expect(Object.hasOwn(result, "cursor")).toBe(false);
+      expect(Object.hasOwn(result, "hasMore")).toBe(false);
+    });
+
     it("should create a new event with null byte in payload", async () => {
       // Create step before step_failed event
       await createStep(events, testRunId, {
