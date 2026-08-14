@@ -114,6 +114,35 @@ and by the conformance harness.
 side only. Do not set it on the host: the dispatcher must take the namespace from
 the run it is recovering, never from its own environment.
 
+### Administrative stream retention
+
+The package exposes a bounded cleanup primitive for hosts that need to cap stream
+snapshot growth:
+
+```ts
+import { Pool } from "pg";
+import { pruneTerminalStreamChunks } from "@evelandhq/workflow-world";
+
+const pool = new Pool({ connectionString: process.env.WORKFLOW_WORLD_URL });
+const result = await pruneTerminalStreamChunks(pool, {
+  retentionMs: 24 * 60 * 60 * 1_000,
+  batchSize: 50_000,
+  maxBatches: 20,
+});
+```
+
+Only non-EOF chunks whose run has been terminal for longer than the requested
+window are deleted. Runs, events and EOF markers remain. The operation uses a
+database advisory lock, so `lockAcquired: false` is a normal result when another
+host is already sweeping; `hitBatchLimit: true` means the bounded invocation may
+have left more eligible rows.
+
+Calling this function is an explicit, destructive replay policy: a raw stream
+cursor older than the retention window can no longer replay its expired chunks.
+The package does not schedule it or choose a default. Apply package migrations
+before invoking it. Ordinary PostgreSQL `DELETE` makes pages reusable but does
+not necessarily shrink relation files on disk.
+
 ### Upgrading from 0.3.0 or earlier
 
 Runs created before this version have no recorded queue namespace, and boot

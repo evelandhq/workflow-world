@@ -278,9 +278,33 @@ These bite hard enough to be worth stating outright.
 `workflow_runs (tenant_id, status)` for fairness and queue-depth metrics;
 `workflow_runs (deployment_id) WHERE status IN ('pending','running')` for the
 retention guard, partial so it stays small as terminal runs accumulate; and
-`workflow_runs (tenant_id, created_at DESC)` for listing surfaces.
+`workflow_runs (tenant_id, created_at DESC)` for listing surfaces. The
+administrative stream-retention sweep additionally uses the partial expression
+index on `coalesce(completed_at, updated_at), tenant_id, id` for terminal runs.
 
 graphile's own tables live in the same database, in their own schema, untouched.
+
+### Terminal stream retention
+
+Eve currently persists cumulative snapshots frequently enough that stream chunks
+are the dominant growth path. The World therefore provides
+`pruneTerminalStreamChunks` as a host-invoked safety boundary, independent of any
+future snapshot compaction.
+
+Eligibility is joined through both `tenant_id` and `run_id`; only non-EOF chunks
+of completed, failed or cancelled runs older than the caller's window are
+removed. Candidate rows are ordered oldest-first and deleted in bounded batches.
+Because chunks are partitioned, the physical row identity is `(tableoid, ctid)` —
+`ctid` alone is not unique across child tables. One dedicated connection holds a
+session advisory lock across the batch loop, preventing independently scheduled
+workers from multiplying database load.
+
+The API deliberately has no timer, environment variables or retention default.
+Those are host product policy. Expiring chunks also expires replay from old raw
+stream cursors, even though retaining EOF lets such a stream still resolve as
+complete. Normal deletes make pages available for reuse by the partition; they
+do not promise that PostgreSQL returns the relation file's blocks to the
+operating system.
 
 ### `queue_namespace` is provenance, not tenancy
 
