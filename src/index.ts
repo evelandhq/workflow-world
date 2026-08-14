@@ -30,6 +30,11 @@ export {
   tenantPartitionsExist,
 } from "./migrate.js";
 export { reenqueueTenantRuns } from "./recovery.js";
+export {
+  pruneTerminalStreamChunks,
+  type StreamRetentionOptions,
+  type StreamRetentionResult,
+} from "./retention.js";
 export { derivePartitionName, tenantStreamChannel } from "./tenant.js";
 export * from "./drizzle/schema.js";
 
