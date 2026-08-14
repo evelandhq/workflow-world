@@ -127,9 +127,9 @@ jobs:
       matrix:
         # Mirrors the enabled entries in e2e-tests/eve-versions.mts. Keep the two
         # in step — the file is what the suite reads; this list is only what CI
-        # pays for. One entry per distinct `@workflow/*` set: 0.29.5 for beta.23,
-        # 0.31.0 for beta.24, 0.31.3 for the beta.25 this package pins.
-        eve: ["0.29.5", "0.31.0", "0.31.3"]
+        # pays for. One entry per distinct `@workflow/*` set: 0.34.0 for world
+        # beta.25 and 0.37.1 for the world beta.26 set this package pins.
+        eve: ["0.34.0", "0.37.1"]
     services:
       postgres:
         image: postgres:17-alpine
