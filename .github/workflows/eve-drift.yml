@@ -5,10 +5,10 @@ name: eve pin drift
 #
 # The cadence is chosen to match the work, not the release feed. eve ships
 # often and almost none of it reaches this package: the supported 0.34.0 to
-# 0.37.1 window contains only two distinct sets, with 0.35.0 introducing the one
-# pinned here. So this is expected to be silent for months at a time. If it ever
-# starts firing weekly, that is the signal to question the check, not to raise
-# the interval.
+# 0.38.3 window contains only three distinct sets, with 0.38.3 introducing the
+# one pinned here. So this is expected to be silent for months at a time. If it
+# ever starts firing weekly, that is the signal to question the check, not to
+# raise the interval.
 #
 # It is a heads-up, never a gate. Nothing it reports can be deployed until
 # Eveland's compatibility window verifies a version on that line, so it must not

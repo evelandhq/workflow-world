@@ -26,13 +26,8 @@ test("the harness is really configured for external mode", () => {
  * its own copy, so nothing forces the two to agree — several versions of
  * `@workflow/world` coexist in this tree.
  *
- * The assertion below stays equality, which is deliberately stricter than the
- * range a beta.41 runtime would accept. The slack in that range is for a World
- * that opts into a version above the default — `world-vercel` declares the
- * slot-identity version so its runs get slot event ids — and this World mints
- * ULIDs and stays on the default. So for us anything other than equality is
- * skew rather than an intentional opt-in, and the stricter assertion is the one
- * that catches it.
+ * In beta.42 the package default is v6 and slot identity is mandatory. Assert
+ * the runtime's current version so the test moves with that protocol floor.
  *
  * Asserting it here means a bump on either side surfaces as a version mismatch
  * instead of as a mysterious dispatch failure twelve tests later.

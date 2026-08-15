@@ -188,10 +188,11 @@ World, which conformance never loads an eve to check.
 
 An eve release is almost never a reason to do anything here. What matters is not
 that eve shipped, but whether the `@workflow/*` set it installs moved. The
-current supported window, 0.34.0 through 0.37.1, contains two sets: 0.34.0 uses
-world beta.25 and world-local beta.34, while 0.35.0 onward uses beta.26 and
-beta.35. Core stays on beta.41 throughout. Exact patches still matter: Workflow
-pins have moved within an eve minor line before, so a minor is not a set.
+current supported window, 0.34.0 through 0.38.3, contains three sets: 0.34.0 uses
+world beta.25 and world-local beta.34; 0.35.0 through 0.37.1 use beta.26 and
+beta.35; 0.38.3 uses beta.27 and beta.36. Core moves from beta.41 to beta.42 at
+0.38.3. Exact patches still matter: Workflow pins have moved within an eve minor
+line before, so a minor is not a set.
 
 Two versions with very different cadences are easy to conflate:
 
@@ -214,11 +215,12 @@ When it does fire, it is a heads-up rather than a deadline. Nothing can be
 deployed until Eveland's `packages/core/src/eve-compatibility.ts` verifies a
 version on that line, and the pin here should follow **that** version rather than
 npm's `latest` — the two are routinely different. Then bump the devDependency and
-let the contract test name what has to move with it. The 0.37.1 alignment kept
-`specVersion` and the package's major/prerelease line stable, but beta.26 made
-the `EventResult` preload fields an all-or-none group and added optional slot
-event ids. Neither detail is visible from version numbers alone, so typecheck and
-run a real eve build against the candidate set before believing a bump is inert.
+let the contract test name what has to move with it. The 0.38.3 alignment opts
+this World into spec v6 slot identity: new runs use dense `evnt_` positions,
+while runs created before migration 0006 remain on their original `wevt_` ULID
+scheme. Neither detail is visible from version numbers alone, so typecheck and
+run real eve builds against both old and new releases before believing a bump is
+inert.
 
 The shape of the `specVersion` check is itself not fixed. Through eve 0.33.1 it
 is literal equality against the runtime's `SPEC_VERSION_CURRENT`;
@@ -227,9 +229,10 @@ widened it to the range `[SPEC_VERSION_CURRENT, SPEC_VERSION_MAX_SUPPORTED]` and
 ships it as `>= 5 && <= 6`. That is a loosening and cannot newly reject anything,
 but it loosens in one direction only: the floor is still the runtime's current
 version, so a World pinned behind it fails just as it did before. The headroom
-above is for a World that opts into a higher version than the default —
-`world-vercel` declares the slot-identity version so its runs get slot event ids
-— which this World does not do.
+above was the staging space for slot identity. In beta.42 the runtime floor and
+`SPEC_VERSION_CURRENT` are both 6, and slots are part of the World contract
+rather than an optional capability. Compatibility with existing v5 runs is
+pinned by a per-run scheme marker rather than by rewriting their event ids.
 
 ## Releasing
 

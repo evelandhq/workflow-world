@@ -8,8 +8,8 @@
  * when the answer is no.
  *
  * Quiet is the point. eve ships often and almost none of it reaches this
- * package — the currently supported 0.34.0 to 0.37.1 window contains only two
- * distinct sets, with 0.35.0 introducing the one pinned here.
+ * package — the currently supported 0.34.0 to 0.38.3 window contains only three
+ * distinct sets, with 0.38.3 introducing the one pinned here.
  * A check that fired on every eve release would be noise nobody reads; this one
  * fires roughly once per eve minor line, which is the real cadence of work here.
  *
@@ -231,7 +231,7 @@ lines.push(
   "",
   "When it is time: bump the `eve` devDependency, run `npm install`, and let",
   "`src/eve-pin-contract.test.ts` name the packages that have to move with it.",
-  "Confirm `specVersion` is unchanged — eve compiles the runtime's check into each",
+  "Confirm `specVersion` remains compatible — eve compiles the runtime's check into each",
   "release, as literal equality through `@workflow/core` beta.40 and as a",
   "floor-and-ceiling range from beta.41 on, and the floor still rejects a World",
   "pinned behind the runtime. Then run `npm run test:e2e`, which is the only thing",

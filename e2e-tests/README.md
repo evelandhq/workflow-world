@@ -53,12 +53,12 @@ to it. Skips cleanly when unset.
 Each enabled eve version costs an `npm install` plus a full `eve build`, so
 `eve-versions.mts` enables them deliberately rather than all at once. The supported
 window comes from Eveland's `packages/core/src/eve-compatibility.ts`, and this
-package pins 0.37.1. A minor does not reliably identify a `@workflow/*` set, so
-the entries name exact patches. The current window has two distinct sets:
+package pins 0.38.3. A minor does not reliably identify a `@workflow/*` set, so
+the entries name exact patches. The current window has three distinct sets:
 0.34.0 carries world beta.25 and world-local beta.34, while 0.35.0 through
-0.37.1 carry world beta.26 and world-local beta.35; all four carry core beta.41.
-The enabled entries cover each set once (0.34.0 and 0.37.1). This is especially
-worth proving for `@workflow/world-local`, because this package wraps its
-`createQueueHandler`.
+0.37.1 carry world beta.26 and world-local beta.35; 0.38.3 carries world beta.27,
+world-local beta.36 and core beta.42. The enabled entries cover each set once
+(0.34.0, 0.37.1 and 0.38.3). This is especially worth proving for
+`@workflow/world-local`, because this package wraps its `createQueueHandler`.
 
 `.work/` holds the per-version scratch builds and is gitignored.

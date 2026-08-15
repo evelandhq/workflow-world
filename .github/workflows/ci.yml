@@ -125,11 +125,11 @@ jobs:
       # Which eve version broke is the diagnostic; do not cancel the others.
       fail-fast: false
       matrix:
-        # Mirrors the enabled entries in e2e-tests/eve-versions.mts. Keep the two
-        # in step — the file is what the suite reads; this list is only what CI
+        # Mirrors the enabled entries in e2e-tests/eve-versions.mts. Keep them in
+        # step — the file is what the suite reads; this list is only what CI
         # pays for. One entry per distinct `@workflow/*` set: 0.34.0 for world
-        # beta.25 and 0.37.1 for the world beta.26 set this package pins.
-        eve: ["0.34.0", "0.37.1"]
+        # beta.25, 0.37.1 for beta.26, and 0.38.3 for the beta.27 v6 set.
+        eve: ["0.34.0", "0.37.1", "0.38.3"]
     services:
       postgres:
         image: postgres:17-alpine

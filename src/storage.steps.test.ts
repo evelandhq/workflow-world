@@ -1,7 +1,6 @@
 import type { Step, Storage, WorkflowRun } from "@workflow/world";
-import { SPEC_VERSION_CURRENT } from "@workflow/world";
+import { eventIdToSlot, SPEC_VERSION_CURRENT } from "@workflow/world";
 import { Pool } from "pg";
-import { decodeTime } from "ulid";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "./drizzle/index.js";
 import { dropTenantPartitions, ensureTenantPartitions, runMigrations } from "./migrate.js";
@@ -223,11 +222,9 @@ describe.skipIf(!testUrl)("steps storage", () => {
         input: new Uint8Array([1]),
       });
 
-      // Hold the step row from outside, then check the event id's ULID timestamp
-      // was drawn after the lock was released. Allocating it before the guarded
-      // UPDATE would let a writer that waited on the row insert an event id
-      // older than one a concurrent terminal event already wrote, and replay
-      // orders by event id.
+      // Hold the step row from outside, then publish an unrelated event while
+      // step_started is blocked. Its slot must come first: replay order follows
+      // slot order, and the guarded update is the linearization point.
       const lockPool = new Pool({ connectionString: testUrl, max: 1 });
       const client = await lockPool.connect();
 
@@ -244,15 +241,19 @@ describe.skipIf(!testUrl)("steps storage", () => {
         });
 
         await new Promise((resolve) => setTimeout(resolve, 50));
-        const releasedAt = Date.now();
+        const interleaved = await events.create(testRunId, {
+          eventType: "hook_created",
+          correlationId: "hook-during-step-lock",
+          eventData: { token: "token-during-step-lock" },
+        });
         await client.query("COMMIT");
 
         const result = await started;
         if (!result.event) {
           throw new Error("Expected step_started event");
         }
-        expect(decodeTime(result.event.eventId.slice("wevt_".length))).toBeGreaterThanOrEqual(
-          releasedAt,
+        expect(eventIdToSlot(result.event.eventId)).toBeGreaterThan(
+          eventIdToSlot(interleaved.event!.eventId)!,
         );
       } finally {
         client.release();
