@@ -17,6 +17,8 @@
  * remain documented but disabled because they install the same set as 0.37.1.
  * Exact patches matter because Workflow pins have moved within a minor line in
  * the past. Each enabled entry costs an npm install plus a full `eve build`.
+ * Local runs cover all enabled entries; CI supplies EVE_VERSION so each matrix
+ * job covers only the release named in its label.
  */
 export type EveVersion = {
   version: string;
@@ -32,4 +34,12 @@ export const EVE_VERSIONS: readonly EveVersion[] = [
   { version: "0.38.3", enabled: true },
 ];
 
-export const ENABLED_EVE_VERSIONS = EVE_VERSIONS.filter((entry) => entry.enabled);
+const eveVersionUnderTest = process.env.EVE_VERSION;
+
+export const ENABLED_EVE_VERSIONS = EVE_VERSIONS.filter(
+  (entry) => entry.enabled && (!eveVersionUnderTest || entry.version === eveVersionUnderTest),
+);
+
+if (eveVersionUnderTest && ENABLED_EVE_VERSIONS.length === 0) {
+  throw new Error(`EVE_VERSION "${eveVersionUnderTest}" is not enabled`);
+}

@@ -3,6 +3,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { ensureTenantPartitions, runMigrations } from "../src/index.js";
 import { dropTenantPartitions } from "../src/migrate.js";
+import { waitForRequiredEventTypes } from "./event-types.mts";
 import { ENABLED_EVE_VERSIONS } from "./eve-versions.mts";
 import {
   buildAgent,
@@ -138,30 +139,16 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
       });
 
       test("the turn drives steps, hooks and waits through this World", async () => {
-        const { rows } = await pool.query<{ type: string; count: string }>(
-          `select type, count(*)::text as count
-             from workflow.workflow_events
-            where tenant_id = $1
-            group by type`,
-          [tenantId],
-        );
-        const byType = Object.fromEntries(rows.map((row) => [row.type, Number(row.count)]));
-
-        // Storage, the step lifecycle, the hook lifecycle and the wait table —
-        // the parts of the World a turn actually touches.
-        for (const required of [
-          "run_created",
-          "run_started",
-          "run_completed",
-          "step_created",
-          "step_started",
-          "step_completed",
-          "hook_created",
-          "hook_disposed",
-          "wait_created",
-        ]) {
-          expect(byType[required], `missing ${required}`).toBeGreaterThan(0);
-        }
+        await waitForRequiredEventTypes(async () => {
+          const { rows } = await pool.query<{ type: string; count: string }>(
+            `select type, count(*)::text as count
+               from workflow.workflow_events
+              where tenant_id = $1
+              group by type`,
+            [tenantId],
+          );
+          return rows;
+        });
       });
 
       test("the queue was used, not bypassed", async () => {

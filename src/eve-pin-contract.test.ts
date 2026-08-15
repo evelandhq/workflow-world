@@ -113,3 +113,8 @@ describe("@workflow/* pins track the installed eve", () => {
     expect(stale).toEqual([]);
   });
 });
+
+test("the CI matrix passes its Eve version into the E2E suite", () => {
+  const workflow = readFileSync(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8");
+  expect(workflow).toContain("EVE_VERSION: ${{ matrix.eve }}");
+});

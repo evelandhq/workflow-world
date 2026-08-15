@@ -145,6 +145,10 @@ jobs:
       # Points at `postgres` because the suite creates a database per eve version
       # and connects to that.
       WORKFLOW_WORLD_E2E_URL: postgres://wfw:wfw@127.0.0.1:5432/postgres
+      # Each matrix job pays for and reports exactly one Eve build. Without this
+      # filter every named job runs the full version list, tripling the work and
+      # making the job label misleading.
+      EVE_VERSION: ${{ matrix.eve }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
