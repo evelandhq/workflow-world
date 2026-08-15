@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.5.0...workflow-world-v0.6.0) (2026-08-15)
+
+
+### Features
+
+* support workflow spec v6 ([#20](https://github.com/evelandhq/workflow-world/issues/20)) ([8e6de90](https://github.com/evelandhq/workflow-world/commit/8e6de909566af11441b9453fd79dfb14ae6cdbec))
+
 ## [0.5.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.4.0...workflow-world-v0.5.0) (2026-08-14)
 
 
