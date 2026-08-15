@@ -45,10 +45,15 @@ assertion about _this_ package.
 
 ```bash
 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres npm run test:e2e
+
+# Run one enabled version, as each CI matrix job does.
+EVE_VERSION=0.38.3 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres npm run test:e2e
 ```
 
 The URL is used both to create the per-version database and, rewritten, to connect
-to it. Skips cleanly when unset.
+to it. Skips cleanly when unset. With no `EVE_VERSION`, a local run covers every
+enabled entry; CI passes the matrix value so each named job builds exactly one
+release. An unknown or disabled value fails instead of silently running nothing.
 
 Each enabled eve version costs an `npm install` plus a full `eve build`, so
 `eve-versions.mts` enables them deliberately rather than all at once. The supported
