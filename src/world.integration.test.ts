@@ -1,4 +1,5 @@
 import { EntityConflictError } from "@workflow/errors";
+import { slotToEventId, SPEC_VERSION_CURRENT } from "@workflow/world";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createWorld } from "./index.js";
@@ -109,6 +110,37 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
     expect(leaked.data).toEqual([]);
   });
 
+  test("slot markers are tenant-scoped even when run ids are identical", async () => {
+    try {
+      const betaSameRun = await beta.events.create(alphaRunId, {
+        eventType: "run_created",
+        eventData: {
+          deploymentId: "dep_beta_1",
+          workflowName: "same-id",
+          input: [],
+        },
+        specVersion: SPEC_VERSION_CURRENT,
+      });
+      const alphaEvents = await alpha.events.list({ runId: alphaRunId });
+
+      expect(betaSameRun.event?.eventId).toBe(slotToEventId(1));
+      expect(alphaEvents.data[0]?.eventId).toBe(slotToEventId(1));
+    } finally {
+      await admin.query(
+        "delete from workflow.workflow_events where tenant_id = $1 and run_id = $2",
+        [BETA, alphaRunId],
+      );
+      await admin.query(
+        "delete from workflow.workflow_event_slots where tenant_id = $1 and run_id = $2",
+        [BETA, alphaRunId],
+      );
+      await admin.query("delete from workflow.workflow_runs where tenant_id = $1 and id = $2", [
+        BETA,
+        alphaRunId,
+      ]);
+    }
+  });
+
   test("streams are scoped, and readable back in order", async () => {
     await alpha.streams.write(alphaRunId, "out", "hello ");
     await alpha.streams.write(alphaRunId, "out", "world");
@@ -124,7 +156,8 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
   });
 
   test("specVersion matches what the eve runtime enforces", () => {
-    expect(alpha.specVersion).toBe(5);
+    expect(SPEC_VERSION_CURRENT).toBe(6);
+    expect(alpha.specVersion).toBe(SPEC_VERSION_CURRENT);
   });
 
   test("writing for an unprovisioned tenant fails loudly", async () => {

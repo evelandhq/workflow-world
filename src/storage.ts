@@ -47,7 +47,11 @@ import type {
 import {
   ATTRIBUTE_MAX_PER_RUN,
   AttributeValidationError,
+  EVENT_ID_BODY_LENGTH,
+  EVENT_ID_PREFIX,
   EventSchema,
+  eventIdToSlot,
+  FIRST_EVENT_SLOT,
   HookSchema,
   isChildEntityCreationEvent,
   isChildEntityCreationEventType,
@@ -59,6 +63,7 @@ import {
   requiresNewerWorld,
   SPEC_VERSION_CURRENT,
   StepSchema,
+  slotToEventId,
   stripEventDataRefs,
   TERMINAL_STEP_STATUSES,
   TERMINAL_WORKFLOW_RUN_STATUSES,
@@ -66,7 +71,21 @@ import {
   validateUlidTimestamp,
   WorkflowRunSchema,
 } from "@workflow/world";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  notInArray,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
 import { monotonicFactory } from "ulid";
 import { type Drizzle, Schema } from "./drizzle/index.js";
 import type { SerializedContent } from "./drizzle/schema.js";
@@ -97,6 +116,143 @@ import { compact } from "./util.js";
  * `getMaxEventsPerRun`, including the 25,000 default, so the two agree.
  */
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Only used for runs created before v6 slot identity was enabled. */
+const legacyEventUlid = monotonicFactory();
+
+/** Maximum slot collisions one insert retries before surfacing a 503. */
+const SLOT_INSERT_MAX_ATTEMPTS = 40;
+const SLOT_INSERT_IMMEDIATE_ATTEMPTS = 8;
+const SLOT_INSERT_BASE_DELAY_MS = 2;
+const SLOT_INSERT_MAX_DELAY_MS = 40;
+
+/**
+ * Slot retries must see rows committed since the transaction began. Declaring
+ * READ COMMITTED explicitly prevents a database-level isolation override from
+ * making every retry recompute the same occupied slot forever.
+ */
+const SLOT_INSERT_TRANSACTION = { isolationLevel: "read committed" as const };
+
+function pgErrorOf(error: unknown): { code?: string; constraint?: string } {
+  const direct = error as { code?: string; constraint?: string };
+  if (direct?.code) return direct;
+  return (error as { cause?: { code?: string; constraint?: string } })?.cause ?? {};
+}
+
+type EventInsert = typeof Schema.events.$inferInsert;
+type EventInsertDb = Pick<Drizzle, "insert">;
+type EventAllocateDb = Pick<Drizzle, "insert" | "select">;
+
+/**
+ * Computes the next dense slot inside the INSERT that will occupy it.
+ * Lexicographic order is numeric order because every slot body is fixed-width.
+ */
+function nextSlotId(tenantId: string, runId: string): SQL<string> {
+  const bodyFrom = sql.raw(String(EVENT_ID_PREFIX.length + 1));
+  const width = sql.raw(String(EVENT_ID_BODY_LENGTH));
+  const noEvents = sql.raw(String(FIRST_EVENT_SLOT - 1));
+  return sql<string>`${EVENT_ID_PREFIX} || lpad((coalesce((
+    select cast(substring(prev.id from ${bodyFrom}) as bigint)
+      from ${Schema.events} prev
+     where prev.tenant_id = ${tenantId} and prev.run_id = ${runId}
+     order by prev.id desc
+     limit 1
+  ), ${noEvents}) + 1)::text, ${width}, '0')`;
+}
+
+/** A slot expression for v6 runs, or a fresh legacy ULID for pre-v6 runs. */
+async function allocateEventId(
+  db: EventAllocateDb,
+  tenantId: string,
+  runId: string,
+): Promise<string | SQL<string>> {
+  const [marker] = await db
+    .select({ runId: Schema.eventSlots.runId })
+    .from(Schema.eventSlots)
+    .where(and(eq(Schema.eventSlots.tenantId, tenantId), eq(Schema.eventSlots.runId, runId)))
+    .limit(1);
+  return marker ? nextSlotId(tenantId, runId) : `wevt_${legacyEventUlid()}`;
+}
+
+/**
+ * Inserts an event and retries only primary-key collisions from concurrent slot
+ * allocation. Other unique violations still surface to the correlated-event
+ * dedup translator.
+ */
+async function insertEventRow(
+  db: EventInsertDb,
+  values: Omit<EventInsert, "eventId"> & { eventId: string | SQL<string> },
+): Promise<{ eventId: string; createdAt: Date } | undefined> {
+  const allocatesSlot = typeof values.eventId !== "string";
+  for (let attempt = 0; ; attempt++) {
+    const [row] = await db
+      .insert(Schema.events)
+      .values(values)
+      .onConflictDoNothing({
+        target: [Schema.events.tenantId, Schema.events.runId, Schema.events.eventId],
+      })
+      .returning({
+        eventId: Schema.events.eventId,
+        createdAt: Schema.events.createdAt,
+      });
+    if (row) return row;
+    if (!allocatesSlot || attempt >= SLOT_INSERT_MAX_ATTEMPTS) {
+      if (!allocatesSlot) return undefined;
+      throw new WorkflowWorldError(
+        `Could not allocate an event slot for run "${values.runId}" after ${String(SLOT_INSERT_MAX_ATTEMPTS)} attempts`,
+        { status: 503 },
+      );
+    }
+    if (attempt >= SLOT_INSERT_IMMEDIATE_ATTEMPTS) {
+      const delay = Math.min(
+        SLOT_INSERT_MAX_DELAY_MS,
+        SLOT_INSERT_BASE_DELAY_MS * 2 ** (attempt - SLOT_INSERT_IMMEDIATE_ATTEMPTS),
+      );
+      await new Promise((resolve) => setTimeout(resolve, Math.random() * delay));
+    }
+  }
+}
+
+/** Marks a new run as slot-numbered and reserves its canonical first id. */
+async function openEventSlots(db: EventInsertDb, tenantId: string, runId: string): Promise<string> {
+  await db.insert(Schema.eventSlots).values({ tenantId, runId }).onConflictDoNothing();
+  return slotToEventId(FIRST_EVENT_SLOT);
+}
+
+/** Returns the events occupying slots a stale writer skipped over. */
+async function reportSkippedSlots(
+  drizzle: Drizzle,
+  tenantId: string,
+  runId: string,
+  committedEventId: string,
+  askedFor: number,
+  resolveData: ResolveData,
+): Promise<{ events: Event[]; hasMore: boolean } | undefined> {
+  const committedSlot = eventIdToSlot(committedEventId);
+  if (committedSlot === null || askedFor < FIRST_EVENT_SLOT || committedSlot <= askedFor + 1) {
+    return undefined;
+  }
+  const rows = await drizzle
+    .select()
+    .from(Schema.events)
+    .where(
+      and(
+        eq(Schema.events.tenantId, tenantId),
+        eq(Schema.events.runId, runId),
+        gt(Schema.events.eventId, slotToEventId(askedFor)),
+        lt(Schema.events.eventId, committedEventId),
+      ),
+    )
+    .orderBy(Schema.events.eventId);
+  const skipped = rows.map((row) => {
+    row.eventData ||= row.eventDataJson;
+    return stripEventDataRefs(EventSchema.parse(compact(row)), resolveData);
+  });
+  return {
+    events: skipped,
+    hasMore: skipped.length < committedSlot - askedFor - 1,
+  };
+}
 
 /**
  * Ceiling on how far ahead a caller may push a hook's token retention.
@@ -602,8 +758,11 @@ export function createEventsStorage(
         }
       }
 
+      // A slot-numbered id is chosen by the INSERT that commits it, so callers
+      // await this immediately before writing. Legacy runs receive a ULID.
       let eventId: string | undefined;
-      const getEventId = () => (eventId ??= `wevt_${ulid()}`);
+      const getEventId = async (db: EventAllocateDb = drizzle) =>
+        eventId ?? (await allocateEventId(db, tenantId, effectiveRunId));
 
       // For run_created events, use client-provided runId or generate one server-side
       let effectiveRunId: string;
@@ -714,7 +873,7 @@ export function createEventsStorage(
               .returning();
 
             if (inserted) {
-              const runCreatedEventId = `wevt_${ulid()}`;
+              const runCreatedEventId = await openEventSlots(drizzle, tenantId, effectiveRunId);
               await drizzle.insert(events).values({
                 tenantId,
                 runId: effectiveRunId,
@@ -767,7 +926,7 @@ export function createEventsStorage(
             drizzle,
             tenantId,
             effectiveRunId,
-            getEventId(),
+            `wevt_${legacyEventUlid()}`,
             data,
             currentRun,
             params,
@@ -799,24 +958,25 @@ export function createEventsStorage(
             .limit(1);
 
           // Create the event (still record it)
-          const [value] = await drizzle
-            .insert(Schema.events)
-            .values({
-              tenantId,
-              runId: effectiveRunId,
-              eventId: getEventId(),
-              correlationId: data.correlationId,
-              eventType: data.eventType,
-              eventData: "eventData" in data ? data.eventData : undefined,
-              specVersion: effectiveSpecVersion,
-            })
-            .returning({ createdAt: Schema.events.createdAt });
+          const value = await insertEventRow(drizzle, {
+            tenantId,
+            runId: effectiveRunId,
+            eventId: await getEventId(),
+            correlationId: data.correlationId,
+            eventType: data.eventType,
+            eventData: "eventData" in data ? data.eventData : undefined,
+            specVersion: effectiveSpecVersion,
+          });
+          if (!value) {
+            throw new EntityConflictError(
+              `run_cancelled for run "${effectiveRunId}" could not be created`,
+            );
+          }
 
           const result = {
             ...data,
             ...value,
             runId: effectiveRunId,
-            eventId: getEventId(),
           };
           const parsed = EventSchema.parse(result);
           const resolveData = params?.resolveData ?? "all";
@@ -992,6 +1152,9 @@ export function createEventsStorage(
         if (!runValue) {
           throw new EntityConflictError(`Workflow run "${effectiveRunId}" already exists`);
         }
+        // The marker pins this run to v6 slot identity. Its absence remains the
+        // durable signal that an older run must keep using ULIDs.
+        eventId = await openEventSlots(drizzle, tenantId, effectiveRunId);
         run = deserializeRunError(compact(runValue));
       }
 
@@ -1385,13 +1548,11 @@ export function createEventsStorage(
             // step_started. Because this synthetic event is in the same
             // transaction as the lazy step row and step_started event, we
             // cannot leave behind only one side of that materialization.
-            const stepCreatedEventId = `wevt_${ulid()}`;
-            await tx
-              .insert(events)
-              .values({
+            try {
+              await insertEventRow(tx, {
                 tenantId,
                 runId: effectiveRunId,
-                eventId: stepCreatedEventId,
+                eventId: await allocateEventId(tx, tenantId, effectiveRunId),
                 correlationId: data.correlationId,
                 eventType: "step_created",
                 eventData: {
@@ -1399,8 +1560,12 @@ export function createEventsStorage(
                   input: lazyData.input,
                 },
                 specVersion: effectiveSpecVersion,
-              })
-              .onConflictDoNothing();
+              });
+            } catch (error) {
+              if (!isCorrelatedEventUniqueViolation(pgErrorOf(error).constraint, tenantId)) {
+                throw error;
+              }
+            }
             stepCreatedLazily = true;
           }
 
@@ -1466,26 +1631,24 @@ export function createEventsStorage(
           // has acquired and passed the row lock. Without a sequence, this is
           // the local ordering guarantee we can provide: a writer blocked on
           // the step row will not carry an older event id into a later insert.
-          const stepStartedEventId = `wevt_${ulid()}`;
-          eventId = stepStartedEventId;
-          const [eventValue] = await tx
-            .insert(events)
-            .values({
-              tenantId,
-              runId: effectiveRunId,
-              eventId: stepStartedEventId,
-              correlationId: data.correlationId,
-              eventType: data.eventType,
-              eventData: storedEventData,
-              specVersion: effectiveSpecVersion,
-            })
-            .returning({ createdAt: events.createdAt });
+          const eventValue = await insertEventRow(tx, {
+            tenantId,
+            runId: effectiveRunId,
+            eventId: await allocateEventId(tx, tenantId, effectiveRunId),
+            correlationId: data.correlationId,
+            eventType: data.eventType,
+            eventData: storedEventData,
+            specVersion: effectiveSpecVersion,
+          });
 
           if (!eventValue) {
-            throw new EntityConflictError(`Event ${stepStartedEventId} could not be created`);
+            throw new EntityConflictError(
+              `step_started for step "${data.correlationId}" could not be created`,
+            );
           }
-          return eventValue;
-        });
+          eventId = eventValue.eventId;
+          return { createdAt: eventValue.createdAt };
+        }, SLOT_INSERT_TRANSACTION);
       }
 
       // Handle step_completed event: update step status
@@ -1686,24 +1849,23 @@ export function createEventsStorage(
               token: eventData.token,
               conflictingRunId: existingHook.runId,
             };
-            const conflictEventId = getEventId();
-
-            const [conflictValue] = await drizzle
-              .insert(events)
-              .values({
-                tenantId,
-                runId: effectiveRunId,
-                eventId: conflictEventId,
-                correlationId: data.correlationId,
-                eventType: "hook_conflict",
-                eventData: conflictEventData,
-                specVersion: effectiveSpecVersion,
-              })
-              .returning({ createdAt: events.createdAt });
+            const conflictValue = await insertEventRow(drizzle, {
+              tenantId,
+              runId: effectiveRunId,
+              eventId: await getEventId(),
+              correlationId: data.correlationId,
+              eventType: "hook_conflict",
+              eventData: conflictEventData,
+              specVersion: effectiveSpecVersion,
+            });
 
             if (!conflictValue) {
-              throw new EntityConflictError(`Event ${conflictEventId} could not be created`);
+              throw new EntityConflictError(
+                `hook_conflict for run "${effectiveRunId}" could not be created`,
+              );
             }
+            const conflictEventId = conflictValue.eventId;
+            eventId = conflictEventId;
 
             const conflictResult = {
               eventType: "hook_conflict" as const,
@@ -1867,36 +2029,40 @@ export function createEventsStorage(
               `Workflow run "${effectiveRunId}" is already in terminal state "${runRow.status}"`,
             );
           }
-          const [eventValue] = await tx
-            .insert(events)
-            .values({
-              tenantId,
-              runId: effectiveRunId,
-              eventId: getEventId(),
-              correlationId: data.correlationId,
-              eventType: data.eventType,
-              eventData: storedEventData,
-              specVersion: effectiveSpecVersion,
-            })
-            .returning({ createdAt: events.createdAt });
-          return eventValue;
-        });
+          const eventValue = await insertEventRow(tx, {
+            tenantId,
+            runId: effectiveRunId,
+            eventId: await allocateEventId(tx, tenantId, effectiveRunId),
+            correlationId: data.correlationId,
+            eventType: data.eventType,
+            eventData: storedEventData,
+            specVersion: effectiveSpecVersion,
+          });
+          if (!eventValue) {
+            throw new EntityConflictError(
+              `hook_received for hook "${data.correlationId}" could not be created`,
+            );
+          }
+          eventId = eventValue.eventId;
+          return { createdAt: eventValue.createdAt };
+        }, SLOT_INSERT_TRANSACTION);
       }
 
       try {
         if (!value) {
-          [value] = await drizzle
-            .insert(events)
-            .values({
-              tenantId,
-              runId: effectiveRunId,
-              eventId: getEventId(),
-              correlationId: data.correlationId,
-              eventType: data.eventType,
-              eventData: storedEventData,
-              specVersion: effectiveSpecVersion,
-            })
-            .returning({ createdAt: events.createdAt });
+          const inserted = await insertEventRow(drizzle, {
+            tenantId,
+            runId: effectiveRunId,
+            eventId: await getEventId(),
+            correlationId: data.correlationId,
+            eventType: data.eventType,
+            eventData: storedEventData,
+            specVersion: effectiveSpecVersion,
+          });
+          if (inserted) {
+            eventId = inserted.eventId;
+            value = { createdAt: inserted.createdAt };
+          }
         }
       } catch (err) {
         // Translate unique-violation on the correlated-event partial index
@@ -1914,9 +2080,7 @@ export function createEventsStorage(
         const isDeduplicatedCorrelatedEvent =
           isChildEntityCreationEventType(data.eventType) ||
           (data.eventType === "attr_set" && data.eventData.writer.type === "workflow");
-        const pgErr = (err as { code?: string; constraint?: string }).code
-          ? (err as { code?: string; constraint?: string })
-          : ((err as { cause?: { code?: string; constraint?: string } }).cause ?? {});
+        const pgErr = pgErrorOf(err);
         const pgCode = pgErr.code;
         const pgConstraint = pgErr.constraint;
         if (
@@ -1930,14 +2094,16 @@ export function createEventsStorage(
         }
         throw err;
       }
-      if (!value) {
-        throw new EntityConflictError(`Event ${getEventId()} could not be created`);
+      if (!value || !eventId) {
+        throw new EntityConflictError(
+          `${data.eventType} for run "${effectiveRunId}" could not be created`,
+        );
       }
       const result = {
         ...data,
         ...value,
         runId: effectiveRunId,
-        eventId: getEventId(),
+        eventId,
         ...(storedEventData !== undefined ? { eventData: storedEventData } : {}),
       };
       // Strip eventData leaked by ...data spread for run_started events.
@@ -1952,7 +2118,29 @@ export function createEventsStorage(
       // For run_started: include all events so the runtime can skip
       // the initial events.list call and reduce TTFB.
       let eventPage: PaginatedResponse<Event> | undefined;
-      if (data.eventType === "run_started" && run) {
+
+      // `sinceCursor` and skipped-slot reporting share the same response
+      // fields. The cursor delta wins because it is a strict superset and is
+      // the only response that can safely advance the caller's cursor.
+      if (params?.eventCount !== undefined && typeof params.sinceCursor !== "string") {
+        const report = await reportSkippedSlots(
+          drizzle,
+          tenantId,
+          effectiveRunId,
+          parsed.eventId,
+          params.eventCount,
+          resolveData,
+        );
+        if (report) {
+          eventPage = {
+            data: report.events,
+            cursor: null,
+            hasMore: report.hasMore,
+          };
+        }
+      }
+
+      if (data.eventType === "run_started" && run && !params?.skipPreload) {
         const eventRows = await drizzle
           .select()
           .from(Schema.events)
@@ -1967,6 +2155,32 @@ export function createEventsStorage(
           data: allEvents,
           cursor: allEvents.at(-1)?.eventId ?? null,
           hasMore: false,
+        };
+      }
+
+      if (typeof params?.sinceCursor === "string") {
+        const limit = 100;
+        const deltaRows = await drizzle
+          .select()
+          .from(Schema.events)
+          .where(
+            and(
+              eq(Schema.events.tenantId, tenantId),
+              eq(Schema.events.runId, effectiveRunId),
+              gt(Schema.events.eventId, params.sinceCursor),
+            ),
+          )
+          .orderBy(Schema.events.eventId)
+          .limit(limit + 1);
+        const page = deltaRows.slice(0, limit);
+        const delta = page.map((row) => {
+          row.eventData ||= row.eventDataJson;
+          return stripEventDataRefs(EventSchema.parse(compact(row)), resolveData);
+        });
+        eventPage = {
+          data: delta,
+          cursor: delta.at(-1)?.eventId ?? null,
+          hasMore: deltaRows.length > limit,
         };
       }
 

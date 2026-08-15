@@ -118,11 +118,12 @@ Ranked by how expensive they are to violate.
 the reference implementation with a tenant predicate added. The remaining
 optional members carry decisions worth stating.
 
-**`specVersion` is the literal `5`.** eve compiles the runtime protocol check
+**`specVersion` is the literal `6`.** eve compiles the runtime protocol check
 into every release. Through core beta.40 that was literal equality; beta.41 uses
 the inclusive range from `SPEC_VERSION_CURRENT` through
-`SPEC_VERSION_MAX_SUPPORTED`, currently 5–6. This World stays at the default 5,
-and a contract test deliberately requires equality with the installed runtime.
+`SPEC_VERSION_MAX_SUPPORTED`. In beta.42 both the floor and ceiling are 6 and
+slot identity is mandatory rather than a capability; a contract test verifies
+that the installed runtime and this World agree.
 The package must also declare `@workflow/world` (or `@workflow/core`) on a
 matching version line, because eve checks the manifest's major and prerelease
 tag before it ever loads the world.
@@ -218,14 +219,15 @@ back and falls back to its `run_started` setup. Answering it demands the whole l
 read atomically with the `hook_received` write and `hasMore: false`, so it is a
 performance option to take deliberately, not a field to fill in.
 
-5.0.0-beta.26 — the line eve 0.35.0 through 0.37.1 install, and the one pinned
-here — makes the replay page on `EventResult` an all-or-none group. This World
+5.0.0-beta.26 made the replay page on `EventResult` an all-or-none group;
+beta.27 is the line eve 0.38.3 installs and the one pinned here. This World
 returns `events`, `cursor` and `hasMore` together for `run_started`, and omits all
-three keys for ordinary events. It also adds `capabilities.slotEventIds`, which
-stays unset: this World continues to mint ULID event ids. Slot ids repeat their
-identity across runs, so adopting them requires a tenant-aware slot allocation
-table and changing the event key from `(tenant_id, id)` to include `run_id`.
-That is a schema and migration project, not a compatibility flag.
+three keys for ordinary events unless `eventCount` or `sinceCursor` requests an
+inline delta. New runs receive a marker in `workflow_event_slots`, start at
+`evnt_…0001`, and allocate dense positions inside the INSERT that occupies
+them. The event key is therefore
+`(tenant_id, run_id, id)`. Runs with no marker predate the migration and continue
+minting `wevt_` ULIDs, preserving v5 replay order without a backfill.
 
 ## Data model
 
@@ -558,6 +560,10 @@ Properties of these choices worth watching, as distinct from defects.
 - **`@workflow/*` is a moving beta target.** The `specVersion` literal is
   compiled into eve per release, so every eve bump has to re-verify the contract
   rather than assume it.
+- **Migration 0006 replaces the event primary key.** PostgreSQL takes an
+  `ACCESS EXCLUSIVE` lock for that catalog change. The migration bounds the wait
+  at ten seconds; large installations should apply it in a maintenance window
+  rather than let an unbounded lock queue stall event traffic.
 - **A single dispatcher is a restart-pause single point of failure.** Keeping it
   stateless — all claim state in Postgres — is what makes a restart a brief pause
   plus boot recovery rather than data loss.

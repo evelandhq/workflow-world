@@ -147,8 +147,10 @@ export const events = schema.table(
     specVersion: integer("spec_version"),
   },
   (tb) => [
-    primaryKey({ columns: [tb.tenantId, tb.eventId] }),
-    index("workflow_events_tenant_run_index").on(tb.tenantId, tb.runId),
+    // Slot ids are only unique within a run: every new run starts at
+    // `evnt_…0001`. Pre-slot runs keep their globally unique ULIDs, which the
+    // wider key also admits.
+    primaryKey({ columns: [tb.tenantId, tb.runId, tb.eventId] }),
     index("workflow_events_tenant_correlation_index").on(tb.tenantId, tb.correlationId),
     /**
      * Runtime-correlated one-shot events must be unique per (run, correlation)
@@ -164,6 +166,21 @@ export const events = schema.table(
       .on(tb.tenantId, tb.runId, tb.correlationId, tb.eventType)
       .where(sql`type IN ('step_created', 'hook_created', 'wait_created', 'attr_set')`),
   ],
+);
+
+/**
+ * Which runs use v6 slot-numbered event ids. This is deliberately a marker,
+ * not a counter: the event INSERT itself claims the next position, so a
+ * rolled-back or deduplicated write cannot burn a slot and leave a permanent
+ * hole. No row means the run predates slots and must keep minting `wevt_` ULIDs.
+ */
+export const eventSlots = schema.table(
+  "workflow_event_slots",
+  {
+    tenantId: varchar("tenant_id").notNull(),
+    runId: varchar("run_id").notNull(),
+  },
+  (tb) => [primaryKey({ columns: [tb.tenantId, tb.runId] })],
 );
 
 export const steps = schema.table(

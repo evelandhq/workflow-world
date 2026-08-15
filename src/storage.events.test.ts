@@ -1,5 +1,8 @@
 import type { Event, Hook, HookCreatedEventRequest, Step, WorkflowRun } from "@workflow/world";
+import { slotToEventId, SPEC_VERSION_SUPPORTS_SLOT_IDENTITY } from "@workflow/world";
+import { encode } from "cbor-x";
 import { Pool } from "pg";
+import { ulid } from "ulid";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "./drizzle/index.js";
 import { dropTenantPartitions, ensureTenantPartitions, runMigrations } from "./index.js";
@@ -47,11 +50,14 @@ async function createRun(
     deploymentId: string;
     workflowName: string;
     input: Uint8Array;
+    specVersion?: number;
   },
 ): Promise<WorkflowRun> {
+  const { specVersion, ...eventData } = data;
   const result = await events.create(null, {
     eventType: "run_created",
-    eventData: data,
+    eventData,
+    ...(specVersion !== undefined ? { specVersion } : {}),
   });
   if (!result.run) {
     throw new Error("Expected run to be created");
@@ -120,7 +126,7 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
   }
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: testUrl, max: 1 });
+    pool = new Pool({ connectionString: testUrl, max: 8 });
     await runMigrations(pool);
     // No DEFAULT partition exists, so an unprovisioned tenant cannot write at
     // all: this call is a hard prerequisite, not a convenience.
@@ -146,6 +152,176 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
   });
 
   describe("create", () => {
+    it("allocates dense slot ids for new v6 runs", async () => {
+      const started = await events.create(
+        testRunId,
+        {
+          eventType: "run_started",
+          specVersion: SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
+        },
+        { eventCount: 1 },
+      );
+      const writes = await Promise.all(
+        Array.from({ length: 12 }, (_, index) =>
+          events.create(
+            testRunId,
+            {
+              eventType: "step_created",
+              correlationId: `slot-step-${String(index)}`,
+              eventData: {
+                stepName: `slot-step-${String(index)}`,
+                input: new Uint8Array(),
+              },
+              specVersion: SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
+            },
+            { eventCount: 2 },
+          ),
+        ),
+      );
+
+      const listed = await events.list({
+        runId: testRunId,
+        pagination: { sortOrder: "asc" },
+      });
+
+      expect(started.event?.eventId).toBe(slotToEventId(2));
+      expect(new Set(writes.map((result) => result.event?.eventId)).size).toBe(12);
+      expect(listed.data.map((event) => event.eventId)).toEqual(
+        Array.from({ length: 14 }, (_, index) => slotToEventId(index + 1)),
+      );
+    });
+
+    it("does not burn slots for concurrent writes rejected by dedup", async () => {
+      const results = await Promise.allSettled(
+        Array.from({ length: 8 }, () =>
+          events.create(testRunId, {
+            eventType: "step_created",
+            correlationId: "contended-slot-step",
+            eventData: { stepName: "contended-slot-step", input: new Uint8Array() },
+            specVersion: SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
+          }),
+        ),
+      );
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(results.filter((result) => result.status === "rejected")).toHaveLength(7);
+
+      await events.create(testRunId, {
+        eventType: "step_created",
+        correlationId: "slot-after-contention",
+        eventData: { stepName: "slot-after-contention", input: new Uint8Array() },
+        specVersion: SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
+      });
+
+      const listed = await events.list({
+        runId: testRunId,
+        pagination: { sortOrder: "asc" },
+      });
+      expect(listed.data.map((event) => event.eventId)).toEqual([
+        slotToEventId(1),
+        slotToEventId(2),
+        slotToEventId(3),
+      ]);
+    });
+
+    it("bumps a stale requested slot and reports the skipped events", async () => {
+      const started = await events.create(
+        testRunId,
+        {
+          eventType: "run_started",
+          specVersion: SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
+        },
+        { eventCount: 1 },
+      );
+      const bumped = await events.create(
+        testRunId,
+        {
+          eventType: "step_created",
+          correlationId: "stale-slot-step",
+          eventData: { stepName: "stale-slot-step", input: new Uint8Array() },
+          specVersion: SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
+        },
+        { eventCount: 1 },
+      );
+
+      expect(started.event?.eventId).toBe(slotToEventId(2));
+      expect(bumped.event?.eventId).toBe(slotToEventId(3));
+      expect(bumped.events?.map((event) => event.eventId)).toEqual([slotToEventId(2)]);
+      expect(bumped.cursor).toBeNull();
+      expect(bumped.hasMore).toBe(false);
+    });
+
+    it("returns the sinceCursor delta as a superset of skipped slots", async () => {
+      await events.create(
+        testRunId,
+        {
+          eventType: "run_started",
+          specVersion: SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
+        },
+        { eventCount: 1 },
+      );
+      await events.create(testRunId, {
+        eventType: "step_created",
+        correlationId: "delta-step-1",
+        eventData: { stepName: "delta-step-1", input: new Uint8Array() },
+        specVersion: SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
+      });
+
+      const result = await events.create(
+        testRunId,
+        {
+          eventType: "step_created",
+          correlationId: "delta-step-2",
+          eventData: { stepName: "delta-step-2", input: new Uint8Array() },
+          specVersion: SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
+        },
+        { eventCount: 2, sinceCursor: slotToEventId(2) },
+      );
+
+      expect(result.events?.map((event) => event.eventId)).toEqual([
+        slotToEventId(3),
+        slotToEventId(4),
+      ]);
+      expect(result.cursor).toBe(slotToEventId(4));
+      expect(result.hasMore).toBe(false);
+    });
+
+    it("keeps pre-upgrade v5 runs on legacy ULID event ids", async () => {
+      const runId = `wrun_${ulid()}`;
+      const firstEventId = `wevt_${ulid()}`;
+      await pool.query(
+        `insert into workflow.workflow_runs
+           (tenant_id, id, deployment_id, status, name, spec_version, input_cbor, queue_namespace)
+         values ($1, $2, 'deployment-v5', 'pending', 'legacy-v5', 5, $3, '')`,
+        [TENANT, runId, Buffer.from(encode(new Uint8Array()))],
+      );
+      await pool.query(
+        `insert into workflow.workflow_events
+           (tenant_id, id, type, run_id, payload_cbor, spec_version)
+         values ($1, $2, 'run_created', $3, $4, 5)`,
+        [
+          TENANT,
+          firstEventId,
+          runId,
+          Buffer.from(
+            encode({
+              deploymentId: "deployment-v5",
+              workflowName: "legacy-v5",
+              input: new Uint8Array(),
+            }),
+          ),
+        ],
+      );
+
+      const result = await events.create(runId, {
+        eventType: "step_created",
+        correlationId: "legacy-v5-step",
+        eventData: { stepName: "legacy-v5-step", input: new Uint8Array() },
+        specVersion: 5,
+      });
+
+      expect(result.event?.eventId).toMatch(/^wevt_[0-9A-HJKMNP-TV-Z]{26}$/);
+    });
+
     it("should create a new event", async () => {
       // Create step before step_started event
       await createStep(events, testRunId, {
@@ -160,7 +336,7 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
       });
 
       expect(result.event?.runId).toBe(testRunId);
-      expect(result.event?.eventId).toMatch(/^wevt_/);
+      expect(result.event?.eventId).toBe(slotToEventId(3));
       expect(result.event?.eventType).toBe("step_started");
       expect(result.event?.correlationId).toBe("corr_123");
       expect(result.event?.createdAt).toBeInstanceOf(Date);
@@ -199,7 +375,7 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
       });
 
       expect(result.event?.runId).toBe(testRunId);
-      expect(result.event?.eventId).toMatch(/^wevt_/);
+      expect(result.event?.eventId).toBe(slotToEventId(4));
       expect(result.event?.eventType).toBe("step_failed");
       expect(result.event?.correlationId).toBe("corr_123_null");
       expect(result.event?.createdAt).toBeInstanceOf(Date);
