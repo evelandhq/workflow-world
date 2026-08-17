@@ -201,3 +201,44 @@ export async function startSession(port: number): Promise<{ sessionId: string }>
   }
   return (await response.json()) as { sessionId: string };
 }
+
+/** Drives the same real Eve graph from a platform-scheduled root context. */
+export async function startScheduledSession(port: number): Promise<{ sessionId: string }> {
+  const response = await fetch(`http://127.0.0.1:${String(port)}/e2e/scheduled`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(
+      `scheduled session create failed: ${String(response.status)} ${await response.text()}`,
+    );
+  }
+  return (await response.json()) as { sessionId: string };
+}
+
+/** Proves generic lineage inheritance for the explicit durable class. */
+export async function startPersistentSession(port: number): Promise<{ sessionId: string }> {
+  const response = await fetch(`http://127.0.0.1:${String(port)}/e2e/persistent`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(
+      `persistent session create failed: ${String(response.status)} ${await response.text()}`,
+    );
+  }
+  return (await response.json()) as { sessionId: string };
+}
+
+/** Creates an interactive owner, then delivers to it from a scheduled context. */
+export async function startScheduledTurnOnInteractiveSession(
+  port: number,
+): Promise<{ sessionId: string; scheduledSessionId: string }> {
+  const response = await fetch(`http://127.0.0.1:${String(port)}/e2e/preserve-interactive`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(
+      `existing session delivery failed: ${String(response.status)} ${await response.text()}`,
+    );
+  }
+  return (await response.json()) as { sessionId: string; scheduledSessionId: string };
+}

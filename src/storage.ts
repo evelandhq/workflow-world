@@ -91,7 +91,7 @@ import {
 import { monotonicFactory } from "ulid";
 import { type Drizzle, Schema } from "./drizzle/index.js";
 import type { SerializedContent } from "./drizzle/schema.js";
-import { resolveRunRetentionClass } from "./run-retention-policy.js";
+import { resolveRunRetentionClassForCreation } from "./run-retention-resolution.js";
 import { dedupIndexName } from "./tenant.js";
 import { compact } from "./util.js";
 
@@ -692,6 +692,24 @@ export function createEventsStorage(
     .limit(1)
     .prepare("events_get_run_for_validation");
 
+  const getAncestorRetentionClass = drizzle
+    .select({ retentionClass: Schema.runs.retentionClass })
+    .from(Schema.runs)
+    .where(and(eq(Schema.runs.tenantId, tenantId), eq(Schema.runs.runId, sql.placeholder("runId"))))
+    .limit(1)
+    .prepare("events_get_ancestor_retention_class");
+
+  const resolveCreationRetentionClass = (
+    retentionClass: string | undefined,
+    attributes: Record<string, string> | undefined,
+  ) =>
+    resolveRunRetentionClassForCreation({
+      retentionClass,
+      attributes,
+      getAncestorRetentionClass: async (runId) =>
+        (await getAncestorRetentionClass.execute({ runId }))[0]?.retentionClass,
+    });
+
   const getStepForValidation = drizzle
     .select({
       status: Schema.steps.status,
@@ -867,6 +885,10 @@ export function createEventsStorage(
                 allowReservedAttributes: runInputData.allowReservedAttributes === true,
               },
             );
+            const retentionClass = await resolveCreationRetentionClass(
+              runInputData.retentionClass,
+              runInputData.attributes,
+            );
             // Create run + run_created event atomically. The
             // transaction ensures we never have an orphaned run
             // without its run_created event.
@@ -888,10 +910,7 @@ export function createEventsStorage(
                 encryptionPublicKey: runInputData.encryptionPublicKey,
                 status: "pending",
                 queueNamespace: runQueueNamespace,
-                retentionClass: resolveRunRetentionClass(
-                  runInputData.retentionClass,
-                  runInputData.attributes,
-                ),
+                retentionClass,
               })
               .onConflictDoNothing()
               .returning();
@@ -1146,6 +1165,10 @@ export function createEventsStorage(
             allowReservedAttributes: eventData.allowReservedAttributes === true,
           },
         );
+        const retentionClass = await resolveCreationRetentionClass(
+          eventData.retentionClass,
+          eventData.attributes,
+        );
         const [runValue] = await drizzle
           .insert(Schema.runs)
           .values({
@@ -1163,10 +1186,7 @@ export function createEventsStorage(
             encryptionPublicKey: eventData.encryptionPublicKey,
             status: "pending",
             queueNamespace: runQueueNamespace,
-            retentionClass: resolveRunRetentionClass(
-              eventData.retentionClass,
-              eventData.attributes,
-            ),
+            retentionClass,
           })
           .onConflictDoNothing()
           .returning();
