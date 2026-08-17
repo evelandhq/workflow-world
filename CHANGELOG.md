@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.7.1...workflow-world-v0.8.0) (2026-08-17)
+
+
+### Features
+
+* propagate workflow retention classes ([0819cb2](https://github.com/evelandhq/workflow-world/commit/0819cb2aabd25adfd8b500354a5aa8ca329417b3))
+
 ## [0.7.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.7.0...workflow-world-v0.7.1) (2026-08-17)
 
 
