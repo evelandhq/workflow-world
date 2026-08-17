@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.6.0...workflow-world-v0.7.0) (2026-08-17)
+
+
+### Features
+
+* add bounded stream storage v2 ([527b60f](https://github.com/evelandhq/workflow-world/commit/527b60f77c750b99263fb88f0d90a6cfc53079d5))
+* add bounded stream storage v2 ([baffdef](https://github.com/evelandhq/workflow-world/commit/baffdef429ecffd1d506c2efb392c6650da3bb98))
+
+
+### Fixes
+
+* align world-postgres beta.34 behavior ([013e6c0](https://github.com/evelandhq/workflow-world/commit/013e6c04adea2151ac5368843e62b05cfb28ad23))
+* align world-postgres beta.34 behavior ([1d3f3f4](https://github.com/evelandhq/workflow-world/commit/1d3f3f4e66cabc942d75664facd28cb9f9fbd817))
+
 ## [0.6.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.5.0...workflow-world-v0.6.0) (2026-08-15)
 
 
