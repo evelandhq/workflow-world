@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.8.1...workflow-world-v0.9.0) (2026-08-17)
+
+
+### Features
+
+* enforce graph-safe scheduled retention ([#32](https://github.com/evelandhq/workflow-world/issues/32)) ([d377e83](https://github.com/evelandhq/workflow-world/commit/d377e831c46e5a3288c60425b15112ec439a9f32))
+
 ## [0.8.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.8.0...workflow-world-v0.8.1) (2026-08-17)
 
 
