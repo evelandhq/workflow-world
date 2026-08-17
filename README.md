@@ -165,6 +165,15 @@ trigger assigns deadlines when a run enters a terminal state; classification can
 be supplied on run creation, through the `workflow-world.retention-class` run
 attribute, or with `setWorkflowRunRetentionClass`.
 
+Run creation resolves the class once, in this order: explicit `retentionClass`,
+the public attribute, Workflow SDK root/parent lineage, a platform-owned root
+invocation context, then the `interactive` default. Lineage is tenant-scoped and
+workflow-name agnostic, so Eve turn, timeout, task, subagent, and custom child
+workflows inherit the stored root class. A delivery to an existing session also
+uses that stored lineage; a new scheduled delivery cannot widen or shorten an
+existing conversation's policy. Unresolvable lineage is rejected instead of
+silently changing class.
+
 The dispatcher runs block packing, deadline-driven stream expiry, and full graph
 expiry once at startup and every minute. Each task is bounded, advisory-locked,
 non-overlapping, and failure-isolated. Retained hook tokens are not deleted before
@@ -199,6 +208,55 @@ cursor older than the retention window can no longer replay its expired chunks.
 Apply package migrations before enabling maintenance. Ordinary PostgreSQL
 `DELETE` makes pages reusable but does not necessarily shrink relation files on
 disk.
+
+#### Previewing and repairing historical scheduler graphs
+
+Historical repair requires an exact, durable root attribute. It never infers a
+class from a workflow name or title. Preview first; the result is grouped by
+tenant, resolved root trigger, run type, workflow name, status, and current class:
+
+```ts
+import { Pool } from "pg";
+import {
+  backfillWorkflowRunRetentionClass,
+  inspectWorkflowRunRetentionMismatches,
+  previewWorkflowRunRetentionBackfill,
+} from "@evelandhq/workflow-world";
+
+const pool = new Pool({ connectionString: process.env.WORKFLOW_WORLD_URL });
+const selector = {
+  tenantId: "proj_example",
+  rootAttribute: "$eve.trigger",
+  rootValue: "channel:eveland-scheduler",
+  retentionClass: "scheduled" as const,
+};
+
+console.log(await previewWorkflowRunRetentionBackfill(pool, selector));
+console.log(await inspectWorkflowRunRetentionMismatches(pool, { ...selector, limit: 100 }));
+```
+
+Apply repeats one tenant-safe transaction at a time. Active runs are selected
+before terminal history, existing `persistent` rows are never changed, and the
+database trigger recomputes terminal deadlines from the original completion
+timestamp:
+
+```ts
+for (;;) {
+  const result = await backfillWorkflowRunRetentionClass(pool, {
+    ...selector,
+    batchSize: 1_000,
+  });
+  console.log(result);
+  if (!result.hitBatchLimit) break;
+}
+await pool.end();
+```
+
+After reclassification, use the normal bounded dispatcher maintenance rather
+than an unbounded delete. Report the backfill counts and maintenance deletion
+counts separately; dead tuples and relation size require PostgreSQL statistics,
+and ordinary deletion is expected to reuse a high-water mark rather than shrink
+the file immediately.
 
 ### Upgrading from 0.3.0 or earlier
 

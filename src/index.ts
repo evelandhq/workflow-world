@@ -32,6 +32,19 @@ export {
 } from "./migrate.js";
 export { reenqueueTenantRuns } from "./recovery.js";
 export {
+  backfillWorkflowRunRetentionClass,
+  inspectWorkflowRunRetentionMismatches,
+  previewWorkflowRunRetentionBackfill,
+  type WorkflowRunRetentionBackfillGroup,
+  type WorkflowRunRetentionBackfillOptions,
+  type WorkflowRunRetentionBackfillPreview,
+  type WorkflowRunRetentionBackfillResult,
+  type WorkflowRunRetentionBackfillSelector,
+  type WorkflowRunRetentionMismatch,
+  type WorkflowRunRetentionMismatchOptions,
+  type WorkflowRunRetentionMismatchResult,
+} from "./retention-backfill.js";
+export {
   packTerminalStreamBlocks,
   type PackTerminalStreamBlocksOptions,
   type PackTerminalStreamBlocksResult,

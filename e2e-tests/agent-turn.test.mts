@@ -13,6 +13,9 @@ import {
   installedWorldVersion,
   packWorld,
   startAgent,
+  startPersistentSession,
+  startScheduledSession,
+  startScheduledTurnOnInteractiveSession,
   startSession,
   tenantFor,
   type StartedAgent,
@@ -127,6 +130,62 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
         // absorbed.
         expect(names).toContain("workflow//eve//workflowEntry");
         expect(names).toContain("workflow//eve//turnWorkflow");
+
+        const graph = await pool.query<{ retention_class: string }>(
+          `select retention_class
+             from workflow.workflow_runs
+            where tenant_id = $1
+              and (id = $2 or attributes ->> '$rootRunId' = $2)`,
+          [tenantId, sessionId],
+        );
+        expect(new Set(graph.rows.map((row) => row.retention_class))).toEqual(
+          new Set(["interactive"]),
+        );
+      });
+
+      test("a scheduled root makes the complete real Eve run graph scheduled", async () => {
+        const { sessionId } = await startScheduledSession(port);
+        expect(sessionId).toMatch(/^wrun_/);
+
+        let rows: { name: string; retention_class: string }[] = [];
+        for (let attempt = 0; attempt < 60; attempt += 1) {
+          const result = await pool.query<{ name: string; retention_class: string }>(
+            `select name, retention_class
+               from workflow.workflow_runs
+              where tenant_id = $1
+                and (id = $2 or attributes ->> '$rootRunId' = $2)`,
+            [tenantId, sessionId],
+          );
+          rows = result.rows;
+          if (rows.length >= 3) break;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+
+        expect(rows.map((row) => row.name)).toEqual(
+          expect.arrayContaining([
+            "workflow//eve//workflowEntry",
+            "workflow//eve//turnWorkflow",
+            "workflow//eve//sessionTimeoutWorkflow",
+          ]),
+        );
+        expect(new Set(rows.map((row) => row.retention_class))).toEqual(new Set(["scheduled"]));
+      });
+
+      test("a persistent root makes the complete real Eve run graph persistent", async () => {
+        const { sessionId } = await startPersistentSession(port);
+        expect(sessionId).toMatch(/^wrun_/);
+
+        const rows = await waitForRetentionGraph(pool, tenantId, sessionId);
+        expect(new Set(rows.map((row) => row.retention_class))).toEqual(new Set(["persistent"]));
+      });
+
+      test("a scheduled delivery preserves an existing interactive root", async () => {
+        const { sessionId, scheduledSessionId } =
+          await startScheduledTurnOnInteractiveSession(port);
+        expect(scheduledSessionId).toBe(sessionId);
+
+        const rows = await waitForRetentionGraph(pool, tenantId, sessionId);
+        expect(new Set(rows.map((row) => row.retention_class))).toEqual(new Set(["interactive"]));
       });
 
       test("the run rows carry this deployment's tenancy", async () => {
@@ -164,3 +223,21 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
     });
   }
 });
+
+async function waitForRetentionGraph(pool: Pool, tenantId: string, rootRunId: string) {
+  let rows: { name: string; retention_class: string }[] = [];
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const result = await pool.query<{ name: string; retention_class: string }>(
+      `select name, retention_class
+         from workflow.workflow_runs
+        where tenant_id = $1
+          and (id = $2 or attributes ->> '$rootRunId' = $2)`,
+      [tenantId, rootRunId],
+    );
+    rows = result.rows;
+    if (rows.length >= 3) break;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  expect(rows.length).toBeGreaterThanOrEqual(3);
+  return rows;
+}

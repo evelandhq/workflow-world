@@ -316,6 +316,13 @@ NOTIFY/read delivery. Scheduled runs use 1 minute / 15 minutes / 7 days;
 interactive runs use 5 minutes / 24 hours / 30 days; persistent runs receive no
 deadlines. Active runs receive none either.
 
+Creation resolves explicit input, the public run attribute, tenant-scoped SDK
+root/parent lineage, then an optional platform-owned root invocation context in
+that order. Only a root can reach the context/default branch; descendants with
+lineage inherit the stored ancestor class or fail if that ancestor cannot be
+resolved. This keeps the World generic: it contains no Eve workflow-name or
+trigger policy, and a later delivery to an existing graph cannot reclassify it.
+
 The dispatcher runs bounded maintenance once at startup and every minute. Block
 packing, stream expiry, and graph expiry are failure-isolated and protected by
 advisory locks. Stream and graph expiry preserve EOF forever; retained hook
