@@ -1,4 +1,5 @@
 import os from "node:os";
+import { resolveStreamCompaction } from "../config.js";
 
 export type DispatcherConfiguration = {
   worldUrl: string;
@@ -11,6 +12,12 @@ export type DispatcherConfiguration = {
   leaseRenewIntervalMs: number;
   activationLeaseTtlMs: number;
   queueGcIntervalMs: number;
+  maintenanceIntervalMs: number;
+  maintenanceStreamBatchSize: number;
+  maintenanceMaxBatches: number;
+  maintenanceMaxStreamsToPack: number;
+  maintenanceRunBatchSize: number;
+  maintenanceCompactSnapshots: boolean;
 };
 
 /**
@@ -114,6 +121,26 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
     // safe: the sweep only deletes queues with no jobs left, so running it more
     // often costs a query and running it less lets rows sit around.
     queueGcIntervalMs: positiveNumber(env.WORKFLOW_DISPATCHER_QUEUE_GC_INTERVAL_MS, 300_000),
+    maintenanceIntervalMs: nonNegativeNumber(
+      env.WORKFLOW_DISPATCHER_MAINTENANCE_INTERVAL_MS,
+      60_000,
+    ),
+    maintenanceStreamBatchSize: positiveNumber(
+      env.WORKFLOW_DISPATCHER_MAINTENANCE_STREAM_BATCH_SIZE,
+      50_000,
+    ),
+    maintenanceMaxBatches: positiveNumber(env.WORKFLOW_DISPATCHER_MAINTENANCE_MAX_BATCHES, 20),
+    maintenanceMaxStreamsToPack: positiveNumber(
+      env.WORKFLOW_DISPATCHER_MAINTENANCE_MAX_STREAMS_TO_PACK,
+      100,
+    ),
+    maintenanceRunBatchSize: positiveNumber(
+      env.WORKFLOW_DISPATCHER_MAINTENANCE_RUN_BATCH_SIZE,
+      1_000,
+    ),
+    maintenanceCompactSnapshots: resolveStreamCompaction(
+      env.WORKFLOW_WORLD_STREAM_COMPACTION ?? env.EVELAND_WORKFLOW_STREAM_COMPACTION,
+    ),
     leaseRenewIntervalMs,
     activationLeaseTtlMs,
   };
@@ -122,4 +149,9 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
 function positiveNumber(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function nonNegativeNumber(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }

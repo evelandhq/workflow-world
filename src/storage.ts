@@ -91,6 +91,7 @@ import {
 import { monotonicFactory } from "ulid";
 import { type Drizzle, Schema } from "./drizzle/index.js";
 import type { SerializedContent } from "./drizzle/schema.js";
+import { resolveRunRetentionClass } from "./run-retention-policy.js";
 import { dedupIndexName } from "./tenant.js";
 import { compact } from "./util.js";
 
@@ -853,6 +854,7 @@ export function createEventsStorage(
             attributes?: Record<string, string>;
             allowReservedAttributes?: true;
             encryptionPublicKey?: string;
+            retentionClass?: string;
           };
           if (
             runInputData.deploymentId &&
@@ -886,6 +888,10 @@ export function createEventsStorage(
                 encryptionPublicKey: runInputData.encryptionPublicKey,
                 status: "pending",
                 queueNamespace: runQueueNamespace,
+                retentionClass: resolveRunRetentionClass(
+                  runInputData.retentionClass,
+                  runInputData.attributes,
+                ),
               })
               .onConflictDoNothing()
               .returning();
@@ -905,6 +911,7 @@ export function createEventsStorage(
                   attributes: runInputData.attributes,
                   allowReservedAttributes: runInputData.allowReservedAttributes,
                   encryptionPublicKey: runInputData.encryptionPublicKey,
+                  retentionClass: runInputData.retentionClass,
                 },
                 specVersion: effectiveSpecVersion,
               });
@@ -1128,6 +1135,7 @@ export function createEventsStorage(
           attributes?: Record<string, string>;
           allowReservedAttributes?: true;
           encryptionPublicKey?: string;
+          retentionClass?: string;
         };
         validateAttributeChanges(
           Object.entries(eventData.attributes ?? {}).map(([key, value]) => ({
@@ -1155,6 +1163,10 @@ export function createEventsStorage(
             encryptionPublicKey: eventData.encryptionPublicKey,
             status: "pending",
             queueNamespace: runQueueNamespace,
+            retentionClass: resolveRunRetentionClass(
+              eventData.retentionClass,
+              eventData.attributes,
+            ),
           })
           .onConflictDoNothing()
           .returning();

@@ -81,30 +81,37 @@ honoured by only one end is a silent failure rather than a loud one.
 
 ### Deployment side (read by the World)
 
-| variable                        | alias                              | meaning                                                                                                                                      |
-| ------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WORKFLOW_WORLD_URL`            | `EVELAND_WORKFLOW_WORLD_URL`       | the shared database. Required; there is no fallback chain, because falling back onto a single-tenant database is worse than failing to start |
-| `WORKFLOW_WORLD_TENANT_ID`      | `EVELAND_PROJECT_ID`               | this deployment's tenant                                                                                                                     |
-| `WORKFLOW_WORLD_DEPLOYMENT_ID`  | `EVELAND_DEPLOYMENT_ID`            | recorded on every run, so an in-flight run stays pinned to an executor that can still run it                                                 |
-| `WORKFLOW_WORLD_RUNNER`         | `EVELAND_WORKFLOW_RUNNER`          | `embedded` (default) or `external`                                                                                                           |
-| `WORKFLOW_WORLD_RUNTIME_SECRET` | `EVELAND_SCHEDULER_RUNTIME_SECRET` | authenticates platform dispatch                                                                                                              |
+| variable                           | alias                                | meaning                                                                                                                                      |
+| ---------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORKFLOW_WORLD_URL`               | `EVELAND_WORKFLOW_WORLD_URL`         | the shared database. Required; there is no fallback chain, because falling back onto a single-tenant database is worse than failing to start |
+| `WORKFLOW_WORLD_TENANT_ID`         | `EVELAND_PROJECT_ID`                 | this deployment's tenant                                                                                                                     |
+| `WORKFLOW_WORLD_DEPLOYMENT_ID`     | `EVELAND_DEPLOYMENT_ID`              | recorded on every run, so an in-flight run stays pinned to an executor that can still run it                                                 |
+| `WORKFLOW_WORLD_RUNNER`            | `EVELAND_WORKFLOW_RUNNER`            | `embedded` (default) or `external`                                                                                                           |
+| `WORKFLOW_WORLD_RUNTIME_SECRET`    | `EVELAND_SCHEDULER_RUNTIME_SECRET`   | authenticates platform dispatch                                                                                                              |
+| `WORKFLOW_WORLD_STREAM_COMPACTION` | `EVELAND_WORKFLOW_STREAM_COMPACTION` | `on` (default); `off` is the emergency switch for write-side snapshot stripping                                                              |
 
 ### Host side (read by the dispatcher)
 
-| variable                                      | default            | meaning                                                                                                  |
-| --------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------- |
-| `WORKFLOW_WORLD_URL`                          | —                  | same database as above                                                                                   |
-| `WORKFLOW_WORLD_BOOTSTRAP_URL`                | —                  | override when the host and the containers reach one database by different hostnames                      |
-| `WORKFLOW_DISPATCHER_ACTIVATION_API_URL`      | —                  | the host's activation API. Required                                                                      |
-| `WORKFLOW_DISPATCHER_ACTIVATION_TOKEN`        | —                  | bearer token for it. Required unless `NODE_ENV=development`                                              |
-| `WORKFLOW_DISPATCHER_POOL_SIZE`               | `10`               | the authority: graphile takes one connection per running job plus one held for LISTEN                    |
-| `WORKFLOW_DISPATCHER_CONCURRENCY`             | `poolSize - 1`     | must be below the pool size, and is checked                                                              |
-| `WORKFLOW_DISPATCHER_POLL_INTERVAL_MS`        | `500`              |                                                                                                          |
-| `WORKFLOW_DISPATCHER_MAX_INFLIGHT_PER_TENANT` | derived from cores | fairness ceiling, not a throttle                                                                         |
-| `WORKFLOW_DISPATCHER_DISPATCH_TIMEOUT_MS`     | `900000`           | a backstop against a wedged executor. Liveness is the lease renewal's job                                |
-| `WORKFLOW_DISPATCHER_ACTIVATION_LEASE_TTL_MS` | `180000`           | must match what the host's control API issues                                                            |
-| `WORKFLOW_DISPATCHER_LEASE_RENEW_INTERVAL_MS` | `TTL / 3`          | must be well below the TTL, and is checked. Transient failures are absorbed while the lease has headroom |
-| `WORKFLOW_DISPATCHER_QUEUE_GC_INTERVAL_MS`    | `300000`           | reclaims the per-run graphile queue rows; graphile does not free them on its own                         |
+| variable                                              | default            | meaning                                                                                                  |
+| ----------------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------- |
+| `WORKFLOW_WORLD_URL`                                  | —                  | same database as above                                                                                   |
+| `WORKFLOW_WORLD_BOOTSTRAP_URL`                        | —                  | override when the host and the containers reach one database by different hostnames                      |
+| `WORKFLOW_DISPATCHER_ACTIVATION_API_URL`              | —                  | the host's activation API. Required                                                                      |
+| `WORKFLOW_DISPATCHER_ACTIVATION_TOKEN`                | —                  | bearer token for it. Required unless `NODE_ENV=development`                                              |
+| `WORKFLOW_DISPATCHER_POOL_SIZE`                       | `10`               | the authority: graphile takes one connection per running job plus one held for LISTEN                    |
+| `WORKFLOW_DISPATCHER_CONCURRENCY`                     | `poolSize - 1`     | must be below the pool size, and is checked                                                              |
+| `WORKFLOW_DISPATCHER_POLL_INTERVAL_MS`                | `500`              |                                                                                                          |
+| `WORKFLOW_DISPATCHER_MAX_INFLIGHT_PER_TENANT`         | derived from cores | fairness ceiling, not a throttle                                                                         |
+| `WORKFLOW_DISPATCHER_DISPATCH_TIMEOUT_MS`             | `900000`           | a backstop against a wedged executor. Liveness is the lease renewal's job                                |
+| `WORKFLOW_DISPATCHER_ACTIVATION_LEASE_TTL_MS`         | `180000`           | must match what the host's control API issues                                                            |
+| `WORKFLOW_DISPATCHER_LEASE_RENEW_INTERVAL_MS`         | `TTL / 3`          | must be well below the TTL, and is checked. Transient failures are absorbed while the lease has headroom |
+| `WORKFLOW_DISPATCHER_QUEUE_GC_INTERVAL_MS`            | `300000`           | reclaims the per-run graphile queue rows; graphile does not free them on its own                         |
+| `WORKFLOW_DISPATCHER_MAINTENANCE_INTERVAL_MS`         | `60000`            | storage maintenance cadence; `0` disables the automatic loop                                             |
+| `WORKFLOW_DISPATCHER_MAINTENANCE_STREAM_BATCH_SIZE`   | `50000`            | maximum physical stream rows deleted by one statement                                                    |
+| `WORKFLOW_DISPATCHER_MAINTENANCE_MAX_BATCHES`         | `20`               | maximum stream/run deletion batches per pass                                                             |
+| `WORKFLOW_DISPATCHER_MAINTENANCE_MAX_STREAMS_TO_PACK` | `100`              | maximum terminal streams rewritten into blocks per pass                                                  |
+| `WORKFLOW_DISPATCHER_MAINTENANCE_RUN_BATCH_SIZE`      | `1000`             | maximum expired workflow graphs deleted by one statement                                                 |
+| `WORKFLOW_WORLD_STREAM_COMPACTION`                    | `on`               | also controls snapshot stripping during terminal block rewrites                                          |
 
 The dispatcher binds no port. Readiness is the literal line
 `workflow-dispatcher: ready` on stdout — a stable contract, matched by supervisors
@@ -114,7 +121,50 @@ and by the conformance harness.
 side only. Do not set it on the host: the dispatcher must take the namespace from
 the run it is recovering, never from its own environment.
 
-### Administrative stream retention
+### Stream storage safety boundary
+
+Eve-compatible stream bytes stay unchanged at the public boundary, while the
+database uses three internal optimizations:
+
+- `messageSoFar` and `reasoningSoFar` are stripped before persistence and
+  reconstructed from deltas on every read path. Unknown framing and event shapes
+  pass through unchanged; the deployment-side switch above disables only new
+  stripping, while readers always support mixed old/new streams.
+- rehydration state is checkpointed in PostgreSQL every 128 logical chunks or
+  64 KiB. Cursor resumes start from the nearest checkpoint rather than scanning
+  the stream from its beginning. Checkpoint state never enters the client cursor.
+- `writeMulti` packs up to 64 logical chunks into a physical v2 block, capped at
+  256 KiB. Readers expand legacy rows and v2 blocks into the same logical stream.
+  `packTerminalStreamBlocks` is the bounded, advisory-locked fallback for streams
+  written one row at a time before EOF.
+
+Logical chunk IDs remain inside each block and continue to drive cursor and
+`startIndex` behavior. Repacking physical rows therefore does not invalidate an
+existing cursor.
+
+### Retention classes and maintenance
+
+Every run has one internal retention class:
+
+| class                     | compact after | expire non-EOF stream data | expire workflow graph |
+| ------------------------- | ------------: | -------------------------: | --------------------: |
+| `scheduled` / `ephemeral` |      1 minute |                 15 minutes |                7 days |
+| `interactive` (default)   |     5 minutes |                   24 hours |               30 days |
+| `persistent`              |         never |                      never |                 never |
+
+EOF rows survive both stream expiry and workflow-graph expiry, so an old stream
+still resolves as complete. Active or waiting runs have no deadlines. A database
+trigger assigns deadlines when a run enters a terminal state; classification can
+be supplied on run creation, through the `workflow-world.retention-class` run
+attribute, or with `setWorkflowRunRetentionClass`.
+
+The dispatcher runs block packing, deadline-driven stream expiry, and full graph
+expiry once at startup and every minute. Each task is bounded, advisory-locked,
+non-overlapping, and failure-isolated. Retained hook tokens are not deleted before
+their own requested deadline.
+
+The legacy caller-selected primitive remains available for hosts that do not run
+the dispatcher:
 
 The package exposes a bounded cleanup primitive for hosts that need to cap stream
 snapshot growth:
@@ -137,11 +187,11 @@ database advisory lock, so `lockAcquired: false` is a normal result when another
 host is already sweeping; `hitBatchLimit: true` means the bounded invocation may
 have left more eligible rows.
 
-Calling this function is an explicit, destructive replay policy: a raw stream
+Calling any stream-expiry function is an explicit, destructive replay policy: a raw stream
 cursor older than the retention window can no longer replay its expired chunks.
-The package does not schedule it or choose a default. Apply package migrations
-before invoking it. Ordinary PostgreSQL `DELETE` makes pages reusable but does
-not necessarily shrink relation files on disk.
+Apply package migrations before enabling maintenance. Ordinary PostgreSQL
+`DELETE` makes pages reusable but does not necessarily shrink relation files on
+disk.
 
 ### Upgrading from 0.3.0 or earlier
 
@@ -283,3 +333,8 @@ The storage, streamer, queue and Drizzle schema modules are derived from
 implementation — a production-ready solution might run workers in separate
 processes with a more robust queuing system". This is that. Apache-2.0, matching
 upstream; [NOTICE](./NOTICE) records the base revision and every change.
+
+The precise compatibility boundary is documented in
+[docs/world-postgres-beta34-compatibility.md](./docs/world-postgres-beta34-compatibility.md):
+public `@workflow/world` behavior is required to match beta.34, while tenancy,
+physical storage, retention and runner topology are explicit differences.

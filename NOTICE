@@ -86,6 +86,13 @@ Modifications made by Eveland:
      upstream 49-delivery budget; and embedded HTTP delivery propagates the
      worker abort signal. Every storage predicate remains tenant-scoped.
 
+ 13. Stream storage v2 and bounded lifecycle maintenance. Eve cumulative
+     snapshots are stripped on write and byte-identically rehydrated on read;
+     server-side checkpoints bound cursor resume work; multiple logical chunks
+     may share one physical block without changing public indices or cursors;
+     and explicit run retention classes drive delayed stream and workflow-graph
+     cleanup while preserving EOF and retained hook tokens.
+
 The dispatcher (`src/dispatcher/`), the tenant provisioning and partition
 lifecycle (`src/tenant.ts`), the migration runner (`src/migrate.ts`) and the
 dispatch contract (`src/dispatch-contract.ts`) are original works of Eveland and
