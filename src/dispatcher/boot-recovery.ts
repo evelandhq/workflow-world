@@ -42,10 +42,20 @@ export async function reenqueueActiveRunsForAllTenants(input: {
     deployment_id: string;
     queue_namespace: string | null;
   }>(
-    `select tenant_id, id, name, deployment_id, queue_namespace
-       from workflow.workflow_runs
-      where status in ('pending', 'running')
-      order by tenant_id, created_at`,
+    `select runs.tenant_id, runs.id, runs.name, runs.deployment_id, runs.queue_namespace
+       from workflow.workflow_runs as runs
+      where runs.status in ('pending', 'running')
+        -- A dead letter is terminal for dispatch, not a workflow-authored
+        -- run_failed event. Keep it operator-replayable without recreating the
+        -- same terminal delivery on every dispatcher restart.
+        and not exists (
+          select 1
+            from workflow.dispatch_dead_letters as dead
+           where dead.tenant_id = runs.tenant_id
+             and dead.run_id = runs.id
+             and dead.resolved_at is null
+        )
+      order by runs.tenant_id, runs.created_at`,
   );
 
   let enqueued = 0;

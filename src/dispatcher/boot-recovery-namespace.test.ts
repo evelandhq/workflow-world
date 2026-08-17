@@ -35,6 +35,7 @@ const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const NAMESPACED = `p_bootns_a_${suffix}`;
 const PLAIN = `p_bootns_b_${suffix}`;
 const LEGACY = `p_bootns_c_${suffix}`;
+const DEADLETTERED = `p_bootns_d_${suffix}`;
 
 describe.skipIf(!testUrl)("boot recovery preserves the queue namespace", () => {
   let admin: Pool;
@@ -44,7 +45,7 @@ describe.skipIf(!testUrl)("boot recovery preserves the queue namespace", () => {
   beforeAll(async () => {
     admin = new Pool({ connectionString: testUrl, max: 4 });
     await runMigrations(admin);
-    for (const tenant of [NAMESPACED, PLAIN, LEGACY]) {
+    for (const tenant of [NAMESPACED, PLAIN, LEGACY, DEADLETTERED]) {
       await ensureTenantPartitions(admin, tenant);
     }
     workerUtils = await makeWorkerUtils({ pgPool: admin });
@@ -59,7 +60,7 @@ describe.skipIf(!testUrl)("boot recovery preserves the queue namespace", () => {
     // table for whichever later suite starts a real one.
     await admin
       .query("delete from graphile_worker._private_jobs where payload->>'tenantId' = any($1)", [
-        [NAMESPACED, PLAIN, LEGACY],
+        [NAMESPACED, PLAIN, LEGACY, DEADLETTERED],
       ])
       .catch(() => {});
     // The sweep under test is global: it re-enqueues every active run in the
@@ -78,10 +79,15 @@ describe.skipIf(!testUrl)("boot recovery preserves the queue namespace", () => {
     // like a product bug in a suite that shares one database.
     await admin
       .query("delete from workflow.workflow_runs where tenant_id = any($1)", [
-        [NAMESPACED, PLAIN, LEGACY],
+        [NAMESPACED, PLAIN, LEGACY, DEADLETTERED],
       ])
       .catch(() => {});
-    for (const tenant of [NAMESPACED, PLAIN, LEGACY]) {
+    await admin
+      .query("delete from workflow.dispatch_dead_letters where tenant_id = any($1)", [
+        [NAMESPACED, PLAIN, LEGACY, DEADLETTERED],
+      ])
+      .catch(() => {});
+    for (const tenant of [NAMESPACED, PLAIN, LEGACY, DEADLETTERED]) {
       await dropTenantPartitions(admin, tenant).catch(() => {});
     }
     await admin?.end().catch(() => {});
@@ -202,4 +208,53 @@ describe.skipIf(!testUrl)("boot recovery preserves the queue namespace", () => {
     expect(warning).toBeDefined();
     expect(warning!.message).toMatch(/namespace/i);
   }, 60_000);
+
+  test("an unresolved dead letter quarantines boot recovery until an operator resolves it", async () => {
+    const runId = await createActiveRun({
+      tenantId: DEADLETTERED,
+      workflowName: "greet",
+    });
+    await admin.query(
+      `insert into workflow.dispatch_dead_letters
+         (tenant_id, deployment_id, run_id, message_id, job_name, queue_name, attempt, reason, payload)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        DEADLETTERED,
+        `dep_${DEADLETTERED}`,
+        runId,
+        `msg_dead_${runId}`,
+        "workflow",
+        `wfrun:${DEADLETTERED}:${runId}`,
+        49,
+        "terminal dispatch failure",
+        {},
+      ],
+    );
+
+    await reenqueueActiveRunsForAllTenants({ pool: admin, workerUtils });
+    const quarantined = await admin.query(
+      "select 1 from graphile_worker._private_jobs where payload->>'messageId' = $1",
+      [`msg_recover_${runId}`],
+    );
+    expect(quarantined.rows).toHaveLength(0);
+
+    await admin.query(
+      "update workflow.dispatch_dead_letters set resolved_at = now() where tenant_id = $1 and run_id = $2",
+      [DEADLETTERED, runId],
+    );
+    await reenqueueActiveRunsForAllTenants({ pool: admin, workerUtils });
+    await expect(recoveredMessage(runId)).resolves.toMatchObject({ tenantId: DEADLETTERED });
+  }, 60_000);
+
+  test("the quarantine lookup has a tenant/run partial index", async () => {
+    const { rows } = await admin.query<{ indexdef: string }>(
+      `select indexdef
+         from pg_indexes
+        where schemaname = 'workflow'
+          and indexname = 'dispatch_dead_letters_unresolved_run_index'`,
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.indexdef).toMatch(/\(tenant_id, run_id\).*where.*resolved_at is null/i);
+  });
 });

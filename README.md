@@ -117,6 +117,13 @@ The dispatcher binds no port. Readiness is the literal line
 `workflow-dispatcher: ready` on stdout — a stable contract, matched by supervisors
 and by the conformance harness.
 
+An exhausted or terminal dispatch is written to `workflow.dispatch_dead_letters`.
+While that row is unresolved, the still-active workflow run is quarantined from
+dispatcher boot recovery; resolving it makes the run eligible for recovery again.
+The dispatcher does not manufacture a workflow `run_failed` event or stream EOF for
+a transport failure, so operators can choose between replay and an explicit workflow
+cancel/fail action without losing the original message.
+
 `WORKFLOW_QUEUE_NAMESPACE` is eve's, read by eve's own resolver on the deployment
 side only. Do not set it on the host: the dispatcher must take the namespace from
 the run it is recovering, never from its own environment.

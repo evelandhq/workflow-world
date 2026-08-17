@@ -112,4 +112,15 @@ describe("dispatcher queue retry policy", () => {
       expect.objectContaining({ maxAttempts: 49 }),
     );
   });
+
+  it("does not re-enqueue an active run with an unresolved dead letter", async () => {
+    const query = vi.fn(async (_sql: string) => ({ rows: [] }));
+    const pool = { query } as any;
+
+    await reenqueueActiveRunsForAllTenants({ pool, workerUtils });
+
+    expect(query).toHaveBeenCalledOnce();
+    expect(query.mock.calls[0]![0]).toMatch(/not exists[\s\S]+dispatch_dead_letters/i);
+    expect(query.mock.calls[0]![0]).toMatch(/resolved_at is null/i);
+  });
 });

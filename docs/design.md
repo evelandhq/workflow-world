@@ -489,15 +489,15 @@ event log. A restart legitimately forgets, and the consequence is a replay.
 derive state from the event log rather than from message order. Do not add
 ordering later without re-checking that assumption.
 
-| failure                         | what happens                             | recovered by                            |
-| ------------------------------- | ---------------------------------------- | --------------------------------------- |
-| agent crashes mid-step          | held POST fails → job fails              | graphile retry, then re-activation      |
-| dispatcher crashes mid-POST     | the job stays locked to a dead worker    | boot recovery's run-keyed re-enqueue    |
-| deployment archived or failed   | activation is not-activatable → terminal | should be unreachable; alarms           |
-| deployment unavailable or cold  | activation unavailable → retry           | graphile retry                          |
-| lease lapses during a long step | executor reaped mid-step                 | **prevented** by renewal, not recovered |
-| `maxAttempts` exhausted         | graphile stops retrying                  | dead-letter row                         |
-| duplicate enqueue               | job key dedupes at enqueue               | by construction                         |
+| failure                         | what happens                             | recovered by                             |
+| ------------------------------- | ---------------------------------------- | ---------------------------------------- |
+| agent crashes mid-step          | held POST fails → job fails              | graphile retry, then re-activation       |
+| dispatcher crashes mid-POST     | the job stays locked to a dead worker    | boot recovery's run-keyed re-enqueue     |
+| deployment archived or failed   | activation is not-activatable → terminal | should be unreachable; alarms            |
+| deployment unavailable or cold  | activation unavailable → retry           | graphile retry                           |
+| lease lapses during a long step | executor reaped mid-step                 | **prevented** by renewal, not recovered  |
+| `maxAttempts` exhausted         | graphile stops retrying                  | dead-letter quarantine + operator action |
+| duplicate enqueue               | job key dedupes at enqueue               | by construction                          |
 
 Boot recovery is a **run-keyed re-enqueue**, which supersedes a job locked to a
 dead worker rather than waiting for its lock to time out. Reaching into graphile
@@ -511,6 +511,20 @@ A run whose retries are exhausted must not simply stop. It lands in
 a `run_failed` event, because a run that could still have succeeded is an
 operator problem and not a workflow outcome — the distinction is lost if it is
 recorded as the workflow's own failure.
+
+An unresolved dead letter is therefore the dispatcher's terminal **quarantine**
+state even though the workflow run itself remains `pending` or `running`. Boot
+recovery excludes quarantined runs, so every dispatcher restart cannot recreate
+the same terminal delivery forever. Platform deployment-retention queries must
+apply the same exclusion: an unresolved dispatch failure no longer protects a
+dead executor indefinitely. This deliberately does not append `run_failed` or a
+stream EOF on the workflow's behalf.
+
+Operator resolution is the explicit retry boundary. Once `resolved_at` is set,
+the active run becomes eligible for boot recovery and deployment protection
+again; an operator who wants to abandon it should cancel/fail it through the
+workflow control surface instead. This keeps transport failure, workflow
+outcome, and manual replay as three distinct states.
 
 Every path into that table matters, including the one that is easy to miss: a
 dispatch that _throws_ rather than returning a failure outcome must still reach
