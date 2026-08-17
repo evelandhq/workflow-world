@@ -25,6 +25,8 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 import { Cbor, type Cborized } from "./cbor.js";
+import type { StreamRehydrationCheckpoint } from "../stream-compaction.js";
+import type { RunRetentionClass } from "../run-retention-policy.js";
 
 export const schema = pgSchema("workflow");
 
@@ -116,12 +118,26 @@ export const runs = schema.table(
     completedAt: timestamp("completed_at"),
     startedAt: timestamp("started_at"),
     expiredAt: timestamp("expired_at"),
+    retentionClass: varchar("retention_class")
+      .$type<RunRetentionClass>()
+      .default("interactive")
+      .notNull(),
+    compactAfter: timestamp("compact_after"),
+    expireAfter: timestamp("expire_after"),
+    detailExpireAfter: timestamp("detail_expire_after"),
   },
   (tb) => [
     primaryKey({ columns: [tb.tenantId, tb.runId] }),
     index("workflow_runs_name_index").on(tb.workflowName),
     index("workflow_runs_tenant_status_index").on(tb.tenantId, tb.status),
     index("workflow_runs_tenant_created_index").on(tb.tenantId, tb.createdAt),
+    index("workflow_runs_compact_after_index").on(tb.compactAfter, tb.tenantId, tb.runId),
+    index("workflow_runs_expire_after_index").on(tb.expireAfter, tb.tenantId, tb.runId),
+    index("workflow_runs_detail_expire_after_index").on(
+      tb.detailExpireAfter,
+      tb.tenantId,
+      tb.runId,
+    ),
     /**
      * The deployment retention guard's only query: which deployments still own
      * a run that has not finished. Partial so it stays small as terminal runs
@@ -293,10 +309,38 @@ export const streams = schema.table(
     chunkData: bytea("data").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     eof: boolean("eof").notNull(),
+    /** NULL on legacy one-row-per-chunk rows. */
+    codecVersion: integer("codec_version"),
+    /** Number of logical chunks stored in this physical row. */
+    chunkCount: integer("chunk_count"),
+    /** Logical id at the end of a packed block; NULL on legacy rows. */
+    lastChunkId: varchar("last_chunk_id").$type<`chnk_${string}`>(),
   },
   (tb) => [
     primaryKey({ columns: [tb.tenantId, tb.streamId, tb.chunkId] }),
     index("workflow_stream_chunks_tenant_run_index").on(tb.tenantId, tb.runId),
+    index("workflow_stream_chunks_pending_pack_index")
+      .on(tb.tenantId, tb.runId, tb.streamId, tb.chunkId)
+      .where(sql`${tb.eof} = true and ${tb.codecVersion} is distinct from 2`),
+  ],
+);
+
+/** Internal read checkpoints; never encoded into a public stream cursor. */
+export const streamCheckpoints = schema.table(
+  "workflow_stream_checkpoints",
+  {
+    tenantId: varchar("tenant_id").notNull(),
+    streamId: varchar("stream_id").notNull(),
+    runId: varchar("run_id"),
+    chunkId: varchar("chunk_id").$type<`chnk_${string}`>().notNull(),
+    /** Logical index immediately after `chunkId`. */
+    nextIndex: integer("next_index").notNull(),
+    state: jsonb("state").$type<StreamRehydrationCheckpoint>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (tb) => [
+    primaryKey({ columns: [tb.tenantId, tb.streamId, tb.chunkId] }),
+    index("workflow_stream_checkpoints_tenant_run_index").on(tb.tenantId, tb.runId),
   ],
 );
 

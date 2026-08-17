@@ -41,6 +41,8 @@ export type EvelandWorldConfig = PgConnectionConfig & {
    * Default is 10ms. Set to 0 for immediate flushing.
    */
   streamFlushIntervalMs?: number;
+  /** Strip Eve's accumulated stream snapshots before persistence (default true). */
+  compactStreamSnapshots?: boolean;
 };
 
 /**
@@ -57,12 +59,24 @@ export type ResolvedWorldConfig = {
   port?: number;
   queueConcurrency: number;
   streamFlushIntervalMs?: number;
+  compactStreamSnapshots: boolean;
 };
 
 export function resolveRunnerMode(value: string | undefined): WorkflowRunnerMode {
   if (value === "external") return "external";
   if (value === "embedded" || value === undefined || value === "") return "embedded";
   throw new Error(`Invalid workflow runner mode "${value}": expected "embedded" or "external".`);
+}
+
+/** Resolve the emergency switch for write-side stream snapshot compaction. */
+export function resolveStreamCompaction(value: string | undefined): boolean {
+  if (value === undefined || value === "" || value === "on" || value === "true" || value === "1") {
+    return true;
+  }
+  if (value === "off" || value === "false" || value === "0") return false;
+  throw new Error(
+    `Invalid stream compaction setting "${value}": expected "on"/"true"/"1" or "off"/"false"/"0".`,
+  );
 }
 
 /**

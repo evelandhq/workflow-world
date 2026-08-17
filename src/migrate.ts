@@ -145,6 +145,9 @@ export async function dropTenantPartitions(pool: Pool, tenantId: string): Promis
   // cheaper than another partition tree, but project deletion must reclaim
   // them alongside the event partition.
   await pool.query("delete from workflow.workflow_event_slots where tenant_id = $1", [tenantId]);
+  await pool.query("delete from workflow.workflow_stream_checkpoints where tenant_id = $1", [
+    tenantId,
+  ]);
 }
 
 export async function tenantPartitionsExist(pool: Pool, tenantId: string): Promise<boolean> {

@@ -6,6 +6,7 @@ import {
   type ResolvedWorldConfig,
   resolveConnectionString,
   resolveRunnerMode,
+  resolveStreamCompaction,
 } from "./config.js";
 import { createClient, type Drizzle } from "./drizzle/index.js";
 import { createQueue } from "./queue.js";
@@ -31,10 +32,22 @@ export {
 } from "./migrate.js";
 export { reenqueueTenantRuns } from "./recovery.js";
 export {
+  packTerminalStreamBlocks,
+  type PackTerminalStreamBlocksOptions,
+  type PackTerminalStreamBlocksResult,
+} from "./stream-block-maintenance.js";
+export {
+  pruneExpiredStreamChunks,
+  pruneExpiredWorkflowRuns,
   pruneTerminalStreamChunks,
+  setWorkflowRunRetentionClass,
+  type DeadlineRetentionOptions,
+  type SetWorkflowRunRetentionClassOptions,
   type StreamRetentionOptions,
   type StreamRetentionResult,
+  type WorkflowRunRetentionResult,
 } from "./retention.js";
+export { RUN_RETENTION_ATTRIBUTE, type RunRetentionClass } from "./run-retention-policy.js";
 export { derivePartitionName, tenantStreamChannel } from "./tenant.js";
 export * from "./drizzle/schema.js";
 
@@ -105,6 +118,12 @@ function resolveConfig(config: EvelandWorldConfig): ResolvedWorldConfig {
     ...(config.streamFlushIntervalMs !== undefined
       ? { streamFlushIntervalMs: config.streamFlushIntervalMs }
       : {}),
+    compactStreamSnapshots:
+      config.compactStreamSnapshots ??
+      resolveStreamCompaction(
+        process.env.WORKFLOW_WORLD_STREAM_COMPACTION ??
+          process.env.EVELAND_WORKFLOW_STREAM_COMPACTION,
+      ),
   };
 }
 
@@ -128,7 +147,9 @@ export function createWorld(
   const drizzle = createClient(pool);
   const queue = createQueue(resolved, pool);
   const storage = createStorage(drizzle, resolved.tenantId, resolved.queueNamespace);
-  const streamer = createStreamer(pool, drizzle, resolved.tenantId);
+  const streamer = createStreamer(pool, drizzle, resolved.tenantId, {
+    compactSnapshots: resolved.compactStreamSnapshots,
+  });
 
   return {
     /**

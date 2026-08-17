@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { runMigrations } from "../migrate.js";
+import { startStorageMaintenanceLoop } from "../storage-maintenance.js";
 import { createActivationClient, type ActivationClient } from "./activation-client.js";
 import { reenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
 import { resolveDispatcherConfig, type DispatcherConfiguration } from "./config.js";
@@ -100,15 +101,67 @@ export async function startDispatcherService(
       }),
   });
 
+  const maintenance = startStorageMaintenanceLoop(pool, {
+    intervalMs: config.maintenanceIntervalMs,
+    maintenance: {
+      streamBatchSize: config.maintenanceStreamBatchSize,
+      maxBatches: config.maintenanceMaxBatches,
+      maxStreamsToPack: config.maintenanceMaxStreamsToPack,
+      runBatchSize: config.maintenanceRunBatchSize,
+      compactSnapshots: config.maintenanceCompactSnapshots,
+    },
+    onResult: (result) => {
+      for (const [role, outcome] of Object.entries(result)) {
+        if (outcome.status === "rejected") {
+          telemetry.emit({
+            severity: "error",
+            eventName: "workflow_dispatcher.storage_maintenance",
+            body: `${role} maintenance failed`,
+            attributes: { role, error: String(outcome.reason) },
+          });
+          continue;
+        }
+        telemetry.emit({
+          severity: "info",
+          eventName: "workflow_dispatcher.storage_maintenance",
+          body: `${role} maintenance completed`,
+          attributes: {
+            role,
+            ...numericAndBooleanAttributes(outcome.value),
+          },
+        });
+      }
+    },
+    onError: (error) => {
+      telemetry.emit({
+        severity: "error",
+        eventName: "workflow_dispatcher.storage_maintenance",
+        body: "storage maintenance loop failed",
+        attributes: { error: String(error) },
+      });
+    },
+  });
+
   return {
     runtime,
     config,
     async stop() {
+      await maintenance.stop();
       await runtime.stop();
       await pool.end();
       await telemetry.shutdown();
     },
   };
+}
+
+function numericAndBooleanAttributes(value: unknown): Record<string, number | boolean> {
+  if (typeof value !== "object" || value === null) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, number | boolean] =>
+        typeof entry[1] === "number" || typeof entry[1] === "boolean",
+    ),
+  );
 }
 
 function requiredServiceToken(env: NodeJS.ProcessEnv): string {

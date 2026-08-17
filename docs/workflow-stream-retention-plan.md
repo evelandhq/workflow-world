@@ -1,5 +1,10 @@
 # Shared workflow stream retention plan
 
+> Historical rollout plan. The original 24-hour host primitive shipped first;
+> storage v2 now adds snapshot stripping/rehydration, database checkpoints,
+> physical blocks, and deadline-driven retention classes. See the README and
+> `docs/design.md` for the current contract.
+
 ## Status and decisions
 
 This plan ports the production-proven retention policy from

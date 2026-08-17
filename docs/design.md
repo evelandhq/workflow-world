@@ -143,10 +143,10 @@ is treated as not supporting it. And `events.create` reports `maxEvents` on ever
 response that carries a run, because the runtime enforces the ceiling and a World
 that omits the field leaves a runaway workflow with no bound at all.
 
-`streams.writeMulti` is implemented as one batched insert: chunk ids are
-monotonic ULIDs generated up front in input order, and readers sort by chunk id,
-so a single multi-row `INSERT` carries the whole batch without losing chunk
-ordering. The NOTIFY is still emitted per chunk. `analytics` and
+`streams.writeMulti` generates monotonic logical ids up front, strips Eve's
+cumulative snapshots, and packs up to 64 logical chunks / 256 KiB into each v2
+physical row. One NOTIFY names one block; readers expand both legacy rows and v2
+blocks before applying cursor or index semantics. `analytics` and
 `getEncryptionKeyForRun` are deliberately not implemented; both belong to work
 that is out of scope below.
 
@@ -241,15 +241,16 @@ meaning and is not read here.
 
 ### Tables
 
-| table                    | partitioned | role                                                            |
-| ------------------------ | ----------- | --------------------------------------------------------------- |
-| `workflow_runs`          | no          | the dispatcher's index: tenant, deployment, status, attributes  |
-| `workflow_steps`         | no          | promote to partitioned if it outgrows runs — same recipe        |
-| `workflow_hooks`         | no          | plus `token_retention_until` for retained tokens                |
-| `workflow_waits`         | no          | `resume_at` is the sleeping timer; graphile's `run_at` fires it |
-| `workflow_events`        | LIST        | append-heavy, and the only write path for run state             |
-| `workflow_stream_chunks` | LIST        | one row per token delta — the highest-volume table by far       |
-| `dispatch_dead_letters`  | no          | platform-owned; see [Dead letters](#dead-letters)               |
+| table                         | partitioned | role                                                            |
+| ----------------------------- | ----------- | --------------------------------------------------------------- |
+| `workflow_runs`               | no          | the dispatcher's index: tenant, deployment, status, attributes  |
+| `workflow_steps`              | no          | promote to partitioned if it outgrows runs — same recipe        |
+| `workflow_hooks`              | no          | plus `token_retention_until` for retained tokens                |
+| `workflow_waits`              | no          | `resume_at` is the sleeping timer; graphile's `run_at` fires it |
+| `workflow_events`             | LIST        | append-heavy, and the only write path for run state             |
+| `workflow_stream_chunks`      | LIST        | legacy logical rows plus v2 packed physical blocks              |
+| `workflow_stream_checkpoints` | no          | sparse internal rehydration state; never part of a cursor       |
+| `dispatch_dead_letters`       | no          | platform-owned; see [Dead letters](#dead-letters)               |
 
 `tenant_id` leads the primary key on every one of them, including the
 unpartitioned tables where Postgres does not require it. Run and step ids come
@@ -285,17 +286,20 @@ These bite hard enough to be worth stating outright.
 `workflow_runs (deployment_id) WHERE status IN ('pending','running')` for the
 retention guard, partial so it stays small as terminal runs accumulate; and
 `workflow_runs (tenant_id, created_at DESC)` for listing surfaces. The
-administrative stream-retention sweep additionally uses the partial expression
-index on `coalesce(completed_at, updated_at), tenant_id, id` for terminal runs.
+legacy stream-retention sweep uses the partial expression index on
+`coalesce(completed_at, updated_at), tenant_id, id`; deadline-driven maintenance
+uses the `compact_after`, `expire_after`, and `detail_expire_after` indexes.
 
 graphile's own tables live in the same database, in their own schema, untouched.
 
-### Terminal stream retention
+### Stream compaction and terminal retention
 
-Eve currently persists cumulative snapshots frequently enough that stream chunks
-are the dominant growth path. The World therefore provides
-`pruneTerminalStreamChunks` as a host-invoked safety boundary, independent of any
-future snapshot compaction.
+The stream boundary is logical, not physical. Write-side snapshot stripping turns
+Eve's accumulated `messageSoFar` / `reasoningSoFar` bytes back into deltas;
+read-side rehydration restores the exact wire bytes. Database checkpoints every
+128 chunks or 64 KiB bound cursor-resume work. Packed rows retain every logical
+chunk id, so a terminal rewrite and a rolling upgrade do not change cursors,
+`startIndex`, or `tailIndex`.
 
 Eligibility is joined through both `tenant_id` and `run_id`; only non-EOF chunks
 of completed, failed or cancelled runs older than the caller's window are
@@ -305,12 +309,21 @@ Because chunks are partitioned, the physical row identity is `(tableoid, ctid)` 
 session advisory lock across the batch loop, preventing independently scheduled
 workers from multiplying database load.
 
-The API deliberately has no timer, environment variables or retention default.
-Those are host product policy. Expiring chunks also expires replay from old raw
-stream cursors, even though retaining EOF lets such a stream still resolve as
-complete. Normal deletes make pages available for reuse by the partition; they
-do not promise that PostgreSQL returns the relation file's blocks to the
-operating system.
+New runs record an explicit retention class. A database trigger converts a
+terminal transition into `compact_after`, `expire_after`, and
+`detail_expire_after`, which prevents write-time deletion from racing final
+NOTIFY/read delivery. Scheduled runs use 1 minute / 15 minutes / 7 days;
+interactive runs use 5 minutes / 24 hours / 30 days; persistent runs receive no
+deadlines. Active runs receive none either.
+
+The dispatcher runs bounded maintenance once at startup and every minute. Block
+packing, stream expiry, and graph expiry are failure-isolated and protected by
+advisory locks. Stream and graph expiry preserve EOF forever; retained hook
+tokens also outlive graph cleanup until their own deadline. The older
+`pruneTerminalStreamChunks(retentionMs)` entry point remains for standalone hosts.
+Expiring chunks expires replay from old raw cursors even though EOF still makes
+the stream resolve as complete. Normal deletes make pages reusable but do not
+promise to shrink relation files.
 
 ### `queue_namespace` is provenance, not tenancy
 

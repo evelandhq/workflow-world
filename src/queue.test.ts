@@ -531,6 +531,7 @@ function buildConfig(overrides: Partial<ResolvedWorldConfig> = {}): ResolvedWorl
     deploymentId: DEPLOYMENT,
     runner: "embedded",
     queueConcurrency: 50,
+    compactStreamSnapshots: true,
     ...overrides,
   };
 }
