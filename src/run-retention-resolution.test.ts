@@ -1,11 +1,35 @@
 import { describe, expect, test } from "vitest";
 import {
+  resolveRunRetentionForCreation,
   resolveRunRetentionClassForCreation,
   withRunRetentionIntent,
 } from "./run-retention-resolution.js";
 import { RUN_RETENTION_ATTRIBUTE } from "./run-retention-policy.js";
 
 describe("run creation retention resolution", () => {
+  test("resolves a parent-only child to its parent's stored retention root", async () => {
+    await expect(
+      resolveRunRetentionForCreation({
+        runId: "wrun_child",
+        attributes: { $parentRunId: "wrun_parent" },
+        getAncestorRetention: async (runId) =>
+          runId === "wrun_parent"
+            ? { retentionClass: "scheduled", retentionRootRunId: "wrun_root" }
+            : undefined,
+      }),
+    ).resolves.toEqual({
+      retentionClass: "scheduled",
+      retentionRootRunId: "wrun_root",
+    });
+  });
+
+  test("makes an unrelated root its own retention root", async () => {
+    await expect(resolveRunRetentionForCreation({ runId: "wrun_root" })).resolves.toEqual({
+      retentionClass: "interactive",
+      retentionRootRunId: "wrun_root",
+    });
+  });
+
   test("classifies a root created inside the platform scheduler context as scheduled", async () => {
     const retentionClass = await withRunRetentionIntent("scheduled", () =>
       resolveRunRetentionClassForCreation({}),

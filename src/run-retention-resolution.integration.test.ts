@@ -55,6 +55,18 @@ describe.skipIf(!testUrl)("run retention resolution at the storage boundary", ()
     expect(await readRetentionClass(result.run!.runId)).toBe("scheduled");
   });
 
+  test("persists one indexed retention root across parent-only lineage", async () => {
+    const root = await createRun({ retentionClass: "scheduled" });
+    const child = await createRun({
+      attributes: {
+        $parentRunId: root.run!.runId,
+      },
+    });
+
+    expect(await readRetentionRootRunId(root.run!.runId)).toBe(root.run!.runId);
+    expect(await readRetentionRootRunId(child.run!.runId)).toBe(root.run!.runId);
+  });
+
   test.each(["scheduled", "interactive", "persistent"] as const)(
     "ordinary run_created inherits %s through generic SDK lineage",
     async (retentionClass) => {
@@ -136,5 +148,15 @@ describe.skipIf(!testUrl)("run retention resolution at the storage boundary", ()
       [TENANT, runId],
     );
     return rows[0]!.retention_class;
+  }
+
+  async function readRetentionRootRunId(runId: string): Promise<string> {
+    const { rows } = await pool.query<{ retention_root_run_id: string }>(
+      `select retention_root_run_id
+         from workflow.workflow_runs
+        where tenant_id = $1 and id = $2`,
+      [TENANT, runId],
+    );
+    return rows[0]!.retention_root_run_id;
   }
 });

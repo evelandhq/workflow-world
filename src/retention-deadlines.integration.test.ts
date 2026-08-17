@@ -63,6 +63,55 @@ describe.skipIf(!testUrl)("deadline-driven retention", () => {
     }
   });
 
+  test("an active descendant protects its terminal lineage", async () => {
+    await insertRun("active-root", "scheduled", "completed", "2 days");
+    await insertRun("active-child", "scheduled", "running", "2 days", "active-root");
+    await insertGraph("active-root");
+
+    await expect(
+      pruneExpiredStreamChunks(pool, { batchSize: 100, maxBatches: 2 }),
+    ).resolves.toMatchObject({ deletedRows: 0 });
+    await expect(
+      pruneExpiredWorkflowRuns(pool, { batchSize: 10, maxBatches: 2 }),
+    ).resolves.toMatchObject({ deletedRuns: 0 });
+
+    expect(await chunkKinds("active-root")).toEqual([false, true]);
+    expect(await checkpointCount("active-root")).toBe(1);
+    expect(await runCount("active-root")).toBe(1);
+  });
+
+  test("a descendant's later deadlines protect its terminal lineage", async () => {
+    await insertRun("failed-root", "scheduled", "completed", "2 days");
+    await insertRun("failed-child", "scheduled", "failed", "30 minutes", "failed-root");
+    await insertGraph("failed-root");
+
+    await expect(
+      pruneExpiredStreamChunks(pool, { batchSize: 100, maxBatches: 2 }),
+    ).resolves.toMatchObject({ deletedRows: 0 });
+    await expect(
+      pruneExpiredWorkflowRuns(pool, { batchSize: 10, maxBatches: 2 }),
+    ).resolves.toMatchObject({ deletedRuns: 0 });
+
+    expect(await chunkKinds("failed-root")).toEqual([false, true]);
+    expect(await runCount("failed-root")).toBe(1);
+  });
+
+  test("a persistent descendant protects its terminal lineage", async () => {
+    await insertRun("persistent-root", "scheduled", "completed", "2 days");
+    await insertRun("persistent-child", "persistent", "completed", "2 days", "persistent-root");
+    await insertGraph("persistent-root");
+
+    await expect(
+      pruneExpiredStreamChunks(pool, { batchSize: 100, maxBatches: 2 }),
+    ).resolves.toMatchObject({ deletedRows: 0 });
+    await expect(
+      pruneExpiredWorkflowRuns(pool, { batchSize: 10, maxBatches: 2 }),
+    ).resolves.toMatchObject({ deletedRuns: 0 });
+
+    expect(await chunkKinds("persistent-root")).toEqual([false, true]);
+    expect(await runCount("persistent-root")).toBe(1);
+  });
+
   test("reclassifying a terminal run recomputes its deadlines", async () => {
     await insertRun("reclassify", "interactive", "completed", "2 hours");
     await insertChunk("reclassify", false);
@@ -128,9 +177,14 @@ describe.skipIf(!testUrl)("deadline-driven retention", () => {
       [TENANT],
     );
 
+    await expect(
+      pruneExpiredStreamChunks(pool, { batchSize: 10, maxBatches: 1 }),
+    ).resolves.toMatchObject({ deletedRows: 0 });
+    expect(await chunkKinds("retained-hook")).toEqual([false, true]);
+
     await pruneExpiredWorkflowRuns(pool, { batchSize: 10, maxBatches: 1 });
     expect(await graphRowCount("workflow_hooks", "retained-hook")).toBe(1);
-    expect(await runCount("retained-hook")).toBe(0);
+    expect(await runCount("retained-hook")).toBe(1);
 
     await pool.query(
       `update workflow.workflow_hooks
@@ -140,22 +194,28 @@ describe.skipIf(!testUrl)("deadline-driven retention", () => {
     );
     await pruneExpiredWorkflowRuns(pool, { batchSize: 10, maxBatches: 1 });
     expect(await graphRowCount("workflow_hooks", "retained-hook")).toBe(0);
+    expect(await runCount("retained-hook")).toBe(0);
   });
 
   async function insertRun(
     runId: string,
     retentionClass: "scheduled" | "interactive" | "persistent",
-    status: "running" | "completed",
+    status: "running" | "completed" | "failed",
     age: string,
+    rootRunId?: string,
   ) {
     await pool.query(
       `insert into workflow.workflow_runs
          (tenant_id, id, deployment_id, status, name, spec_version,
-          retention_class, created_at, updated_at, completed_at)
+          retention_class, attributes, created_at, updated_at, completed_at)
        values ($1, $2, 'dep_retention', $3::workflow.status, 'retention-test', 6,
-               $4, now() - $5::interval, now() - $5::interval,
-               case when $3 = 'completed' then now() - $5::interval end)`,
-      [TENANT, runId, status, retentionClass, age],
+               $4,
+               case when $6::text is null then '{}'::jsonb
+                    else jsonb_build_object('$rootRunId', $6::text) end,
+               now() - $5::interval, now() - $5::interval,
+               case when $3 in ('completed', 'failed', 'cancelled')
+                    then now() - $5::interval end)`,
+      [TENANT, runId, status, retentionClass, age, rootRunId ?? null],
     );
   }
 

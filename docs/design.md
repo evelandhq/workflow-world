@@ -288,7 +288,9 @@ retention guard, partial so it stays small as terminal runs accumulate; and
 `workflow_runs (tenant_id, created_at DESC)` for listing surfaces. The
 legacy stream-retention sweep uses the partial expression index on
 `coalesce(completed_at, updated_at), tenant_id, id`; deadline-driven maintenance
-uses the `compact_after`, `expire_after`, and `detail_expire_after` indexes.
+uses the `compact_after`, `expire_after`, and `detail_expire_after` indexes, then
+the `(tenant_id, retention_root_run_id, status)` index to validate whole-lineage
+eligibility.
 
 graphile's own tables live in the same database, in their own schema, untouched.
 
@@ -312,9 +314,10 @@ workers from multiplying database load.
 New runs record an explicit retention class. A database trigger converts a
 terminal transition into `compact_after`, `expire_after`, and
 `detail_expire_after`, which prevents write-time deletion from racing final
-NOTIFY/read delivery. Scheduled runs use 1 minute / 15 minutes / 7 days;
-interactive runs use 5 minutes / 24 hours / 30 days; persistent runs receive no
-deadlines. Active runs receive none either.
+NOTIFY/read delivery. Successful scheduled runs use 1 minute / 15 minutes / 24
+hours. Failed scheduled runs use 1 minute / 1 hour / 7 days, and cancelled ones
+use 1 minute / 1 hour / 3 days. Interactive runs use 5 minutes / 24 hours / 30
+days; persistent runs receive no deadlines. Active runs receive none either.
 
 Creation resolves explicit input, the public run attribute, tenant-scoped SDK
 root/parent lineage, then an optional platform-owned root invocation context in
@@ -322,11 +325,15 @@ that order. Only a root can reach the context/default branch; descendants with
 lineage inherit the stored ancestor class or fail if that ancestor cannot be
 resolved. This keeps the World generic: it contains no Eve workflow-name or
 trigger policy, and a later delivery to an existing graph cannot reclassify it.
+Every member also stores the resolved root id, avoiding recursive JSON lineage
+walks during maintenance.
 
 The dispatcher runs bounded maintenance once at startup and every minute. Block
 packing, stream expiry, and graph expiry are failure-isolated and protected by
-advisory locks. Stream and graph expiry preserve EOF forever; retained hook
-tokens also outlive graph cleanup until their own deadline. The older
+advisory locks. Eligibility is decided across the complete stored lineage: any
+active member, later member deadline, persistent member, or unexpired retained
+hook holds both stream and graph data. Stream and graph expiry preserve EOF
+forever. The older
 `pruneTerminalStreamChunks(retentionMs)` entry point remains for standalone hosts.
 Expiring chunks expires replay from old raw cursors even though EOF still makes
 the stream resolve as complete. Normal deletes make pages reusable but do not

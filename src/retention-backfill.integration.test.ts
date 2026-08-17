@@ -168,7 +168,7 @@ describe.skipIf(!testUrl)("workflow graph retention backfill", () => {
     expect(terminal.compact_after.getTime() - terminal.completed_at.getTime()).toBe(60_000);
     expect(terminal.expire_after.getTime() - terminal.completed_at.getTime()).toBe(15 * 60_000);
     expect(terminal.detail_expire_after.getTime() - terminal.completed_at.getTime()).toBe(
-      7 * 24 * 60 * 60_000,
+      24 * 60 * 60_000,
     );
 
     expect(await classes(TENANT)).toContainEqual({

@@ -141,6 +141,27 @@ describe.skipIf(!testUrl)("terminal stream retention", () => {
     });
   });
 
+  test("keeps an old terminal legacy stream while its lineage is active", async () => {
+    await insertRun(ALPHA, "legacy-root", "completed", "2 days");
+    await insertRun(ALPHA, "legacy-child", "running", "2 days");
+    await pool.query(
+      `update workflow.workflow_runs
+          set retention_root_run_id = 'legacy-root'
+        where tenant_id = $1 and id in ('legacy-root', 'legacy-child')`,
+      [ALPHA],
+    );
+    await insertChunk(ALPHA, "legacy-root", "legacy-root-data", false);
+
+    await expect(
+      pruneTerminalStreamChunks(pool, {
+        retentionMs: 24 * 60 * 60 * 1_000,
+        batchSize: 10,
+        maxBatches: 1,
+      }),
+    ).resolves.toMatchObject({ deletedRows: 0 });
+    expect(await remainingChunkIds()).toContain("legacy-root-data");
+  });
+
   test("returns immediately when another session owns the pruning lock", async () => {
     const lockOwner = await pool.connect();
     try {

@@ -44,7 +44,7 @@ describe.skipIf(!testUrl)("run retention deadlines", () => {
   });
 
   test.each([
-    ["scheduled", 60_000, 15 * 60_000, 7 * 24 * 60 * 60_000],
+    ["scheduled", 60_000, 15 * 60_000, 24 * 60 * 60_000],
     ["interactive", 5 * 60_000, 24 * 60 * 60_000, 30 * 24 * 60 * 60_000],
   ] as const)(
     "terminal %s runs receive class-specific deadlines",
@@ -56,6 +56,30 @@ describe.skipIf(!testUrl)("run retention deadlines", () => {
       const row = await getRetention(runId);
       expect(row.retention_class).toBe(retentionClass);
       expect(row.compact_after!.getTime() - row.completed_at!.getTime()).toBe(compactDelay);
+      expect(row.expire_after!.getTime() - row.completed_at!.getTime()).toBe(expireDelay);
+      expect(row.detail_expire_after!.getTime() - row.completed_at!.getTime()).toBe(detailDelay);
+    },
+  );
+
+  test.each([
+    ["run_failed", 60 * 60_000, 7 * 24 * 60 * 60_000],
+    ["run_cancelled", 60 * 60_000, 3 * 24 * 60 * 60_000],
+  ] as const)(
+    "scheduled %s runs receive outcome-specific deadlines",
+    async (eventType, expireDelay, detailDelay) => {
+      const runId = await createRun("scheduled");
+      await events.create(runId, { eventType: "run_started" });
+      await events.create(
+        runId,
+        eventType === "run_failed"
+          ? {
+              eventType,
+              eventData: { error: { name: "Error", message: "failed" } },
+            }
+          : { eventType },
+      );
+
+      const row = await getRetention(runId);
       expect(row.expire_after!.getTime() - row.completed_at!.getTime()).toBe(expireDelay);
       expect(row.detail_expire_after!.getTime() - row.completed_at!.getTime()).toBe(detailDelay);
     },

@@ -21,6 +21,18 @@ type RunRetentionClassForCreationInput = {
   getAncestorRetentionClass?: (runId: string) => Promise<RunRetentionClass | undefined>;
 };
 
+export type RunRetentionIdentity = {
+  retentionClass: RunRetentionClass;
+  retentionRootRunId: string;
+};
+
+type RunRetentionForCreationInput = {
+  runId: string;
+  retentionClass?: string;
+  attributes?: Record<string, string>;
+  getAncestorRetention?: (runId: string) => Promise<RunRetentionIdentity | undefined>;
+};
+
 export function withRunRetentionIntent<T>(
   retentionClass: RunRetentionClass,
   operation: () => T,
@@ -55,6 +67,34 @@ export async function resolveRunRetentionClassForCreation(
   if (ambientIntent !== undefined) return ambientIntent.retentionClass;
 
   return "interactive";
+}
+
+export async function resolveRunRetentionForCreation(
+  input: RunRetentionForCreationInput,
+): Promise<RunRetentionIdentity> {
+  const rootRunId = input.attributes?.[ROOT_RUN_ID_ATTRIBUTE];
+  const parentRunId = input.attributes?.[PARENT_RUN_ID_ATTRIBUTE];
+  const ancestors = new Map<string, RunRetentionIdentity>();
+
+  if (input.getAncestorRetention !== undefined) {
+    for (const runId of new Set([rootRunId, parentRunId])) {
+      if (runId === undefined) continue;
+      const ancestor = await input.getAncestorRetention(runId);
+      if (ancestor !== undefined) ancestors.set(runId, ancestor);
+    }
+  }
+
+  const retentionClass = await resolveRunRetentionClassForCreation({
+    retentionClass: input.retentionClass,
+    attributes: input.attributes,
+    getAncestorRetentionClass: async (runId) => ancestors.get(runId)?.retentionClass,
+  });
+  const ancestor = [...ancestors.values()][0];
+
+  return {
+    retentionClass,
+    retentionRootRunId: ancestor?.retentionRootRunId ?? rootRunId ?? parentRunId ?? input.runId,
+  };
 }
 
 function getRunRetentionContext(): AsyncLocalStorage<RunRetentionIntent> {
