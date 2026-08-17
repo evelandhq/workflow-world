@@ -5,7 +5,6 @@
 
 ### Fixes
 
-* recover stranded dispatcher queue locks ([a4bfc7a](https://github.com/evelandhq/workflow-world/commit/a4bfc7af097be8e42847d1b9780d00d7600cd1da))
 * recover stranded dispatcher queue locks ([a56624f](https://github.com/evelandhq/workflow-world/commit/a56624f1833153d4407d8074568c06f9a84450ec))
 
 ## [0.8.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.7.1...workflow-world-v0.8.0) (2026-08-17)
