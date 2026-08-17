@@ -76,11 +76,13 @@ import {
   asc,
   desc,
   eq,
+  exists,
   gt,
   inArray,
   isNull,
   lt,
   lte,
+  notExists,
   notInArray,
   or,
   type SQL,
@@ -657,6 +659,16 @@ export function createEventsStorage(
    */
   const runQueueNamespace = queueNamespace ?? "";
   const hookRetentionLimitMs = getHookRetentionLimitMs();
+  const ownerRunIsTerminal = drizzle
+    .select({ runId: Schema.runs.runId })
+    .from(Schema.runs)
+    .where(
+      and(
+        eq(Schema.runs.tenantId, tenantId),
+        eq(Schema.runs.runId, Schema.hooks.runId),
+        inArray(Schema.runs.status, TERMINAL_WORKFLOW_RUN_STATUSES),
+      ),
+    );
   /**
    * A hook is only collectable once its retention has lapsed. NULL means the
    * caller never asked for any, which is the overwhelming majority.
@@ -700,7 +712,11 @@ export function createEventsStorage(
     .select({ hookId: Schema.hooks.hookId, runId: Schema.hooks.runId })
     .from(Schema.hooks)
     .where(
-      and(eq(Schema.hooks.tenantId, tenantId), eq(Schema.hooks.token, sql.placeholder("token"))),
+      and(
+        eq(Schema.hooks.tenantId, tenantId),
+        eq(Schema.hooks.token, sql.placeholder("token")),
+        or(gt(Schema.hooks.tokenRetentionUntil, sql`now()`), notExists(ownerRunIsTerminal)),
+      ),
     )
     .limit(1)
     .prepare("events_get_hook_by_token");
@@ -836,6 +852,7 @@ export function createEventsStorage(
             executionContext?: Record<string, any>;
             attributes?: Record<string, string>;
             allowReservedAttributes?: true;
+            encryptionPublicKey?: string;
           };
           if (
             runInputData.deploymentId &&
@@ -866,6 +883,7 @@ export function createEventsStorage(
                 // type level, so the value is passed through unchanged.
                 executionContext: runInputData.executionContext,
                 attributes: runInputData.attributes,
+                encryptionPublicKey: runInputData.encryptionPublicKey,
                 status: "pending",
                 queueNamespace: runQueueNamespace,
               })
@@ -886,6 +904,7 @@ export function createEventsStorage(
                   executionContext: runInputData.executionContext,
                   attributes: runInputData.attributes,
                   allowReservedAttributes: runInputData.allowReservedAttributes,
+                  encryptionPublicKey: runInputData.encryptionPublicKey,
                 },
                 specVersion: effectiveSpecVersion,
               });
@@ -1108,6 +1127,7 @@ export function createEventsStorage(
           executionContext?: Record<string, any>;
           attributes?: Record<string, string>;
           allowReservedAttributes?: true;
+          encryptionPublicKey?: string;
         };
         validateAttributeChanges(
           Object.entries(eventData.attributes ?? {}).map(([key, value]) => ({
@@ -1132,6 +1152,7 @@ export function createEventsStorage(
             // to an array type is wrong for a keyed object column.
             executionContext: eventData.executionContext,
             attributes: eventData.attributes,
+            encryptionPublicKey: eventData.encryptionPublicKey,
             status: "pending",
             queueNamespace: runQueueNamespace,
           })
@@ -1886,6 +1907,16 @@ export function createEventsStorage(
             };
           }
         } else {
+          await drizzle
+            .delete(Schema.hooks)
+            .where(
+              and(
+                eq(Schema.hooks.tenantId, tenantId),
+                eq(Schema.hooks.token, eventData.token),
+                exists(ownerRunIsTerminal),
+                hookRetentionEnded,
+              ),
+            );
           const [hookValue] = await drizzle
             .insert(Schema.hooks)
             .values({
@@ -2309,7 +2340,7 @@ export function createEventsStorage(
 }
 
 export function createHooksStorage(drizzle: Drizzle, tenantId: string): Storage["hooks"] {
-  const { hooks } = Schema;
+  const { hooks, runs } = Schema;
   /**
    * A token resolves while its retention is still in the future, even though the
    * owning run has finished — that is what retention is for. Without the
@@ -2319,10 +2350,27 @@ export function createHooksStorage(drizzle: Drizzle, tenantId: string): Storage[
    * Scoped by tenant as well as token: guessing another tenant's token resolves
    * to nothing rather than to their hook.
    */
+  const ownerRunIsTerminal = drizzle
+    .select({ runId: runs.runId })
+    .from(runs)
+    .where(
+      and(
+        eq(runs.tenantId, tenantId),
+        eq(runs.runId, hooks.runId),
+        inArray(runs.status, TERMINAL_WORKFLOW_RUN_STATUSES),
+      ),
+    );
+  const available = or(gt(hooks.tokenRetentionUntil, sql`now()`), notExists(ownerRunIsTerminal));
   const getByToken = drizzle
     .select()
     .from(hooks)
-    .where(and(eq(Schema.hooks.tenantId, tenantId), eq(hooks.token, sql.placeholder("token"))))
+    .where(
+      and(
+        eq(Schema.hooks.tenantId, tenantId),
+        eq(hooks.token, sql.placeholder("token")),
+        available,
+      ),
+    )
     .limit(1)
     .prepare("workflow_hooks_get_by_token");
 
@@ -2331,7 +2379,7 @@ export function createHooksStorage(drizzle: Drizzle, tenantId: string): Storage[
       const [value] = await drizzle
         .select()
         .from(hooks)
-        .where(and(eq(Schema.hooks.tenantId, tenantId), eq(hooks.hookId, hookId)))
+        .where(and(eq(Schema.hooks.tenantId, tenantId), eq(hooks.hookId, hookId), available))
         .limit(1);
       // Upstream dereferences this row unguarded, so a missing hook surfaces as
       // a TypeError instead of the documented error. `getByToken` directly
@@ -2368,6 +2416,7 @@ export function createHooksStorage(drizzle: Drizzle, tenantId: string): Storage[
         .where(
           and(
             eq(Schema.hooks.tenantId, tenantId),
+            available,
             map(params.runId, (id) => eq(hooks.runId, id)),
             map(fromCursor, (c) => cursorFn(hooks.hookId, c)),
           ),

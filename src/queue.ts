@@ -1,7 +1,7 @@
 /**
  * Multi-tenant port of `@workflow/world-postgres`'s queue.
  *
- * The graphile mapping is upstream's — same `jobKey`, same `maxAttempts: 3`,
+ * The graphile mapping is upstream's — same `jobKey`, same 49-attempt budget,
  * same reschedule semantics. What changes is who claims the work:
  *
  *   * `embedded` keeps the in-process runner, but its graphile job names are
@@ -55,6 +55,7 @@ import {
 } from "./dispatch-contract.js";
 import { MIGRATION_LOCK_KEY } from "./migrate.js";
 import { derivePartitionName } from "./tenant.js";
+import { MAX_GRAPHILE_JOB_ATTEMPTS } from "./queue-policy.js";
 
 /**
  * Structural stand-in for `@vercel/queue`'s `Transport`. Upstream imports the
@@ -86,6 +87,7 @@ function createGraphileLogger() {
 const graphileLogger = createGraphileLogger();
 const COMPLETED_IDEMPOTENCY_CACHE_LIMIT = 10_000;
 const GraphileHelpers = z.object({
+  abortSignal: z.instanceof(AbortSignal).optional(),
   job: z.object({
     attempts: z.number().int().positive(),
   }),
@@ -301,7 +303,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
         // Serializes concurrent deliveries for one run. Without it two claimed
         // jobs replay the same run's event log at the same time.
         ...(runId ? { queueName: runQueueName(tenantId, runId) } : {}),
-        maxAttempts: 3,
+        maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
         // Read by the dispatcher's `forbiddenFlags` callback to throttle a
         // tenant that is already at its in-flight cap, without starving others.
         flags: [`project:${tenantId}`],
@@ -427,12 +429,14 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     attempt,
     body,
     headers: extraHeaders,
+    abortSignal,
   }: {
     queueName: ValidQueueName;
     messageId: MessageId;
     attempt: number;
     body: Uint8Array;
     headers?: Record<string, string>;
+    abortSignal?: AbortSignal;
   }): Promise<HttpExecutionResult> {
     const headers: Record<string, string> = {
       ...extraHeaders,
@@ -451,6 +455,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       duplex: "half",
       headers,
       body,
+      signal: abortSignal,
     } as any);
     const text = await response.text();
 
@@ -574,9 +579,9 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
   function createTaskHandler(queue: QueuePrefix) {
     return async (payload: unknown, helpers: unknown) => {
       const messageData = MessageData.parse(payload);
-      const graphileAttempt = GraphileHelpers.safeParse(helpers);
-      const attempt = graphileAttempt.success
-        ? graphileAttempt.data.job.attempts
+      const graphileHelpers = GraphileHelpers.safeParse(helpers);
+      const attempt = graphileHelpers.success
+        ? graphileHelpers.data.job.attempts
         : messageData.attempt;
       const queueName = `${queue}${messageData.id}` as ValidQueueName;
       const bodyStream = Stream.Readable.toWeb(Stream.Readable.from([messageData.data]));
@@ -596,6 +601,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
           attempt,
           body: messageData.data,
           headers: messageData.headers,
+          abortSignal: graphileHelpers.success ? graphileHelpers.data.abortSignal : undefined,
         });
 
         if (result.type === "completed") {

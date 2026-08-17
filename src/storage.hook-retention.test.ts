@@ -161,6 +161,44 @@ describe.skipIf(!testUrl)("hook token retention", () => {
     expect(found.hookId).toBe(hookId);
   });
 
+  it("hides an expired retained hook from every read API", async () => {
+    const runId = await startRun();
+    const token = `tok_${ulid()}`;
+    const hookId = await createHook(runId, token, new Date(Date.now() + 60_000));
+    await completeRun(runId);
+    await drizzle
+      .update(Schema.hooks)
+      .set({ tokenRetentionUntil: new Date(Date.now() - 1_000) })
+      .where(and(eq(Schema.hooks.tenantId, TENANT), eq(Schema.hooks.hookId, hookId)));
+
+    await expect(hooks.get(hookId)).rejects.toMatchObject({ name: "HookNotFoundError" });
+    await expect(hooks.getByToken(token)).rejects.toMatchObject({ name: "HookNotFoundError" });
+    await expect(hooks.list({ runId })).resolves.toMatchObject({ data: [] });
+  });
+
+  it("reclaims an expired retained token when a new hook uses it", async () => {
+    const oldRunId = await startRun();
+    const token = `tok_${ulid()}`;
+    const oldHookId = await createHook(oldRunId, token, new Date(Date.now() + 60_000));
+    await completeRun(oldRunId);
+    await drizzle
+      .update(Schema.hooks)
+      .set({ tokenRetentionUntil: new Date(Date.now() - 1_000) })
+      .where(and(eq(Schema.hooks.tenantId, TENANT), eq(Schema.hooks.hookId, oldHookId)));
+
+    const newRunId = await startRun();
+    const newHookId = `whk_${ulid()}`;
+    const result = await events.create(newRunId, {
+      eventType: "hook_created",
+      correlationId: newHookId,
+      eventData: { token },
+    } as Parameters<EventsStorage["create"]>[1]);
+
+    expect(result.event?.eventType).toBe("hook_created");
+    await expect(hooks.getByToken(token)).resolves.toMatchObject({ hookId: newHookId });
+    expect(await hookRowCount(oldHookId)).toBe(0);
+  });
+
   it("refuses a retention beyond the configured limit rather than clamping it", async () => {
     // Clamping silently would leave the caller believing its token was reserved
     // for far longer than it is.
