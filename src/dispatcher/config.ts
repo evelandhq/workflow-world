@@ -88,21 +88,22 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
   }
 
   // The pool is the authority, not the concurrency. graphile takes one pooled
-  // connection per running job plus one held permanently for LISTEN, so a
-  // concurrency above `poolSize - 1` cannot actually be served — upstream's
+  // connection per running job, one held permanently for LISTEN, and one held
+  // for the dispatcher's lifecycle advisory lock, so a concurrency above
+  // `poolSize - 2` cannot actually be served — upstream's
   // 10-and-50 pairing makes graphile warn on every boot and, worse, puts the
   // shared database's connection count out of the operator's hands. This is the
   // database every tenant now shares, so the bound has to be the explicit one.
   const poolSize = positiveNumber(env.WORKFLOW_DISPATCHER_POOL_SIZE, 10);
   const concurrency = positiveNumber(
     env.WORKFLOW_DISPATCHER_CONCURRENCY,
-    Math.max(1, poolSize - 1),
+    Math.max(1, poolSize - 2),
   );
-  if (concurrency >= poolSize) {
+  if (concurrency > poolSize - 2) {
     throw new Error(
-      `WORKFLOW_DISPATCHER_CONCURRENCY (${String(concurrency)}) must be below ` +
-        `WORKFLOW_DISPATCHER_POOL_SIZE (${String(poolSize)}): graphile holds one pooled connection ` +
-        `for LISTEN on top of one per running job, so the extra jobs would queue on the pool instead of running.`,
+      `WORKFLOW_DISPATCHER_CONCURRENCY (${String(concurrency)}) must leave two connections in ` +
+        `WORKFLOW_DISPATCHER_POOL_SIZE (${String(poolSize)}): one for dispatcher ownership and one ` +
+        `for Graphile LISTEN, on top of one per running job.`,
     );
   }
 

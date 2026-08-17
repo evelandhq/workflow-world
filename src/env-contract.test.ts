@@ -114,6 +114,29 @@ describe("shared environment contract", () => {
     });
   });
 
+  describe("dispatcher connection budget", () => {
+    test("reserves one connection each for ownership and Graphile LISTEN", () => {
+      const config = resolveDispatcherConfig({
+        ...baseDispatcherEnv,
+        WORKFLOW_WORLD_URL: "postgres://host/shared",
+        WORKFLOW_DISPATCHER_POOL_SIZE: "10",
+      });
+
+      expect(config.concurrency).toBe(8);
+    });
+
+    test("rejects explicit concurrency that consumes the ownership slot", () => {
+      expect(() =>
+        resolveDispatcherConfig({
+          ...baseDispatcherEnv,
+          WORKFLOW_WORLD_URL: "postgres://host/shared",
+          WORKFLOW_DISPATCHER_POOL_SIZE: "10",
+          WORKFLOW_DISPATCHER_CONCURRENCY: "9",
+        }),
+      ).toThrow(/ownership/i);
+    });
+  });
+
   describe("storage maintenance", () => {
     test("defaults to a one-minute bounded maintenance loop", () => {
       const config = resolveDispatcherConfig({

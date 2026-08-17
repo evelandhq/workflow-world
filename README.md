@@ -98,8 +98,8 @@ honoured by only one end is a silent failure rather than a loud one.
 | `WORKFLOW_WORLD_BOOTSTRAP_URL`                        | —                  | override when the host and the containers reach one database by different hostnames                      |
 | `WORKFLOW_DISPATCHER_ACTIVATION_API_URL`              | —                  | the host's activation API. Required                                                                      |
 | `WORKFLOW_DISPATCHER_ACTIVATION_TOKEN`                | —                  | bearer token for it. Required unless `NODE_ENV=development`                                              |
-| `WORKFLOW_DISPATCHER_POOL_SIZE`                       | `10`               | the authority: graphile takes one connection per running job plus one held for LISTEN                    |
-| `WORKFLOW_DISPATCHER_CONCURRENCY`                     | `poolSize - 1`     | must be below the pool size, and is checked                                                              |
+| `WORKFLOW_DISPATCHER_POOL_SIZE`                       | `10`               | the authority: one connection per job, one for Graphile LISTEN, and one for dispatcher ownership         |
+| `WORKFLOW_DISPATCHER_CONCURRENCY`                     | `poolSize - 2`     | must leave the LISTEN and ownership slots free, and is checked                                           |
 | `WORKFLOW_DISPATCHER_POLL_INTERVAL_MS`                | `500`              |                                                                                                          |
 | `WORKFLOW_DISPATCHER_MAX_INFLIGHT_PER_TENANT`         | derived from cores | fairness ceiling, not a throttle                                                                         |
 | `WORKFLOW_DISPATCHER_DISPATCH_TIMEOUT_MS`             | `900000`           | a backstop against a wedged executor. Liveness is the lease renewal's job                                |
@@ -116,6 +116,15 @@ honoured by only one end is a silent failure rather than a loud one.
 The dispatcher binds no port. Readiness is the literal line
 `workflow-dispatcher: ready` on stdout — a stable contract, matched by supervisors
 and by the conformance harness.
+
+The current dispatcher is deliberately single-instance. On startup it holds a
+PostgreSQL advisory lock for its whole lifetime, reclaims only the old Graphile
+worker ids found on active runs' exact `wfrun:<tenant>:<run>` queues, re-enqueues
+those runs, and only then starts its worker pool and reports ready. A second
+dispatcher pointed at the same database fails closed instead of sharing claims.
+When first upgrading from a version that did not take this ownership lock, stop
+the old dispatcher before starting the new one; the new lock cannot fence a
+binary that never participates in it.
 
 An exhausted or terminal dispatch is written to `workflow.dispatch_dead_letters`.
 While that row is unresolved, the still-active workflow run is quarantined from
