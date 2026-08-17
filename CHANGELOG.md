@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.7.0...workflow-world-v0.7.1) (2026-08-17)
+
+
+### Fixes
+
+* quarantine unresolved dispatch dead letters ([#26](https://github.com/evelandhq/workflow-world/issues/26)) ([d2e1007](https://github.com/evelandhq/workflow-world/commit/d2e1007864ee02c9602ebe43df86cf0f6874e918))
+
 ## [0.7.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.6.0...workflow-world-v0.7.0) (2026-08-17)
 
 
