@@ -5,7 +5,8 @@
 -- have succeeded is an operator problem rather than a workflow outcome, so the
 -- message is preserved verbatim and can be replayed by hand once the cause is
 -- fixed — rather than being turned into a `run_failed` event the workflow author
--- would have to interpret.
+-- would have to interpret. While unresolved, a row also quarantines its active
+-- run from boot recovery; setting resolved_at makes it eligible again.
 create table if not exists workflow.dispatch_dead_letters (
   id bigserial primary key,
   tenant_id varchar not null,
