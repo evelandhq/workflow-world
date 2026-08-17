@@ -80,6 +80,28 @@ export async function pruneTerminalStreamChunks(
               and runs.status in ('completed', 'failed', 'cancelled')
               and coalesce(runs.completed_at, runs.updated_at)
                     < now() - ($1::bigint * interval '1 millisecond')
+              and not exists (
+                select 1
+                  from workflow.workflow_runs as lineage
+                 where lineage.tenant_id = runs.tenant_id
+                   and lineage.retention_root_run_id = runs.retention_root_run_id
+                   and (
+                     lineage.status not in ('completed', 'failed', 'cancelled')
+                     or lineage.retention_class = 'persistent'
+                     or coalesce(lineage.completed_at, lineage.updated_at)
+                          >= now() - ($1::bigint * interval '1 millisecond')
+                   )
+              )
+              and not exists (
+                select 1
+                  from workflow.workflow_hooks as capabilities
+                  join workflow.workflow_runs as owners
+                    on owners.tenant_id = capabilities.tenant_id
+                   and owners.id = capabilities.run_id
+                 where owners.tenant_id = runs.tenant_id
+                   and owners.retention_root_run_id = runs.retention_root_run_id
+                   and capabilities.token_retention_until > now()
+              )
             order by coalesce(runs.completed_at, runs.updated_at),
                      chunks.tenant_id,
                      chunks.stream_id,
@@ -155,6 +177,28 @@ export async function pruneExpiredStreamChunks(
               and runs.status in ('completed', 'failed', 'cancelled')
               and runs.expire_after is not null
               and runs.expire_after <= now()
+              and not exists (
+                select 1
+                  from workflow.workflow_runs as lineage
+                 where lineage.tenant_id = runs.tenant_id
+                   and lineage.retention_root_run_id = runs.retention_root_run_id
+                   and (
+                     lineage.status not in ('completed', 'failed', 'cancelled')
+                     or lineage.retention_class = 'persistent'
+                     or lineage.expire_after is null
+                     or lineage.expire_after > now()
+                   )
+              )
+              and not exists (
+                select 1
+                  from workflow.workflow_hooks as capabilities
+                  join workflow.workflow_runs as owners
+                    on owners.tenant_id = capabilities.tenant_id
+                   and owners.id = capabilities.run_id
+                 where owners.tenant_id = runs.tenant_id
+                   and owners.retention_root_run_id = runs.retention_root_run_id
+                   and capabilities.token_retention_until > now()
+              )
             order by runs.expire_after,
                      chunks.tenant_id,
                      chunks.stream_id,
@@ -226,6 +270,28 @@ export async function pruneExpiredWorkflowRuns(
             where status in ('completed', 'failed', 'cancelled')
               and detail_expire_after is not null
               and detail_expire_after <= now()
+              and not exists (
+                select 1
+                  from workflow.workflow_runs as lineage
+                 where lineage.tenant_id = workflow_runs.tenant_id
+                   and lineage.retention_root_run_id = workflow_runs.retention_root_run_id
+                   and (
+                     lineage.status not in ('completed', 'failed', 'cancelled')
+                     or lineage.retention_class = 'persistent'
+                     or lineage.detail_expire_after is null
+                     or lineage.detail_expire_after > now()
+                   )
+              )
+              and not exists (
+                select 1
+                  from workflow.workflow_hooks as capabilities
+                  join workflow.workflow_runs as owners
+                    on owners.tenant_id = capabilities.tenant_id
+                   and owners.id = capabilities.run_id
+                 where owners.tenant_id = workflow_runs.tenant_id
+                   and owners.retention_root_run_id = workflow_runs.retention_root_run_id
+                   and capabilities.token_retention_until > now()
+              )
             order by detail_expire_after, tenant_id, id
             limit $1
             for update skip locked`,
@@ -245,12 +311,7 @@ export async function pruneExpiredWorkflowRuns(
             { table: "workflow_events", extraPredicate: "" },
             { table: "workflow_event_slots", extraPredicate: "" },
             { table: "workflow_steps", extraPredicate: "" },
-            {
-              table: "workflow_hooks",
-              // A requested token reservation can intentionally outlive its run.
-              extraPredicate:
-                "and (rows.token_retention_until is null or rows.token_retention_until <= now())",
-            },
+            { table: "workflow_hooks", extraPredicate: "" },
             { table: "workflow_waits", extraPredicate: "" },
           ]) {
             await client.query(
@@ -346,7 +407,29 @@ async function deleteExpiredCheckpoints(client: {
         and runs.id = checkpoints.run_id
         and runs.status in ('completed', 'failed', 'cancelled')
         and runs.expire_after is not null
-        and runs.expire_after <= now()`,
+        and runs.expire_after <= now()
+        and not exists (
+          select 1
+            from workflow.workflow_runs as lineage
+           where lineage.tenant_id = runs.tenant_id
+             and lineage.retention_root_run_id = runs.retention_root_run_id
+             and (
+               lineage.status not in ('completed', 'failed', 'cancelled')
+               or lineage.retention_class = 'persistent'
+               or lineage.expire_after is null
+               or lineage.expire_after > now()
+             )
+        )
+        and not exists (
+          select 1
+            from workflow.workflow_hooks as capabilities
+            join workflow.workflow_runs as owners
+              on owners.tenant_id = capabilities.tenant_id
+             and owners.id = capabilities.run_id
+           where owners.tenant_id = runs.tenant_id
+             and owners.retention_root_run_id = runs.retention_root_run_id
+             and capabilities.token_retention_until > now()
+        )`,
   );
 }
 
@@ -361,7 +444,29 @@ async function deleteTerminalCheckpointsByAge(
         and runs.id = checkpoints.run_id
         and runs.status in ('completed', 'failed', 'cancelled')
         and coalesce(runs.completed_at, runs.updated_at)
-              < now() - ($1::bigint * interval '1 millisecond')`,
+              < now() - ($1::bigint * interval '1 millisecond')
+        and not exists (
+          select 1
+            from workflow.workflow_runs as lineage
+           where lineage.tenant_id = runs.tenant_id
+             and lineage.retention_root_run_id = runs.retention_root_run_id
+             and (
+               lineage.status not in ('completed', 'failed', 'cancelled')
+               or lineage.retention_class = 'persistent'
+               or coalesce(lineage.completed_at, lineage.updated_at)
+                    >= now() - ($1::bigint * interval '1 millisecond')
+             )
+        )
+        and not exists (
+          select 1
+            from workflow.workflow_hooks as capabilities
+            join workflow.workflow_runs as owners
+              on owners.tenant_id = capabilities.tenant_id
+             and owners.id = capabilities.run_id
+           where owners.tenant_id = runs.tenant_id
+             and owners.retention_root_run_id = runs.retention_root_run_id
+             and capabilities.token_retention_until > now()
+        )`,
     [retentionMs],
   );
 }

@@ -25,8 +25,12 @@ describe("stream storage v2 schema", () => {
 
   test("runs carry explicit maintenance deadlines", () => {
     expect(Schema.runs.retentionClass.name).toBe("retention_class");
+    expect(Schema.runs.retentionRootRunId.name).toBe("retention_root_run_id");
     expect(Schema.runs.compactAfter.name).toBe("compact_after");
     expect(Schema.runs.expireAfter.name).toBe("expire_after");
     expect(Schema.runs.detailExpireAfter.name).toBe("detail_expire_after");
+    expect(getTableConfig(Schema.runs).indexes.map((candidate) => candidate.config.name)).toContain(
+      "workflow_runs_retention_lineage_index",
+    );
   });
 });

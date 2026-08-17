@@ -162,11 +162,13 @@ existing cursor.
 
 Every run has one internal retention class:
 
-| class                     | compact after | expire non-EOF stream data | expire workflow graph |
-| ------------------------- | ------------: | -------------------------: | --------------------: |
-| `scheduled` / `ephemeral` |      1 minute |                 15 minutes |                7 days |
-| `interactive` (default)   |     5 minutes |                   24 hours |               30 days |
-| `persistent`              |         never |                      never |                 never |
+| class / outcome                      | compact after | expire non-EOF stream data | expire workflow graph |
+| ------------------------------------ | ------------: | -------------------------: | --------------------: |
+| `scheduled` / `ephemeral`, completed |      1 minute |                 15 minutes |              24 hours |
+| `scheduled` / `ephemeral`, failed    |      1 minute |                     1 hour |                7 days |
+| `scheduled` / `ephemeral`, cancelled |      1 minute |                     1 hour |                3 days |
+| `interactive` (default), any outcome |     5 minutes |                   24 hours |               30 days |
+| `persistent`                         |         never |                      never |                 never |
 
 EOF rows survive both stream expiry and workflow-graph expiry, so an old stream
 still resolves as complete. Active or waiting runs have no deadlines. A database
@@ -180,13 +182,16 @@ invocation context, then the `interactive` default. Lineage is tenant-scoped and
 workflow-name agnostic, so Eve turn, timeout, task, subagent, and custom child
 workflows inherit the stored root class. A delivery to an existing session also
 uses that stored lineage; a new scheduled delivery cannot widen or shorten an
-existing conversation's policy. Unresolvable lineage is rejected instead of
-silently changing class.
+existing conversation's policy. The resolved root is materialized on every run
+for indexed graph-level maintenance. Unresolvable lineage is rejected instead
+of silently changing class.
 
 The dispatcher runs block packing, deadline-driven stream expiry, and full graph
 expiry once at startup and every minute. Each task is bounded, advisory-locked,
-non-overlapping, and failure-isolated. Retained hook tokens are not deleted before
-their own requested deadline.
+non-overlapping, and failure-isolated. A lineage remains ineligible while any
+member is active, has a later deadline, is persistent, or owns a hook token whose
+reservation has not expired. This protects terminal parents while background
+children, approvals, callbacks, or task-input capabilities remain live.
 
 The legacy caller-selected primitive remains available for hosts that do not run
 the dispatcher:
@@ -206,8 +211,9 @@ const result = await pruneTerminalStreamChunks(pool, {
 });
 ```
 
-Only non-EOF chunks whose run has been terminal for longer than the requested
-window are deleted. Runs, events and EOF markers remain. The operation uses a
+Only non-EOF chunks whose complete lineage has been terminal for longer than the
+requested window are deleted. Persistent members and unexpired hook capabilities
+hold the lineage. Runs, events and EOF markers remain. The operation uses a
 database advisory lock, so `lockAcquired: false` is a normal result when another
 host is already sweeping; `hitBatchLimit: true` means the bounded invocation may
 have left more eligible rows.

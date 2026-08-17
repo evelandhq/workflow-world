@@ -91,7 +91,7 @@ import {
 import { monotonicFactory } from "ulid";
 import { type Drizzle, Schema } from "./drizzle/index.js";
 import type { SerializedContent } from "./drizzle/schema.js";
-import { resolveRunRetentionClassForCreation } from "./run-retention-resolution.js";
+import { resolveRunRetentionForCreation } from "./run-retention-resolution.js";
 import { dedupIndexName } from "./tenant.js";
 import { compact } from "./util.js";
 
@@ -692,22 +692,27 @@ export function createEventsStorage(
     .limit(1)
     .prepare("events_get_run_for_validation");
 
-  const getAncestorRetentionClass = drizzle
-    .select({ retentionClass: Schema.runs.retentionClass })
+  const getAncestorRetention = drizzle
+    .select({
+      retentionClass: Schema.runs.retentionClass,
+      retentionRootRunId: Schema.runs.retentionRootRunId,
+    })
     .from(Schema.runs)
     .where(and(eq(Schema.runs.tenantId, tenantId), eq(Schema.runs.runId, sql.placeholder("runId"))))
     .limit(1)
-    .prepare("events_get_ancestor_retention_class");
+    .prepare("events_get_ancestor_retention");
 
-  const resolveCreationRetentionClass = (
+  const resolveCreationRetention = (
+    runId: string,
     retentionClass: string | undefined,
     attributes: Record<string, string> | undefined,
   ) =>
-    resolveRunRetentionClassForCreation({
+    resolveRunRetentionForCreation({
+      runId,
       retentionClass,
       attributes,
-      getAncestorRetentionClass: async (runId) =>
-        (await getAncestorRetentionClass.execute({ runId }))[0]?.retentionClass,
+      getAncestorRetention: async (ancestorRunId) =>
+        (await getAncestorRetention.execute({ runId: ancestorRunId }))[0],
     });
 
   const getStepForValidation = drizzle
@@ -885,7 +890,8 @@ export function createEventsStorage(
                 allowReservedAttributes: runInputData.allowReservedAttributes === true,
               },
             );
-            const retentionClass = await resolveCreationRetentionClass(
+            const { retentionClass, retentionRootRunId } = await resolveCreationRetention(
+              effectiveRunId,
               runInputData.retentionClass,
               runInputData.attributes,
             );
@@ -911,6 +917,7 @@ export function createEventsStorage(
                 status: "pending",
                 queueNamespace: runQueueNamespace,
                 retentionClass,
+                retentionRootRunId,
               })
               .onConflictDoNothing()
               .returning();
@@ -1165,7 +1172,8 @@ export function createEventsStorage(
             allowReservedAttributes: eventData.allowReservedAttributes === true,
           },
         );
-        const retentionClass = await resolveCreationRetentionClass(
+        const { retentionClass, retentionRootRunId } = await resolveCreationRetention(
+          effectiveRunId,
           eventData.retentionClass,
           eventData.attributes,
         );
@@ -1187,6 +1195,7 @@ export function createEventsStorage(
             status: "pending",
             queueNamespace: runQueueNamespace,
             retentionClass,
+            retentionRootRunId,
           })
           .onConflictDoNothing()
           .returning();

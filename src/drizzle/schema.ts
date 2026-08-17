@@ -122,6 +122,7 @@ export const runs = schema.table(
       .$type<RunRetentionClass>()
       .default("interactive")
       .notNull(),
+    retentionRootRunId: varchar("retention_root_run_id").notNull(),
     compactAfter: timestamp("compact_after"),
     expireAfter: timestamp("expire_after"),
     detailExpireAfter: timestamp("detail_expire_after"),
@@ -131,6 +132,11 @@ export const runs = schema.table(
     index("workflow_runs_name_index").on(tb.workflowName),
     index("workflow_runs_tenant_status_index").on(tb.tenantId, tb.status),
     index("workflow_runs_tenant_created_index").on(tb.tenantId, tb.createdAt),
+    index("workflow_runs_retention_lineage_index").on(
+      tb.tenantId,
+      tb.retentionRootRunId,
+      tb.status,
+    ),
     index("workflow_runs_compact_after_index").on(tb.compactAfter, tb.tenantId, tb.runId),
     index("workflow_runs_expire_after_index").on(tb.expireAfter, tb.tenantId, tb.runId),
     index("workflow_runs_detail_expire_after_index").on(
