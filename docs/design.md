@@ -499,17 +499,24 @@ ordering later without re-checking that assumption.
 | failure                         | what happens                             | recovered by                             |
 | ------------------------------- | ---------------------------------------- | ---------------------------------------- |
 | agent crashes mid-step          | held POST fails → job fails              | graphile retry, then re-activation       |
-| dispatcher crashes mid-POST     | the job stays locked to a dead worker    | boot recovery's run-keyed re-enqueue     |
+| dispatcher crashes mid-POST     | job and per-run queue stay locked        | ownership-gated unlock + re-enqueue      |
 | deployment archived or failed   | activation is not-activatable → terminal | should be unreachable; alarms            |
 | deployment unavailable or cold  | activation unavailable → retry           | graphile retry                           |
 | lease lapses during a long step | executor reaped mid-step                 | **prevented** by renewal, not recovered  |
 | `maxAttempts` exhausted         | graphile stops retrying                  | dead-letter quarantine + operator action |
 | duplicate enqueue               | job key dedupes at enqueue               | by construction                          |
 
-Boot recovery is a **run-keyed re-enqueue**, which supersedes a job locked to a
-dead worker rather than waiting for its lock to time out. Reaching into graphile
-to force-unlock a previous generation's workers is not a viable alternative:
-graphile mints its own worker ids and will not accept an external one.
+Boot recovery runs before the worker pool starts and only while the service holds
+a lifecycle PostgreSQL advisory lock. It joins active runs to their exact
+`wfrun:<tenant>:<run>` queue rows, collects the old random `locked_by` values,
+passes those ids to Graphile's `forceUnlockWorkers`, and then performs the
+run-keyed re-enqueue. A job key alone cannot recover the run: it deduplicates or
+replaces a job but does not clear `_private_job_queues.locked_by`, whose stale
+threshold is four hours.
+
+The order is a correctness boundary: ownership, unlock, re-enqueue, worker pool,
+ready. Unlocking after the new pool starts could clear a lock belonging to the
+new generation.
 
 ### Dead letters
 
@@ -576,8 +583,10 @@ Named because each is a plausible next step and each has a reason to wait.
 - **HTTP storage.** Agents reaching zero Postgres connections is both the true
   tenant boundary and the full payoff of a single pool. It replaces WHERE-clause
   discipline with a boundary that cannot be forgotten.
-- **Multi-machine dispatcher replicas.** The claim design is already replica-safe
-  and must stay that way: no in-memory claim state, ever.
+- **Multi-machine dispatcher replicas.** The current lifecycle advisory lock is
+  intentionally single-owner. Replicas require durable generation heartbeats,
+  worker-id-to-generation registration, expiry-aware unlock, and a per-run fence
+  before this guard can be relaxed; no in-memory claim state may become authoritative.
 - **Row-level security and `SET ROLE`.** Hardening on top of the tenant
   predicate, not a replacement for it.
 - **At-rest payload encryption**, through `getEncryptionKeyForRun`.

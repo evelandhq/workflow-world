@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { Pool } from "pg";
+import { makeWorkerUtils, type WorkerUtils } from "graphile-worker";
+import { Pool, type PoolClient } from "pg";
 import { runMigrations } from "../migrate.js";
 import { startStorageMaintenanceLoop } from "../storage-maintenance.js";
 import { createActivationClient, type ActivationClient } from "./activation-client.js";
-import { reenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
+import { reclaimAndReenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
 import { resolveDispatcherConfig, type DispatcherConfiguration } from "./config.js";
 import { consoleTelemetry, type DispatcherTelemetry } from "./observability.js";
 import { startDispatcher, type DispatcherRuntime } from "./runner.js";
 import { resolveDispatchRuntimeSecret, resolveSecretWithDevFallback } from "./secrets.js";
+
+const DISPATCHER_OWNERSHIP_LOCK_KEY = 0x65_76_64_70; // "evdp"
 
 /**
  * The whole service as a function, so the CLI is a three-line wrapper and a test
@@ -56,102 +59,174 @@ export async function startDispatcherService(
     application_name: `workflow-dispatcher-${randomUUID().slice(0, 8)}`,
   });
 
-  await runMigrations(pool, {
-    log: (message) =>
-      telemetry.emit({
-        severity: "info",
-        eventName: "workflow_dispatcher.migrate",
-        body: message,
-      }),
-  });
+  // Session-scoped and held on a checked-out client until shutdown. This must
+  // precede migrations and recovery: once a generation reaches either, no
+  // other participating dispatcher may still be working against this database.
+  let ownershipClient: PoolClient;
+  try {
+    ownershipClient = await pool.connect();
+  } catch (error) {
+    await pool.end().catch(() => {});
+    throw error;
+  }
+  let ownership;
+  try {
+    ownership = await ownershipClient.query<{ locked: boolean }>(
+      "select pg_try_advisory_lock($1) as locked",
+      [DISPATCHER_OWNERSHIP_LOCK_KEY],
+    );
+  } catch (error) {
+    ownershipClient.release();
+    await pool.end().catch(() => {});
+    throw error;
+  }
+  if (ownership.rows[0]?.locked !== true) {
+    ownershipClient.release();
+    await pool.end().catch(() => {});
+    throw new Error("Another workflow dispatcher already owns this database.");
+  }
 
-  const runtime = await startDispatcher({
-    pool,
-    config: {
-      concurrency: config.concurrency,
-      pollIntervalMs: config.pollIntervalMs,
-      maxInFlightPerTenant: config.maxInFlightPerTenant,
-      queueGcIntervalMs: config.queueGcIntervalMs,
-    },
-    deps: {
-      activation,
-      runtimeSecret,
-      dispatchTimeoutMs: config.dispatchTimeoutMs,
-      leaseRenewIntervalMs: config.leaseRenewIntervalMs,
-      activationLeaseTtlMs: config.activationLeaseTtlMs,
+  let ownershipReleased = false;
+  const releaseOwnership = async () => {
+    if (ownershipReleased) return;
+    ownershipReleased = true;
+    await ownershipClient
+      .query("select pg_advisory_unlock($1)", [DISPATCHER_OWNERSHIP_LOCK_KEY])
+      .catch(() => {});
+    ownershipClient.release();
+  };
+
+  let workerUtils: WorkerUtils | undefined;
+  let runtime: DispatcherRuntime | undefined;
+  try {
+    await runMigrations(pool, {
+      log: (message) =>
+        telemetry.emit({
+          severity: "info",
+          eventName: "workflow_dispatcher.migrate",
+          body: message,
+        }),
+    });
+
+    workerUtils = await makeWorkerUtils({ pgPool: pool });
+
+    await reclaimAndReenqueueActiveRunsForAllTenants({
+      pool,
+      workerUtils,
       log: (message, meta) =>
         telemetry.emit({
           severity: "info",
-          eventName: "workflow_dispatcher.event",
+          eventName: "workflow_dispatcher.boot_recovery",
           body: message,
           attributes: (meta ?? {}) as Record<string, string | number | boolean>,
         }),
-    },
-  });
+    });
 
-  await reenqueueActiveRunsForAllTenants({
-    pool,
-    workerUtils: runtime.workerUtils,
-    log: (message, meta) =>
-      telemetry.emit({
-        severity: "info",
-        eventName: "workflow_dispatcher.boot_recovery",
-        body: message,
-        attributes: (meta ?? {}) as Record<string, string | number | boolean>,
-      }),
-  });
-
-  const maintenance = startStorageMaintenanceLoop(pool, {
-    intervalMs: config.maintenanceIntervalMs,
-    maintenance: {
-      streamBatchSize: config.maintenanceStreamBatchSize,
-      maxBatches: config.maintenanceMaxBatches,
-      maxStreamsToPack: config.maintenanceMaxStreamsToPack,
-      runBatchSize: config.maintenanceRunBatchSize,
-      compactSnapshots: config.maintenanceCompactSnapshots,
-    },
-    onResult: (result) => {
-      for (const [role, outcome] of Object.entries(result)) {
-        if (outcome.status === "rejected") {
+    const startedRuntime = await startDispatcher({
+      pool,
+      workerUtils,
+      config: {
+        concurrency: config.concurrency,
+        pollIntervalMs: config.pollIntervalMs,
+        maxInFlightPerTenant: config.maxInFlightPerTenant,
+        queueGcIntervalMs: config.queueGcIntervalMs,
+      },
+      deps: {
+        activation,
+        runtimeSecret,
+        dispatchTimeoutMs: config.dispatchTimeoutMs,
+        leaseRenewIntervalMs: config.leaseRenewIntervalMs,
+        activationLeaseTtlMs: config.activationLeaseTtlMs,
+        log: (message, meta) =>
           telemetry.emit({
-            severity: "error",
-            eventName: "workflow_dispatcher.storage_maintenance",
-            body: `${role} maintenance failed`,
-            attributes: { role, error: String(outcome.reason) },
-          });
-          continue;
-        }
-        telemetry.emit({
-          severity: "info",
-          eventName: "workflow_dispatcher.storage_maintenance",
-          body: `${role} maintenance completed`,
-          attributes: {
-            role,
-            ...numericAndBooleanAttributes(outcome.value),
-          },
-        });
-      }
-    },
-    onError: (error) => {
-      telemetry.emit({
-        severity: "error",
-        eventName: "workflow_dispatcher.storage_maintenance",
-        body: "storage maintenance loop failed",
-        attributes: { error: String(error) },
-      });
-    },
-  });
+            severity: "info",
+            eventName: "workflow_dispatcher.event",
+            body: message,
+            attributes: (meta ?? {}) as Record<string, string | number | boolean>,
+          }),
+      },
+    });
+    runtime = startedRuntime;
 
-  return {
-    runtime,
-    config,
-    async stop() {
-      await maintenance.stop();
-      await runtime.stop();
-      await pool.end();
-      await telemetry.shutdown();
-    },
-  };
+    const maintenance = startStorageMaintenanceLoop(pool, {
+      intervalMs: config.maintenanceIntervalMs,
+      maintenance: {
+        streamBatchSize: config.maintenanceStreamBatchSize,
+        maxBatches: config.maintenanceMaxBatches,
+        maxStreamsToPack: config.maintenanceMaxStreamsToPack,
+        runBatchSize: config.maintenanceRunBatchSize,
+        compactSnapshots: config.maintenanceCompactSnapshots,
+      },
+      onResult: (result) => {
+        for (const [role, outcome] of Object.entries(result)) {
+          if (outcome.status === "rejected") {
+            telemetry.emit({
+              severity: "error",
+              eventName: "workflow_dispatcher.storage_maintenance",
+              body: `${role} maintenance failed`,
+              attributes: { role, error: String(outcome.reason) },
+            });
+            continue;
+          }
+          telemetry.emit({
+            severity: "info",
+            eventName: "workflow_dispatcher.storage_maintenance",
+            body: `${role} maintenance completed`,
+            attributes: {
+              role,
+              ...numericAndBooleanAttributes(outcome.value),
+            },
+          });
+        }
+      },
+      onError: (error) => {
+        telemetry.emit({
+          severity: "error",
+          eventName: "workflow_dispatcher.storage_maintenance",
+          body: "storage maintenance loop failed",
+          attributes: { error: String(error) },
+        });
+      },
+    });
+
+    return {
+      runtime: startedRuntime,
+      config,
+      async stop() {
+        const errors: unknown[] = [];
+        await collectCleanupError(errors, () => maintenance.stop());
+        await collectCleanupError(errors, () => startedRuntime.stop());
+        await collectCleanupError(errors, releaseOwnership);
+        await collectCleanupError(errors, () => pool.end());
+        await collectCleanupError(errors, () => telemetry.shutdown());
+        if (errors.length === 1) throw errors[0];
+        if (errors.length > 1) {
+          throw new AggregateError(errors, "Dispatcher shutdown failed.");
+        }
+      },
+    };
+  } catch (error) {
+    if (runtime) {
+      await runtime.stop().catch(() => {});
+    } else if (workerUtils) {
+      await Promise.resolve(workerUtils.release()).catch(() => {});
+    }
+    await releaseOwnership();
+    await pool.end().catch(() => {});
+    await telemetry.shutdown().catch(() => {});
+    throw error;
+  }
+}
+
+async function collectCleanupError(
+  errors: unknown[],
+  operation: () => void | Promise<void>,
+): Promise<void> {
+  try {
+    await operation();
+  } catch (error) {
+    errors.push(error);
+  }
 }
 
 function numericAndBooleanAttributes(value: unknown): Record<string, number | boolean> {

@@ -2,7 +2,10 @@ import { makeWorkerUtils, run, type Runner, type WorkerUtils } from "graphile-wo
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FLOW_JOB_NAME } from "../dispatch-contract.js";
 import { MessageData } from "../message.js";
-import { reenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
+import {
+  reclaimAndReenqueueActiveRunsForAllTenants,
+  reenqueueActiveRunsForAllTenants,
+} from "./boot-recovery.js";
 import { startDispatcher } from "./runner.js";
 
 vi.mock("graphile-worker", () => ({
@@ -14,6 +17,7 @@ describe("dispatcher queue retry policy", () => {
   const workerUtils = {
     addJob: vi.fn(async () => {}),
     cleanup: vi.fn(async () => {}),
+    forceUnlockWorkers: vi.fn(async () => {}),
     release: vi.fn(async () => {}),
   } as unknown as WorkerUtils;
   const runner = {
@@ -113,6 +117,52 @@ describe("dispatcher queue retry policy", () => {
     );
   });
 
+  it("unlocks the old workers holding active run queues before re-enqueueing", async () => {
+    const pool = {
+      query: vi.fn(async () => ({
+        rows: [
+          {
+            tenant_id: "tenant-1",
+            id: "wrun_1",
+            name: "greet",
+            deployment_id: "deployment-1",
+            queue_namespace: "",
+            locked_by: "worker-old-generation",
+          },
+        ],
+      })),
+    } as any;
+
+    await reclaimAndReenqueueActiveRunsForAllTenants({ pool, workerUtils });
+
+    expect(workerUtils.forceUnlockWorkers).toHaveBeenCalledWith(["worker-old-generation"]);
+    expect(vi.mocked(workerUtils.forceUnlockWorkers).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(workerUtils.addJob).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("does not unlock live workers when invoked as a standalone re-enqueue", async () => {
+    const pool = {
+      query: vi.fn(async () => ({
+        rows: [
+          {
+            tenant_id: "tenant-1",
+            id: "wrun_1",
+            name: "greet",
+            deployment_id: "deployment-1",
+            queue_namespace: "",
+            locked_by: "worker-current-generation",
+          },
+        ],
+      })),
+    } as any;
+
+    await reenqueueActiveRunsForAllTenants({ pool, workerUtils });
+
+    expect(workerUtils.forceUnlockWorkers).not.toHaveBeenCalled();
+    expect(workerUtils.addJob).toHaveBeenCalledOnce();
+  });
+
   it("does not re-enqueue an active run with an unresolved dead letter", async () => {
     const query = vi.fn(async (_sql: string) => ({ rows: [] }));
     const pool = { query } as any;
@@ -122,5 +172,33 @@ describe("dispatcher queue retry policy", () => {
     expect(query).toHaveBeenCalledOnce();
     expect(query.mock.calls[0]![0]).toMatch(/not exists[\s\S]+dispatch_dead_letters/i);
     expect(query.mock.calls[0]![0]).toMatch(/resolved_at is null/i);
+  });
+
+  it("releases WorkerUtils even when the Graphile runner fails to stop", async () => {
+    vi.mocked(runner.stop).mockRejectedValueOnce(new Error("runner stop failed"));
+    const runtime = await startDispatcher({
+      pool: { query: vi.fn() } as any,
+      config: {
+        concurrency: 1,
+        pollIntervalMs: 100,
+        maxInFlightPerTenant: 1,
+        queueGcIntervalMs: 3_600_000,
+      },
+      deps: {
+        activation: {
+          activate: vi.fn(),
+          renew: vi.fn(),
+          release: vi.fn(),
+        },
+        runLookup: vi.fn(async () => null),
+        runtimeSecret: "test-secret",
+        dispatchTimeoutMs: 5_000,
+        leaseRenewIntervalMs: 60_000,
+        activationLeaseTtlMs: 180_000,
+      },
+    });
+
+    await expect(runtime.stop()).rejects.toThrow("runner stop failed");
+    expect(workerUtils.release).toHaveBeenCalledOnce();
   });
 });

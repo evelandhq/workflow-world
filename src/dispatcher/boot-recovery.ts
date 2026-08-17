@@ -8,19 +8,16 @@ import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
 /**
  * Recovery after a dispatcher that died mid-dispatch.
  *
- * The design called for `forceUnlockWorkers` on the previous generation's
- * worker ids, and an earlier version of this file tried to find them by
- * matching the pg connection's `application_name`. That does not work:
- * graphile's `locked_by` is its own `worker-<18 hex>` id, minted internally
- * (`worker.js`), with no relationship to `application_name` — and graphile
- * refuses an externally supplied `workerId` at concurrency > 1, so the ids
- * cannot be made predictable either. The match found nothing and the "recovery"
- * was a no-op that read as if it worked.
+ * A job key only deduplicates jobs. It does not clear the per-run queue's
+ * `locked_by`, so re-enqueueing alone leaves a replacement job unavailable until
+ * Graphile's four-hour stale-lock threshold. The service therefore calls the
+ * lock-reclaiming entry point only after taking lifecycle ownership and before
+ * starting its worker pool. At that point every worker id found on an active run's
+ * exact queue belongs to the dead generation and can be passed to Graphile's
+ * `forceUnlockWorkers` safely.
  *
- * What actually recovers a stranded run is the re-enqueue below: it is keyed by
- * run, so a job still locked to a dead worker is superseded rather than waited
- * on. graphile releases the abandoned lock on its own schedule; nothing depends
- * on that having happened first.
+ * Standalone callers deliberately default to re-enqueue only. Unlocking while a
+ * pool is already running could clear a live worker's queue lock.
  */
 
 /**
@@ -30,20 +27,40 @@ import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
  * It is safe to run repeatedly: `jobKey` collapses duplicates, and the workflow
  * handler replays the event log rather than re-executing completed work.
  */
-export async function reenqueueActiveRunsForAllTenants(input: {
+type BootRecoveryInput = {
   pool: Pool;
   workerUtils: WorkerUtils;
   log?: (message: string, meta?: Record<string, unknown>) => void;
-}): Promise<number> {
+};
+
+export function reenqueueActiveRunsForAllTenants(input: BootRecoveryInput): Promise<number> {
+  return recoverActiveRunsForAllTenants(input, false);
+}
+
+/** Only call while holding dispatcher ownership and before starting its worker pool. */
+export function reclaimAndReenqueueActiveRunsForAllTenants(
+  input: BootRecoveryInput,
+): Promise<number> {
+  return recoverActiveRunsForAllTenants(input, true);
+}
+
+async function recoverActiveRunsForAllTenants(
+  input: BootRecoveryInput,
+  reclaimOldWorkerLocks: boolean,
+): Promise<number> {
   const { rows } = await input.pool.query<{
     tenant_id: string;
     id: string;
     name: string;
     deployment_id: string;
     queue_namespace: string | null;
+    locked_by: string | null;
   }>(
-    `select runs.tenant_id, runs.id, runs.name, runs.deployment_id, runs.queue_namespace
+    `select runs.tenant_id, runs.id, runs.name, runs.deployment_id, runs.queue_namespace,
+            queues.locked_by
        from workflow.workflow_runs as runs
+       left join graphile_worker._private_job_queues as queues
+         on queues.queue_name = concat('wfrun:', runs.tenant_id, ':', runs.id)
       where runs.status in ('pending', 'running')
         -- A dead letter is terminal for dispatch, not a workflow-authored
         -- run_failed event. Keep it operator-replayable without recreating the
@@ -57,6 +74,14 @@ export async function reenqueueActiveRunsForAllTenants(input: {
         )
       order by runs.tenant_id, runs.created_at`,
   );
+
+  const oldWorkerIds = [...new Set(rows.flatMap((row) => (row.locked_by ? [row.locked_by] : [])))];
+  if (reclaimOldWorkerLocks && oldWorkerIds.length > 0) {
+    await input.workerUtils.forceUnlockWorkers(oldWorkerIds);
+    input.log?.("unlocked old dispatcher workers during boot recovery", {
+      workers: oldWorkerIds.length,
+    });
+  }
 
   let enqueued = 0;
   let unknownNamespace = 0;

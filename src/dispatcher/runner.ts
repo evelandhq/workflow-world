@@ -41,12 +41,13 @@ export type DispatcherRuntime = {
 
 export async function startDispatcher(input: {
   pool: Pool;
+  workerUtils?: WorkerUtils;
   config: DispatcherConfig;
   deps: Omit<DispatcherDeps, "reenqueue" | "onDeadLetter" | "runLookup"> &
     Partial<Pick<DispatcherDeps, "runLookup">>;
 }): Promise<DispatcherRuntime> {
   const { pool, config } = input;
-  const workerUtils = await makeWorkerUtils({ pgPool: pool });
+  const workerUtils = input.workerUtils ?? (await makeWorkerUtils({ pgPool: pool }));
   const fairness = createFairness({ maxInFlightPerTenant: config.maxInFlightPerTenant });
   const dedup = createMessageDedup();
   const log = input.deps.log ?? (() => {});
@@ -203,8 +204,11 @@ export async function startDispatcher(input: {
     dedup,
     async stop() {
       clearInterval(queueGcTimer);
-      await runner.stop();
-      await workerUtils.release();
+      try {
+        await runner.stop();
+      } finally {
+        await workerUtils.release();
+      }
     },
   };
 }
