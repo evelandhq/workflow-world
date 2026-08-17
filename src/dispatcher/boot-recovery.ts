@@ -3,6 +3,7 @@ import type { WorkerUtils } from "graphile-worker";
 import type { Pool } from "pg";
 import { FLOW_JOB_NAME } from "./runner.js";
 import { runQueueName } from "../dispatch-contract.js";
+import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
 
 /**
  * Recovery after a dispatcher that died mid-dispatch.
@@ -95,7 +96,7 @@ export async function reenqueueActiveRunsForAllTenants(input: {
         // name below is what keeps those two from running concurrently.
         jobKey: messageId,
         queueName: runQueueName(row.tenant_id, row.id),
-        maxAttempts: 3,
+        maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
         flags: [`project:${row.tenant_id}`],
       });
       enqueued += 1;

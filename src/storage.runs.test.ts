@@ -36,6 +36,7 @@ async function createRun(
     input: Uint8Array;
     executionContext?: Record<string, unknown>;
     attributes?: Record<string, string>;
+    encryptionPublicKey?: string;
   },
 ): Promise<WorkflowRun> {
   const result = await events.create(null, {
@@ -137,6 +138,37 @@ describe.skipIf(!testUrl)("runs storage (postgres)", () => {
 
       expect(run.executionContext).toBeUndefined();
       expect(run.input).toEqual(new Uint8Array());
+    });
+
+    it("persists encryptionPublicKey from run_created", async () => {
+      const encryptionPublicKey = "public-key-from-run-created";
+      const run = await createRun(events, {
+        deploymentId: "deployment-123",
+        workflowName: "encrypted-workflow",
+        input: new Uint8Array([1, 2]),
+        encryptionPublicKey,
+      });
+
+      expect(run.encryptionPublicKey).toBe(encryptionPublicKey);
+      await expect(runs.get(run.runId)).resolves.toMatchObject({ encryptionPublicKey });
+    });
+
+    it("persists encryptionPublicKey during resilient run_started creation", async () => {
+      const runId = `wrun_${ulid()}`;
+      const encryptionPublicKey = "public-key-from-resilient-start";
+
+      const result = await events.create(runId, {
+        eventType: "run_started",
+        eventData: {
+          deploymentId: "deployment-123",
+          workflowName: "encrypted-workflow",
+          input: new Uint8Array([1, 2]),
+          encryptionPublicKey,
+        },
+      });
+
+      expect(result.run?.encryptionPublicKey).toBe(encryptionPublicKey);
+      await expect(runs.get(runId)).resolves.toMatchObject({ encryptionPublicKey });
     });
 
     it("should seed initial attributes from run_created", async () => {

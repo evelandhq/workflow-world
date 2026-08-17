@@ -99,6 +99,7 @@ export const runs = schema.table(
     /** @deprecated */
     executionContextJson: jsonb("execution_context").$type<Record<string, unknown>>(),
     executionContext: Cbor<Record<string, unknown>>()("execution_context_cbor"),
+    encryptionPublicKey: varchar("encryption_public_key"),
     /** @deprecated */
     inputJson: jsonb("input").$type<SerializedContent>(),
     input: Cbor<SerializedContent>()("input_cbor"),

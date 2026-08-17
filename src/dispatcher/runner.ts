@@ -20,6 +20,7 @@ import {
  * claimed here — they belong to that deployment's own in-process runner.
  */
 import { FLOW_JOB_NAME, runQueueName } from "../dispatch-contract.js";
+import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
 
 export { FLOW_JOB_NAME };
 
@@ -59,7 +60,7 @@ export async function startDispatcher(input: {
       // reschedule that omitted it would be concurrently claimable against the
       // run it belongs to.
       ...(runId ? { queueName: runQueueName(message.tenantId, runId) } : {}),
-      maxAttempts: 3,
+      maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
       flags: [`project:${message.tenantId}`],
     });
   };

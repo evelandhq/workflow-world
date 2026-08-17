@@ -80,6 +80,12 @@ Modifications made by Eveland:
      without a marker retain the v5 `wevt_` ULID scheme during the compatibility
      window.
 
+ 12. Additional beta.34 behavior alignment: both run-creation paths persist the
+     run encryption public key; hook visibility and token reclamation honour the
+     owning run's terminal state and retention deadline; Graphile jobs use the
+     upstream 49-delivery budget; and embedded HTTP delivery propagates the
+     worker abort signal. Every storage predicate remains tenant-scoped.
+
 The dispatcher (`src/dispatcher/`), the tenant provisioning and partition
 lifecycle (`src/tenant.ts`), the migration runner (`src/migrate.ts`) and the
 dispatch contract (`src/dispatch-contract.ts`) are original works of Eveland and

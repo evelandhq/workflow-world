@@ -59,7 +59,7 @@ sequenceDiagram
     D->>D: affinity: run.deploymentId → activation lease → endpointPort
     D->>A: held POST /.well-known/workflow/v1/flow (for the step's whole duration)
     A->>PG: executor runs the step; storage/events/chunks written direct
-    A-->>D: 200 → job complete (failure → maxAttempts 3 + backoff)
+    A-->>D: 200 → job complete (failure → maxAttempts 49 + backoff)
 ```
 
 Postgres is the rendezvous. The dispatcher is the only actively polling party.
@@ -411,7 +411,7 @@ to a different deployment.
 | `200`                     | job complete                                                  |
 | `200 {timeoutSeconds: N}` | not complete — re-enqueue the _same_ `messageId` at `now + N` |
 | `4xx`                     | terminal; never retried, and dead-lettered                    |
-| `5xx` / network / timeout | throw → graphile retry with backoff, `maxAttempts: 3`         |
+| `5xx` / network / timeout | throw → graphile retry with backoff, `maxAttempts: 49`        |
 
 The reschedule case has two load-bearing properties. The `messageId` is preserved
 because the runtime uses it as the step-ownership lease, so minting a fresh one

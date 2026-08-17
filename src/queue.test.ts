@@ -8,9 +8,6 @@
  *   * the `applicationManagedShutdown` / `noHandleSignals` pair — the fork has
  *     no such config knob, so the assertions would only be checking that an
  *     option nobody can set is absent;
- *   * the two `abortSignal` tests — the fork's `GraphileHelpers` schema reads
- *     only `job.attempts` and its fetch carries no `signal`, so there is no
- *     abort plumbing to exercise;
  *   * the `namespace` variants — the fork always uses the unnamespaced topic
  *     prefix, so a namespaced queue name would not round-trip.
  *
@@ -349,7 +346,7 @@ describe("postgres queue http execution", () => {
         }),
         expect.objectContaining({
           jobKey: "step_01ABC",
-          maxAttempts: 3,
+          maxAttempts: 49,
           runAt: new Date("2024-01-01T00:00:05.000Z"),
           // Fork additions: per-run serialization, and the fairness flag the
           // dispatcher's `forbiddenFlags` callback throttles on.
@@ -359,6 +356,31 @@ describe("postgres queue http execution", () => {
       );
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("passes graphile's abortSignal to the HTTP delivery", async () => {
+    const fetchMock = vi.fn(async () => Response.json({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.WORKFLOW_LOCAL_BASE_URL = "https://workflow.example.test";
+    const controller = new AbortController();
+
+    const queue = buildQueue(buildConfig(), pool);
+    try {
+      await queue.start();
+      const task = getTaskHandler(EMBEDDED_JOB_NAME);
+      const payload = buildMessageData("__wkf_workflow_test-workflow", {
+        runId: "wrun_01ABC",
+      });
+
+      await task(payload, { abortSignal: controller.signal, job: { attempts: 1 } });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://workflow.example.test/.well-known/workflow/v1/flow",
+        expect.objectContaining({ signal: controller.signal }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 
