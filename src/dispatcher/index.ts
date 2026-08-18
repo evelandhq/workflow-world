@@ -27,6 +27,12 @@ export { FLOW_JOB_NAME, startDispatcher } from "./runner.js";
 export type { DispatcherConfig, DispatcherRuntime } from "./runner.js";
 export { resolveDispatchRuntimeSecret } from "./secrets.js";
 export { startDispatcherService } from "./service.js";
-export type { DispatcherService, DispatcherServiceOptions } from "./service.js";
+export type {
+  DispatcherLifecycleEvent,
+  DispatcherLifecyclePhase,
+  DispatcherService,
+  DispatcherServiceOptions,
+  DispatcherServicePhase,
+} from "./service.js";
 export { postVqsMessage, WORKFLOW_ROUTE_BASE } from "./vqs-client.js";
 export type { VqsRequest, VqsResult } from "./vqs-client.js";

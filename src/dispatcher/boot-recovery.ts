@@ -72,6 +72,17 @@ async function recoverActiveRunsForAllTenants(
              and dead.run_id = runs.id
              and dead.resolved_at is null
         )
+        -- A durable quarantine marker means "do not replay": the cutover
+        -- fenced this run and only explicit resolution or a completed managed
+        -- termination reopens it. Creating a synthetic recovery job here would
+        -- bypass that fence on every restart.
+        and not exists (
+          select 1
+            from workflow.run_quarantines as quarantine
+           where quarantine.tenant_id = runs.tenant_id
+             and quarantine.run_id = runs.id
+             and quarantine.resolved_at is null
+        )
       order by runs.tenant_id, runs.created_at`,
   );
 
