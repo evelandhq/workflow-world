@@ -32,6 +32,21 @@ export {
 } from "./migrate.js";
 export { reenqueueTenantRuns } from "./recovery.js";
 export {
+  countClaimableUnscopedFlowJobs,
+  migrateUnscopedRunJobs,
+  type UnscopedJobMigrationResult,
+} from "./job-migration.js";
+export {
+  isRunQuarantined,
+  listUnresolvedRunQuarantines,
+  parkRunJobs,
+  quarantineRun,
+  QUARANTINE_PARK_RUN_AT,
+  releaseParkedRunJobs,
+  resolveRunQuarantine,
+  type RunQuarantine,
+} from "./quarantine.js";
+export {
   backfillWorkflowRunRetentionClass,
   inspectWorkflowRunRetentionMismatches,
   previewWorkflowRunRetentionBackfill,

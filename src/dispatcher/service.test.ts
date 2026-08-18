@@ -224,6 +224,122 @@ describe("dispatcher service lifecycle", () => {
     expect(state.calls).toEqual(["ownership:connect", "pool:end"]);
   });
 
+  it("recover-paused completes recovery but claims nothing until an explicit resume", async () => {
+    const service = await startDispatcherService({
+      env: {
+        NODE_ENV: "development",
+        WORKFLOW_WORLD_URL: "postgres://workflow.test/world",
+        WORKFLOW_DISPATCHER_ACTIVATION_API_URL: "http://activation.test",
+      },
+      activation,
+      startPaused: true,
+    });
+
+    // Ownership, migrations and boot recovery are done; the worker pool that
+    // would claim jobs is deliberately not started.
+    expect(state.calls).toEqual([
+      "ownership:connect",
+      "ownership:lock",
+      "migrate",
+      "worker-utils:create",
+      "recover",
+    ]);
+    expect(service.phase).toBe("ready_paused");
+
+    await service.resume();
+    expect(state.calls).toContain("worker:start");
+    expect(service.phase).toBe("ready");
+    // Resuming twice is idempotent, not a second worker pool.
+    await service.resume();
+    expect(state.calls.filter((call) => call === "worker:start")).toHaveLength(1);
+
+    await service.stop();
+  });
+
+  it("a paused service stops cleanly without ever starting workers", async () => {
+    const service = await startDispatcherService({
+      env: {
+        NODE_ENV: "development",
+        WORKFLOW_WORLD_URL: "postgres://workflow.test/world",
+        WORKFLOW_DISPATCHER_ACTIVATION_API_URL: "http://activation.test",
+      },
+      activation,
+      startPaused: true,
+    });
+    state.calls.length = 0;
+
+    await service.stop();
+
+    expect(state.calls).toEqual([
+      "worker-utils:release",
+      "ownership:unlock",
+      "ownership:release",
+      "pool:end",
+    ]);
+    expect(state.calls).not.toContain("worker:start");
+  });
+
+  it("reports the lifecycle machine-readably through the observer", async () => {
+    const events: Array<{ phase: string; attributes?: Record<string, unknown> }> = [];
+    const service = await startDispatcherService({
+      env: {
+        NODE_ENV: "development",
+        WORKFLOW_WORLD_URL: "postgres://workflow.test/world",
+        WORKFLOW_DISPATCHER_ACTIVATION_API_URL: "http://activation.test",
+      },
+      activation,
+      startPaused: true,
+      lifecycle: {
+        onPhase: (event) => {
+          events.push({ phase: event.phase, attributes: event.attributes });
+        },
+      },
+    });
+    await service.resume();
+    await service.stop();
+
+    expect(events.map((event) => event.phase)).toEqual([
+      "ownership_acquired",
+      "migrations_applied",
+      "boot_recovery_completed",
+      "ready_paused",
+      "ready",
+      "stopped",
+    ]);
+    // Recovery reports what it re-enqueued, so a registration can carry it.
+    expect(events[2]?.attributes).toMatchObject({ reenqueuedRuns: 1 });
+  });
+
+  it("a failing cutover preflight keeps boot recovery from ever running", async () => {
+    await expect(
+      startDispatcherService({
+        env: {
+          NODE_ENV: "development",
+          WORKFLOW_WORLD_URL: "postgres://workflow.test/world",
+          WORKFLOW_DISPATCHER_ACTIVATION_API_URL: "http://activation.test",
+        },
+        activation,
+        beforeBootRecovery: async () => {
+          state.calls.push("preflight");
+          throw new Error("unscoped early-external jobs remain claimable");
+        },
+      }),
+    ).rejects.toThrow("unscoped early-external jobs remain claimable");
+
+    expect(state.calls).toEqual([
+      "ownership:connect",
+      "ownership:lock",
+      "migrate",
+      "worker-utils:create",
+      "preflight",
+      "worker-utils:release",
+      "ownership:unlock",
+      "ownership:release",
+      "pool:end",
+    ]);
+    expect(state.calls).not.toContain("recover");
+  });
+
   it("releases ownership and the pool when worker shutdown fails", async () => {
     const telemetry = {
       emit: vi.fn(),

@@ -40,6 +40,7 @@ import { createWorld } from "@workflow/world-local";
 import { Logger, makeWorkerUtils, type Runner, run, type WorkerUtils } from "graphile-worker";
 import type { Pool } from "pg";
 import { monotonicFactory } from "ulid";
+import { isRunQuarantined } from "./quarantine.js";
 import { z } from "zod/v4";
 import type { ResolvedWorldConfig } from "./config.js";
 import { MessageData } from "./message.js";
@@ -275,6 +276,15 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     const utils = workerUtils;
     if (!utils) {
       throw new Error("Postgres queue worker utils are not initialized");
+    }
+
+    // Fail closed on a quarantined run: even a mistakenly re-activated owner
+    // deployment must not put new deliveries for a fenced run back into the
+    // ordinary queue. Resolution of the marker is an explicit operator step.
+    if (runId && (await isRunQuarantined(pool, tenantId, runId))) {
+      throw new Error(
+        `Workflow run ${runId} carries an unresolved quarantine marker; enqueue is refused until an operator resolves it.`,
+      );
     }
 
     const runAt =
