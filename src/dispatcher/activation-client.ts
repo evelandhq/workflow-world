@@ -9,6 +9,8 @@
  * A dispatcher that acquired and forgot would have the idle reaper stop the
  * executor out from under a step that was still running.
  */
+import { DISPATCH_VERSION } from "../dispatch-contract.js";
+
 export type Activation = {
   leaseId: string;
   endpointPort: number;
@@ -33,6 +35,13 @@ export type ActivationClient = {
 export function createActivationClient(input: {
   apiUrl: string;
   serviceToken: string;
+  /**
+   * This dispatcher's registration instance id. Sent on every activation so
+   * the control plane can bind exact activation to the registration it
+   * validated — a stale process sharing the service token must not activate
+   * under another instance's registration.
+   */
+  instanceId?: string;
   drainRetryMs?: number;
   maxDrainRetries?: number;
 }): ActivationClient {
@@ -40,6 +49,7 @@ export function createActivationClient(input: {
   const headers = {
     authorization: `Bearer ${input.serviceToken}`,
     "content-type": "application/json",
+    ...(input.instanceId ? { "x-eveland-dispatcher-instance": input.instanceId } : {}),
   };
   const drainRetryMs = input.drainRetryMs ?? 250;
   const maxDrainRetries = input.maxDrainRetries ?? 20;
@@ -95,6 +105,7 @@ export function createActivationClient(input: {
       const value = (await response.json().catch(() => null)) as {
         lease?: { id?: unknown };
         runtimeInstance?: { endpointPort?: unknown };
+        workflow?: { selectedProtocol?: unknown };
       } | null;
       if (
         !value ||
@@ -105,6 +116,25 @@ export function createActivationClient(input: {
           type: "unavailable",
           status: response.status,
           message: "Control API returned an invalid activation result.",
+        };
+      }
+      // The control plane negotiated a dispatch protocol from the Release's
+      // attestation and this dispatcher's registration window. A selection this
+      // binary does not speak must never be dispatched with — releasing the
+      // lease and refusing beats sending frames the target cannot parse.
+      if (
+        value.workflow !== undefined &&
+        (typeof value.workflow.selectedProtocol !== "number" ||
+          value.workflow.selectedProtocol > DISPATCH_VERSION)
+      ) {
+        await fetch(
+          `${apiUrl}/internal/runtime/activations/${encodeURIComponent(value.lease.id)}`,
+          { method: "DELETE", headers },
+        ).catch(() => undefined);
+        return {
+          type: "not-activatable",
+          status: 409,
+          message: `Control API selected dispatch protocol ${String(value.workflow.selectedProtocol)}, outside this dispatcher's window (<= ${String(DISPATCH_VERSION)}).`,
         };
       }
       return {

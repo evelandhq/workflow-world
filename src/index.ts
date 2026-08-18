@@ -31,6 +31,7 @@ export {
   tenantPartitionsExist,
 } from "./migrate.js";
 export { reenqueueTenantRuns } from "./recovery.js";
+export { readLatestCutoverProof, recordCutoverProof, type CutoverProof } from "./cutover-proof.js";
 export {
   countClaimableUnscopedFlowJobs,
   migrateUnscopedRunJobs,
