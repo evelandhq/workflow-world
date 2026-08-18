@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.9.0...workflow-world-v0.10.0) (2026-08-18)
+
+
+### Features
+
+* recover-paused lifecycle, durable run quarantine, and in-place early-external job migration ([#35](https://github.com/evelandhq/workflow-world/issues/35)) ([a4966bc](https://github.com/evelandhq/workflow-world/commit/a4966bce5d77af395295d5bf2cff4189e31d4427))
+
 ## [0.9.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.8.1...workflow-world-v0.9.0) (2026-08-17)
 
 
