@@ -70,10 +70,15 @@ describe.skipIf(!testUrl)("early-external unscoped job migration", () => {
     );
     // Drop the modern (already scoped) delivery; this suite fabricates the
     // early-external shape below.
+    // CASE guards the decode: the malformed-payload fixture elsewhere in this
+    // suite must not blow up this cleanup.
     await admin.query(
       `delete from graphile_worker._private_jobs
         where payload->>'tenantId' = $1
-          and convert_from(decode(payload->>'data', 'base64'), 'utf8')::jsonb->>'runId' = $2`,
+          and case
+                when payload->>'data' ~ '^[A-Za-z0-9+/=]*$'
+                then convert_from(decode(payload->>'data', 'base64'), 'utf8')::jsonb->>'runId'
+              end = $2`,
       [TENANT, runId],
     );
     return runId;
@@ -186,6 +191,51 @@ describe.skipIf(!testUrl)("early-external unscoped job migration", () => {
       [TENANT, runId],
     );
     expect(rows[0]?.queue_namespace).toBe("acme");
+  }, 60_000);
+
+  test("a job on the WRONG per-run queue is re-parented onto its exact queue", async () => {
+    const runA = await createActiveRun("greet");
+    const runB = await createActiveRun("greet");
+    const jobId = await addUnscopedJob(runA);
+    // A `wfrun:` prefix proves nothing: park run A's job on run B's queue.
+    await admin.query(
+      `insert into graphile_worker._private_job_queues (queue_name)
+       values ($1) on conflict (queue_name) do nothing`,
+      [runQueueName(TENANT, runB)],
+    );
+    await admin.query(
+      `update graphile_worker._private_jobs
+          set job_queue_id = (select id from graphile_worker._private_job_queues where queue_name = $2)
+        where id = $1::bigint`,
+      [jobId, runQueueName(TENANT, runB)],
+    );
+
+    // The postcondition must refuse this state — wrong-queue serialization is
+    // exactly the replay race the exact queue exists to prevent.
+    expect(await countClaimableUnscopedFlowJobs(admin)).toBeGreaterThanOrEqual(1);
+
+    const result = await migrateUnscopedRunJobs(admin);
+    expect(result.scoped).toBeGreaterThanOrEqual(1);
+    expect((await jobRow(jobId))?.queue_name).toBe(runQueueName(TENANT, runA));
+    expect(await countClaimableUnscopedFlowJobs(admin)).toBe(0);
+  }, 60_000);
+
+  test("a malformed payload body neither crashes the count nor gets guessed at", async () => {
+    // Not valid base64/JSON in `data`; the count and migration must survive it
+    // and treat the job as unprovable.
+    const job = await workerUtils.addJob("eveland_wf_flows", {
+      tenantId: TENANT,
+      data: "%%not-base64%%",
+      id: "greet",
+      attempt: 1,
+      messageId: "msg_malformed_1",
+      deploymentId: DEPLOYMENT,
+    });
+    expect(await countClaimableUnscopedFlowJobs(admin)).toBeGreaterThanOrEqual(1);
+
+    const result = await migrateUnscopedRunJobs(admin);
+    expect(result.parked.map((entry) => entry.jobId)).toContain(String(job.id));
+    expect(await countClaimableUnscopedFlowJobs(admin)).toBe(0);
   }, 60_000);
 
   test("parks what it cannot prove instead of guessing, and the postcondition clears", async () => {
