@@ -1,6 +1,7 @@
 import type { WorkerUtils } from "graphile-worker";
 import type { Pool } from "pg";
 import { FLOW_JOB_NAME, runQueueName } from "./dispatch-contract.js";
+import { readFlowJobRun } from "./job-migration.js";
 
 /**
  * Durable run quarantine: the marker every dispatch surface honours.
@@ -51,8 +52,10 @@ export async function quarantineRun(
 
 /**
  * Park every runnable job addressed at this run without touching its payload,
- * identity or attempt history. Covers both the per-run queue and unscoped
- * early-external jobs whose JSON body names the run.
+ * identity or attempt history. Membership is decided by the job's own decoded
+ * payload or its exact per-run queue — never by a `wfrun:` prefix, which would
+ * miss a delivery parked on some other run's queue. Payloads are decoded in
+ * JS: a malformed body must not fail the sweep.
  */
 export async function parkRunJobs(
   pool: Pool,
@@ -60,31 +63,11 @@ export async function parkRunJobs(
   tenantId: string,
   runId: string,
 ): Promise<number> {
-  const { rows } = await pool.query<{ id: string }>(
-    `select jobs.id::text as id
-       from graphile_worker._private_jobs as jobs
-       join graphile_worker._private_tasks as tasks on tasks.id = jobs.task_id
-       left join graphile_worker._private_job_queues as queues on queues.id = jobs.job_queue_id
-      where tasks.identifier = $1
-        and jobs.payload->>'tenantId' = $2
-        and jobs.locked_by is null
-        and jobs.run_at < $5
-        and (
-          queues.queue_name = $3
-          or (
-            (queues.queue_name is null or queues.queue_name not like 'wfrun:%')
-            and convert_from(decode(jobs.payload->>'data', 'base64'), 'utf8')::jsonb->>'runId' = $4
-          )
-        )`,
-    [FLOW_JOB_NAME, tenantId, runQueueName(tenantId, runId), runId, QUARANTINE_PARK_RUN_AT],
-  );
-  if (rows.length === 0) return 0;
+  const targets = await selectRunJobs(pool, tenantId, runId, "runnable");
+  if (targets.length === 0) return 0;
   // Only run_at moves; payload, identity, priority and attempt history stay.
-  await workerUtils.rescheduleJobs(
-    rows.map((row) => row.id),
-    { runAt: QUARANTINE_PARK_RUN_AT },
-  );
-  return rows.length;
+  await workerUtils.rescheduleJobs(targets, { runAt: QUARANTINE_PARK_RUN_AT });
+  return targets.length;
 }
 
 /**
@@ -117,27 +100,45 @@ export async function releaseParkedRunJobs(
       `Run ${runId} of tenant ${tenantId} still has an unresolved quarantine marker; resolve it before releasing its jobs.`,
     );
   }
-  const { rows } = await pool.query<{ id: string }>(
-    `select jobs.id::text as id
+  const targets = await selectRunJobs(pool, tenantId, runId, "parked");
+  if (targets.length === 0) return 0;
+  await workerUtils.rescheduleJobs(targets, { runAt: new Date() });
+  return targets.length;
+}
+
+/**
+ * Flow jobs belonging to one run, matched by exact per-run queue or decoded
+ * payload. `runnable` selects jobs a worker could still claim; `parked`
+ * selects the ones a quarantine pushed to the far-future run_at.
+ */
+async function selectRunJobs(
+  pool: Pool,
+  tenantId: string,
+  runId: string,
+  which: "runnable" | "parked",
+): Promise<string[]> {
+  const { rows } = await pool.query<{
+    id: string;
+    payload: unknown;
+    queue_name: string | null;
+  }>(
+    `select jobs.id::text as id, jobs.payload, queues.queue_name
        from graphile_worker._private_jobs as jobs
        join graphile_worker._private_tasks as tasks on tasks.id = jobs.task_id
        left join graphile_worker._private_job_queues as queues on queues.id = jobs.job_queue_id
       where tasks.identifier = $1
-        and jobs.payload->>'tenantId' = $2
         and jobs.locked_by is null
-        and jobs.run_at >= $4
-        and (
-          queues.queue_name = $3
-          or convert_from(decode(jobs.payload->>'data', 'base64'), 'utf8')::jsonb->>'runId' = $5
-        )`,
-    [FLOW_JOB_NAME, tenantId, runQueueName(tenantId, runId), QUARANTINE_PARK_RUN_AT, runId],
+        and ${which === "runnable" ? "jobs.run_at < $2" : "jobs.run_at >= $2"}`,
+    [FLOW_JOB_NAME, QUARANTINE_PARK_RUN_AT],
   );
-  if (rows.length === 0) return 0;
-  await workerUtils.rescheduleJobs(
-    rows.map((row) => row.id),
-    { runAt: new Date() },
-  );
-  return rows.length;
+  const exactQueue = runQueueName(tenantId, runId);
+  return rows
+    .filter((row) => {
+      if (row.queue_name === exactQueue) return true;
+      const run = readFlowJobRun(row.payload);
+      return run !== undefined && run.tenantId === tenantId && run.runId === runId;
+    })
+    .map((row) => row.id);
 }
 
 export async function isRunQuarantined(

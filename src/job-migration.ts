@@ -5,17 +5,23 @@ import { QUARANTINE_PARK_RUN_AT } from "./quarantine.js";
 
 /**
  * In-place migration for early-external Graphile jobs that predate per-run
- * serialization (3f0f483). Those jobs sit in the plain queue, so a 0.9.0
- * dispatcher would expose them to its worker pool concurrently with its own
- * per-run recovery jobs — the exact replay race the per-run queue closes.
+ * serialization (3f0f483). Those jobs sit in the plain queue — or, worse, on
+ * some other run's queue — so a 0.9.0+ dispatcher would expose them to its
+ * worker pool concurrently with its own per-run recovery jobs: the exact
+ * replay race the per-run queue closes.
  *
- * The migration only re-parents each job onto its run's exact
- * `wfrun:<tenant>:<run>` queue. Identity, payload, key, priority, schedule and
- * attempt history are untouched; deleting and re-enqueueing is forbidden
- * because a continuation or hook input that never reached the event log exists
- * only in that payload. Jobs that cannot be proven — undecodable payload, no
- * run id, missing run row, conflicting owner or namespace — are parked
- * unclaimable with their payload preserved, never guessed at.
+ * "Scoped" means the job sits on the exact `wfrun:<tenant>:<run>` queue
+ * derived from its own payload — a `wfrun:` prefix alone proves nothing.
+ * Payloads are decoded in JS, never in SQL: a malformed body must park the
+ * job, not fail the whole migration.
+ *
+ * The migration only re-parents each job onto its run's exact queue. Identity,
+ * payload, key, priority, schedule and attempt history are untouched; deleting
+ * and re-enqueueing is forbidden because a continuation or hook input that
+ * never reached the event log exists only in that payload. Jobs that cannot be
+ * proven — undecodable payload, no run id, missing run row, conflicting owner
+ * or namespace — are parked unclaimable with their payload preserved, never
+ * guessed at.
  *
  * Graphile's private schema is a version boundary: this helper is pinned to
  * the graphile-worker release this package ships and tested against the real
@@ -25,7 +31,7 @@ import { QUARANTINE_PARK_RUN_AT } from "./quarantine.js";
 export type UnscopedJobMigrationResult = {
   /** Jobs re-parented onto their run's exact queue by this invocation. */
   scoped: number;
-  /** Flow jobs already on a per-run queue; untouched. */
+  /** Flow jobs already on their exact per-run queue; untouched. */
   alreadyScoped: number;
   /** Run rows whose NULL queue_namespace was backfilled from a proven payload. */
   backfilledNamespaces: number;
@@ -35,6 +41,12 @@ export type UnscopedJobMigrationResult = {
 
 /** Serializes concurrent migration attempts; never held by normal operation. */
 const JOB_MIGRATION_LOCK_KEY = 0x65_76_6a_6d; // "evjm"
+
+type FlowJobRow = {
+  id: string;
+  payload: unknown;
+  queue_name: string | null;
+};
 
 export async function migrateUnscopedRunJobs(
   pool: Pool,
@@ -51,27 +63,12 @@ export async function migrateUnscopedRunJobs(
   try {
     await client.query("select pg_advisory_lock($1)", [JOB_MIGRATION_LOCK_KEY]);
 
-    const alreadyScoped = await client.query<{ count: string }>(
-      `select count(*)::text as count
-         from graphile_worker._private_jobs as jobs
-         join graphile_worker._private_tasks as tasks on tasks.id = jobs.task_id
-         join graphile_worker._private_job_queues as queues on queues.id = jobs.job_queue_id
-        where tasks.identifier = $1
-          and queues.queue_name like 'wfrun:%'`,
-      [FLOW_JOB_NAME],
-    );
-    result.alreadyScoped = Number(alreadyScoped.rows[0]!.count);
-
-    const { rows: candidates } = await client.query<{
-      id: string;
-      payload: unknown;
-    }>(
-      `select jobs.id::text as id, jobs.payload
+    const { rows: candidates } = await client.query<FlowJobRow>(
+      `select jobs.id::text as id, jobs.payload, queues.queue_name
          from graphile_worker._private_jobs as jobs
          join graphile_worker._private_tasks as tasks on tasks.id = jobs.task_id
          left join graphile_worker._private_job_queues as queues on queues.id = jobs.job_queue_id
         where tasks.identifier = $1
-          and (queues.queue_name is null or queues.queue_name not like 'wfrun:%')
           and jobs.locked_by is null
         order by jobs.id`,
       [FLOW_JOB_NAME],
@@ -88,6 +85,11 @@ export async function migrateUnscopedRunJobs(
         });
         continue;
       }
+      const exactQueue = runQueueName(verdict.tenantId, verdict.runId);
+      if (candidate.queue_name === exactQueue) {
+        result.alreadyScoped += 1;
+        continue;
+      }
       // One transaction per job: the queue re-parent and any namespace
       // backfill land together or not at all, and a mid-run crash leaves every
       // untouched job exactly where a re-run will find it.
@@ -102,12 +104,11 @@ export async function migrateUnscopedRunJobs(
           );
           result.backfilledNamespaces += 1;
         }
-        const queueName = runQueueName(verdict.tenantId, verdict.runId);
         await client.query(
           `insert into graphile_worker._private_job_queues (queue_name)
            values ($1)
            on conflict (queue_name) do nothing`,
-          [queueName],
+          [exactQueue],
         );
         const updated = await client.query(
           `update graphile_worker._private_jobs
@@ -116,14 +117,15 @@ export async function migrateUnscopedRunJobs(
                   ),
                   updated_at = now()
             where id = $1::bigint and locked_by is null`,
-          [candidate.id, queueName],
+          [candidate.id, exactQueue],
         );
         await client.query("commit");
         if ((updated.rowCount ?? 0) > 0) {
           result.scoped += 1;
-          log("scoped an early-external job onto its run queue", {
+          log("scoped an early-external job onto its exact run queue", {
             jobId: candidate.id,
-            queueName,
+            queueName: exactQueue,
+            previousQueueName: candidate.queue_name,
           });
         }
       } catch (error) {
@@ -200,6 +202,19 @@ async function assessCandidate(client: PoolClient, payload: unknown): Promise<Ca
   };
 }
 
+/**
+ * Decode the run a flow-job payload addresses, or undefined when it cannot be
+ * proven. Exposed for the claimability check below and for hosts that need to
+ * reason about job↔run association without re-implementing the decoding.
+ */
+export function readFlowJobRun(payload: unknown): { tenantId: string; runId: string } | undefined {
+  const parsed = MessageData.safeParse(payload);
+  if (!parsed.success) return undefined;
+  const runId = readRunIdFromBody(parsed.data.data);
+  if (!runId) return undefined;
+  return { tenantId: parsed.data.tenantId, runId };
+}
+
 function readRunIdFromBody(data: Uint8Array): string | undefined {
   try {
     const body = JSON.parse(Buffer.from(data).toString("utf8")) as {
@@ -225,21 +240,27 @@ async function parkJob(client: PoolClient, jobId: string): Promise<void> {
 
 /**
  * The dispatcher-startup postcondition: how many flow jobs are still claimable
- * outside a per-run queue. Non-zero means boot recovery and resume must fail
- * closed — a worker pool would race those jobs against per-run deliveries.
+ * outside their run's exact per-run queue. A `wfrun:` prefix proves nothing —
+ * a job for run A parked on run B's queue serializes against the wrong run.
+ * Undecodable payloads count too: fail closed, never guess. Non-zero means
+ * boot recovery and resume must refuse.
  */
 export async function countClaimableUnscopedFlowJobs(pool: Pool): Promise<number> {
-  const { rows } = await pool.query<{ count: string }>(
-    `select count(*)::text as count
+  const { rows } = await pool.query<FlowJobRow>(
+    `select jobs.id::text as id, jobs.payload, queues.queue_name
        from graphile_worker._private_jobs as jobs
        join graphile_worker._private_tasks as tasks on tasks.id = jobs.task_id
        left join graphile_worker._private_job_queues as queues on queues.id = jobs.job_queue_id
       where tasks.identifier = $1
-        and (queues.queue_name is null or queues.queue_name not like 'wfrun:%')
         and jobs.locked_by is null
         and jobs.attempts < jobs.max_attempts
         and jobs.run_at <= now()`,
     [FLOW_JOB_NAME],
   );
-  return Number(rows[0]!.count);
+  let unscoped = 0;
+  for (const row of rows) {
+    const run = readFlowJobRun(row.payload);
+    if (!run || row.queue_name !== runQueueName(run.tenantId, run.runId)) unscoped += 1;
+  }
+  return unscoped;
 }

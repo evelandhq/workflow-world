@@ -3,6 +3,8 @@ import { makeWorkerUtils, type WorkerUtils } from "graphile-worker";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createWorld, ensureTenantPartitions, runMigrations } from "./index.js";
+import { runQueueName } from "./dispatch-contract.js";
+import { MessageData } from "./message.js";
 import { reenqueueActiveRunsForAllTenants } from "./dispatcher/boot-recovery.js";
 import { dropTenantPartitions } from "./migrate.js";
 import {
@@ -117,8 +119,22 @@ describe.skipIf(!testUrl)("durable run quarantine markers", () => {
     const runId = await createActiveRun(world, QUARANTINED, "greet");
     const healthyRunId = await createActiveRun(healthyWorld, HEALTHY, "greet");
 
-    // The original delivery is runnable before the marker exists.
-    expect(await runnableJobCount(QUARANTINED)).toBeGreaterThan(0);
+    // The original delivery is runnable before the marker exists — plus a
+    // stray delivery for the same run parked on the WRONG per-run queue, which
+    // the quarantine must catch as well.
+    await workerUtils.addJob(
+      "eveland_wf_flows",
+      MessageData.encode({
+        id: "greet",
+        data: Buffer.from(JSON.stringify({ runId })),
+        attempt: 1,
+        messageId: `msg_wrongqueue_${runId}` as MessageData["messageId"],
+        tenantId: QUARANTINED,
+        deploymentId: `dep_${QUARANTINED}`,
+      }),
+      { queueName: runQueueName(QUARANTINED, "run_other"), maxAttempts: 10 },
+    );
+    expect(await runnableJobCount(QUARANTINED)).toBeGreaterThanOrEqual(2);
 
     await quarantineRun(admin, workerUtils, {
       tenantId: QUARANTINED,
@@ -132,7 +148,8 @@ describe.skipIf(!testUrl)("durable run quarantine markers", () => {
       { runId, operationId: "cut_op_test" },
     ]);
 
-    // Existing jobs are parked with payload intact, not deleted.
+    // Existing jobs are parked with payload intact, not deleted — including a
+    // job that was sitting on the WRONG per-run queue.
     expect(await runnableJobCount(QUARANTINED)).toBe(0);
     const parked = await admin.query<{ payload: { tenantId?: string } }>(
       "select payload from graphile_worker._private_jobs where payload->>'tenantId' = $1",

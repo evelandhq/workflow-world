@@ -34,6 +34,7 @@ export { reenqueueTenantRuns } from "./recovery.js";
 export {
   countClaimableUnscopedFlowJobs,
   migrateUnscopedRunJobs,
+  readFlowJobRun,
   type UnscopedJobMigrationResult,
 } from "./job-migration.js";
 export {
