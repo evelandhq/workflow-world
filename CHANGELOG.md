@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.10.1...workflow-world-v0.11.0) (2026-08-18)
+
+
+### Features
+
+* bind activation to the dispatcher instance and persist a World-visible cutover proof ([#39](https://github.com/evelandhq/workflow-world/issues/39)) ([b064c2b](https://github.com/evelandhq/workflow-world/commit/b064c2b2abdabfd283b4c15341bd2aacb6a6408c))
+
 ## [0.10.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.10.0...workflow-world-v0.10.1) (2026-08-18)
 
 
