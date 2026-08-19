@@ -98,8 +98,8 @@ honoured by only one end is a silent failure rather than a loud one.
 | `WORKFLOW_WORLD_BOOTSTRAP_URL`                        | —                  | override when the host and the containers reach one database by different hostnames                      |
 | `WORKFLOW_DISPATCHER_ACTIVATION_API_URL`              | —                  | the host's activation API. Required                                                                      |
 | `WORKFLOW_DISPATCHER_ACTIVATION_TOKEN`                | —                  | bearer token for it. Required unless `NODE_ENV=development`                                              |
-| `WORKFLOW_DISPATCHER_POOL_SIZE`                       | `10`               | the authority: one connection per job, one for Graphile LISTEN, and one for dispatcher ownership         |
-| `WORKFLOW_DISPATCHER_CONCURRENCY`                     | `poolSize - 2`     | must leave the LISTEN and ownership slots free, and is checked                                           |
+| `WORKFLOW_DISPATCHER_POOL_SIZE`                       | `10`               | claim/complete throughput, plus one connection held for Graphile LISTEN and one for dispatcher ownership |
+| `WORKFLOW_DISPATCHER_CONCURRENCY`                     | `poolSize - 2`     | held dispatches in flight across all tenants. Independent of the pool — see below                        |
 | `WORKFLOW_DISPATCHER_POLL_INTERVAL_MS`                | `500`              |                                                                                                          |
 | `WORKFLOW_DISPATCHER_MAX_INFLIGHT_PER_TENANT`         | derived from cores | fairness ceiling, not a throttle                                                                         |
 | `WORKFLOW_DISPATCHER_DISPATCH_TIMEOUT_MS`             | `900000`           | a backstop against a wedged executor. Liveness is the lease renewal's job                                |
@@ -112,6 +112,42 @@ honoured by only one end is a silent failure rather than a loud one.
 | `WORKFLOW_DISPATCHER_MAINTENANCE_MAX_STREAMS_TO_PACK` | `100`              | maximum terminal streams rewritten into blocks per pass                                                  |
 | `WORKFLOW_DISPATCHER_MAINTENANCE_RUN_BATCH_SIZE`      | `1000`             | maximum expired workflow graphs deleted by one statement                                                 |
 | `WORKFLOW_WORLD_STREAM_COMPACTION`                    | `on`               | also controls snapshot stripping during terminal block rewrites                                          |
+
+#### Sizing the dispatcher pool
+
+The pool and the concurrency are independent knobs. Graphile checks a connection
+out of the pool for `getJob` and for `completeJob`, and returns it in between:
+`makeWithPgClientFromPool` acquires around a callback and releases in its
+`finally`, and the task handler is invoked outside that callback. A dispatch held
+open for minutes waiting on an executor therefore occupies **no** connection —
+only a socket and an in-flight lease renewal.
+
+Two connections in the pool are held for the process lifetime: the lifecycle
+advisory lock (session-scoped, so its client cannot be returned) and Graphile's
+LISTEN. Everything above that is transient, so size the pool against how fast
+jobs are claimed and completed, not against how many are running.
+
+Measured on graphile-worker 0.16.6 at `concurrency=50`, median wall-clock:
+
+| pool | 50 held dispatches (2s each) | 500 fast dispatches (50ms each) | 1000 instant jobs |
+| ---- | ---------------------------- | ------------------------------- | ----------------- |
+| 3    | 2078ms                       | 724ms                           | 1282ms            |
+| 4    | 2070ms                       | 643ms                           | 857ms             |
+| 6    | 2065ms                       | 597ms                           | 626ms             |
+| 10   | 2043ms                       | 599ms                           | 381ms             |
+| 16   | 2057ms                       | 655ms                           | 290ms             |
+| 52   | 2076ms                       | 659ms                           | 211ms             |
+
+Held dispatches — the real workload — are flat: pool 3 and pool 52 finish in the
+same time against a 2000ms floor. Only the rightmost column, where handlers do
+nothing at all and the job loop is pure SQL, rewards a large pool, and no real
+dispatch behaves that way. The default of 10 sits at the knee for realistic
+dispatch rates; the useful range is 6–16 regardless of concurrency.
+
+So to run more dispatches at once, raise `WORKFLOW_DISPATCHER_CONCURRENCY` and
+leave the pool alone. Earlier versions rejected a concurrency above
+`poolSize - 2`, on the belief that a running job holds a connection; that bound
+is gone, and only a floor of 4 on the pool itself remains.
 
 The dispatcher binds no port. Readiness is the literal line
 `workflow-dispatcher: ready` on stdout — a stable contract, matched by supervisors
