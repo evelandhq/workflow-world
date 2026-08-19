@@ -29,6 +29,13 @@ export type DispatcherConfiguration = {
 const DEFAULT_ACTIVATION_LEASE_TTL_MS = 180_000;
 
 /**
+ * Two connections are permanently held (lifecycle advisory lock, Graphile
+ * LISTEN), so a pool below this leaves at most one for the claim/complete
+ * round-trips of every worker — enough to work, but needlessly serialised.
+ */
+const MIN_DISPATCHER_POOL_SIZE = 4;
+
+/**
  * How many tenants one dispatcher may have in flight at once, derived from the
  * machine the way build concurrency is. A held dispatch costs one socket and one
  * PG connection slot, not a core, so this is far more generous than a build cap —
@@ -87,25 +94,37 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
     );
   }
 
-  // The pool is the authority, not the concurrency. graphile takes one pooled
-  // connection per running job, one held permanently for LISTEN, and one held
-  // for the dispatcher's lifecycle advisory lock, so a concurrency above
-  // `poolSize - 2` cannot actually be served — upstream's
-  // 10-and-50 pairing makes graphile warn on every boot and, worse, puts the
-  // shared database's connection count out of the operator's hands. This is the
-  // database every tenant now shares, so the bound has to be the explicit one.
+  // Two connections are held for the whole process lifetime: one for the
+  // dispatcher's lifecycle advisory lock (session-scoped, so its client stays
+  // checked out until shutdown) and one for Graphile's LISTEN.
+  //
+  // Nothing else is held. This used to say graphile takes a pooled connection
+  // per *running* job, and the concurrency was bounded at `poolSize - 2` on
+  // that basis. It is not true: `makeWithPgClientFromPool` acquires around a
+  // callback and releases in its `finally`, and graphile invokes the task
+  // handler outside that callback — a connection is taken for `getJob` and for
+  // `completeJob`, and returned to the pool in between. A held dispatch waiting
+  // minutes on HTTP therefore holds no connection at all.
+  //
+  // Measured on graphile-worker 0.16.6, 50 concurrent 2s handlers: identical
+  // wall-clock at pool 3 and at pool 52 (2078ms / 2076ms against a 2000ms
+  // floor). So the pool is sized against claim/complete *throughput*, not
+  // against concurrency, and the two knobs are independent. See README
+  // "Sizing the dispatcher pool".
   const poolSize = positiveNumber(env.WORKFLOW_DISPATCHER_POOL_SIZE, 10);
+  if (poolSize < MIN_DISPATCHER_POOL_SIZE) {
+    throw new Error(
+      `WORKFLOW_DISPATCHER_POOL_SIZE (${String(poolSize)}) is below the minimum of ` +
+        `${String(MIN_DISPATCHER_POOL_SIZE)}: one connection is held for dispatcher ownership and ` +
+        `one for Graphile LISTEN, leaving too few for claiming and completing jobs.`,
+    );
+  }
+  // Kept as the default for continuity with earlier releases, not because the
+  // pool bounds it — raise the concurrency without touching the pool.
   const concurrency = positiveNumber(
     env.WORKFLOW_DISPATCHER_CONCURRENCY,
     Math.max(1, poolSize - 2),
   );
-  if (concurrency > poolSize - 2) {
-    throw new Error(
-      `WORKFLOW_DISPATCHER_CONCURRENCY (${String(concurrency)}) must leave two connections in ` +
-        `WORKFLOW_DISPATCHER_POOL_SIZE (${String(poolSize)}): one for dispatcher ownership and one ` +
-        `for Graphile LISTEN, on top of one per running job.`,
-    );
-  }
 
   return {
     worldUrl,

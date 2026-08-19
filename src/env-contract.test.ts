@@ -114,8 +114,18 @@ describe("shared environment contract", () => {
     });
   });
 
+  /**
+   * The pool and the concurrency are independent. Graphile holds a pooled
+   * connection for `getJob` and `completeJob` only — never across the task
+   * handler — so a dispatch held for minutes on HTTP occupies no connection,
+   * and a concurrency far above the pool size is served normally. An earlier
+   * version of this package rejected exactly that configuration, on the belief
+   * that a running job holds a connection; measured on graphile-worker 0.16.6,
+   * 50 concurrent 2s handlers finish in the same wall-clock at pool 3 as at
+   * pool 52.
+   */
   describe("dispatcher connection budget", () => {
-    test("reserves one connection each for ownership and Graphile LISTEN", () => {
+    test("defaults concurrency to the pool minus the two permanently held connections", () => {
       const config = resolveDispatcherConfig({
         ...baseDispatcherEnv,
         WORKFLOW_WORLD_URL: "postgres://host/shared",
@@ -125,15 +135,25 @@ describe("shared environment contract", () => {
       expect(config.concurrency).toBe(8);
     });
 
-    test("rejects explicit concurrency that consumes the ownership slot", () => {
+    test("accepts a concurrency well above the pool size", () => {
+      const config = resolveDispatcherConfig({
+        ...baseDispatcherEnv,
+        WORKFLOW_WORLD_URL: "postgres://host/shared",
+        WORKFLOW_DISPATCHER_POOL_SIZE: "10",
+        WORKFLOW_DISPATCHER_CONCURRENCY: "50",
+      });
+
+      expect(config).toMatchObject({ poolSize: 10, concurrency: 50 });
+    });
+
+    test("rejects a pool too small to leave room for claiming jobs", () => {
       expect(() =>
         resolveDispatcherConfig({
           ...baseDispatcherEnv,
           WORKFLOW_WORLD_URL: "postgres://host/shared",
-          WORKFLOW_DISPATCHER_POOL_SIZE: "10",
-          WORKFLOW_DISPATCHER_CONCURRENCY: "9",
+          WORKFLOW_DISPATCHER_POOL_SIZE: "3",
         }),
-      ).toThrow(/ownership/i);
+      ).toThrow(/WORKFLOW_DISPATCHER_POOL_SIZE/);
     });
   });
 
