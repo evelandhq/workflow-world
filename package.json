@@ -1,6 +1,6 @@
 {
   "name": "@evelandhq/workflow-world",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Natively multi-tenant Workflow World for the Vercel Workflow SDK, plus the dispatcher that drives it out of process",
   "keywords": [
     "durable-execution",
