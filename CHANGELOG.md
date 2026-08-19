@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.11.0...workflow-world-v0.12.0) (2026-08-19)
+
+
+### Features
+
+* decouple dispatcher concurrency from the pool size ([#41](https://github.com/evelandhq/workflow-world/issues/41)) ([cfa2115](https://github.com/evelandhq/workflow-world/commit/cfa211506fcde07631e9efe351d721323583bce3))
+
 ## [0.11.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.10.1...workflow-world-v0.11.0) (2026-08-18)
 
 
