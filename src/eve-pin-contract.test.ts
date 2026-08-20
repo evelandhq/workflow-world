@@ -84,7 +84,7 @@ describe("@workflow/* pins track the installed eve", () => {
     // The conformance harness, and deliberately not part of the runtime pairing:
     // it ships its *own* runtime bundle and tracks a separate release line. That
     // line happens to agree with ours today (beta.42 pins @workflow/world
-    // beta.27, which is what eve 0.39.0 installs), but the agreement is a
+    // beta.27, which is what eve 0.39.3 installs), but the agreement is a
     // coincidence of timing, not a constraint — the harness releases on its own
     // cadence and has sat a version ahead of eve before.
     // Forcing it onto eve's set would mean testing against a runtime eve does not
