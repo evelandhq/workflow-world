@@ -88,11 +88,8 @@ describe("postgres queue http execution", () => {
   // graphile's non-race-safe installSchema, so the pool stub needs `connect`
   // as well as `query`.
   const pool = {
-    // No run is quarantined in these tests; everything else keeps the
-    // catch-all "exists: false" the schema probes expect.
-    query: vi.fn(async (sql: unknown) =>
-      /run_quarantines/.test(String(sql)) ? { rows: [] } : { rows: [{ exists: false }] },
-    ),
+    // The catch-all "exists: false" the schema probes expect.
+    query: vi.fn(async () => ({ rows: [{ exists: false }] })),
     connect: vi.fn(async () => ({
       query: vi.fn(async () => ({ rows: [] })),
       release: vi.fn(),

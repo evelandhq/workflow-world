@@ -21,7 +21,6 @@ import {
  */
 import { FLOW_JOB_NAME, runQueueName } from "../dispatch-contract.js";
 import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
-import { isRunQuarantined, QUARANTINE_PARK_RUN_AT } from "../quarantine.js";
 
 export { FLOW_JOB_NAME };
 
@@ -96,13 +95,9 @@ export async function startDispatcher(input: {
     });
   };
 
-  const deps: DispatcherDeps & {
-    isRunQuarantined: NonNullable<DispatcherDeps["isRunQuarantined"]>;
-  } = {
+  const deps: DispatcherDeps = {
     ...input.deps,
     runLookup: input.deps.runLookup ?? createRunLookup(pool),
-    isRunQuarantined:
-      input.deps.isRunQuarantined ?? ((tenantId, runId) => isRunQuarantined(pool, tenantId, runId)),
     reenqueue,
     onDeadLetter,
   };
@@ -123,27 +118,6 @@ export async function startDispatcher(input: {
     // the host's value, and addressing `__wkf_workflow_*` at an executor that
     // registered `__<ns>_wkf_workflow_*` is an unhandled queue every time.
     const queueName = `${getQueueTopicPrefix("workflow", message.queueNamespace)}${message.id}`;
-
-    // Boot recovery already skips quarantined runs, but a job can pre-date the
-    // marker or race its creation. Checked here, before any activation: the
-    // claimed job is parked with its payload intact instead of being executed
-    // or dead-lettered — a marker is an operator decision, not a failure.
-    const quarantinedRunId = readRunId(message);
-    if (quarantinedRunId && (await deps.isRunQuarantined(message.tenantId, quarantinedRunId))) {
-      await workerUtils.addJob(jobName, MessageData.encode(message), {
-        jobKey: message.idempotencyKey ?? message.messageId,
-        runAt: QUARANTINE_PARK_RUN_AT,
-        queueName: runQueueName(message.tenantId, quarantinedRunId),
-        maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
-        flags: [`project:${message.tenantId}`],
-      });
-      log("parked a dispatch for a quarantined run", {
-        tenantId: message.tenantId,
-        runId: quarantinedRunId,
-        messageId: message.messageId,
-      });
-      return;
-    }
 
     fairness.acquire(message.tenantId);
     try {

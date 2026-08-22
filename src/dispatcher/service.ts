@@ -25,27 +25,19 @@ export type DispatcherServiceOptions = {
   /** Overridable so a test can drive the loop without a control API. */
   activation?: ActivationClient;
   /**
-   * Recover-paused mode: take ownership, migrate and finish boot recovery, but
-   * do not start the worker pool that claims jobs. The host verifies its exact
-   * activation path and then calls `resume()` — that authenticated, explicit
-   * step is what moves the service to `ready`. Restarting the process never
-   * substitutes for it.
-   */
-  startPaused?: boolean;
-  /**
    * Machine-readable lifecycle callbacks, in order:
    * `ownership_acquired → migrations_applied → boot_recovery_completed →
-   * ready_paused? → ready → stopped`. A supervisor gates on these — never on
-   * stdout text, which proves only that the process printed something.
+   * ready → stopped`. A supervisor gates on these — never on stdout text,
+   * which proves only that the process printed something.
    */
   lifecycle?: {
     onPhase?: (event: DispatcherLifecycleEvent) => void;
   };
   /**
-   * Cutover preflight, run after ownership and migrations but before boot
-   * recovery. Throwing aborts startup with ownership released — the hook is
-   * where a host proves e.g. that no claimable unscoped early-external jobs
-   * remain and every non-recoverable run is terminal or quarantined.
+   * Host preflight, run after ownership and migrations but before boot
+   * recovery — e.g. to read the World's schema generation and cluster identity
+   * for the host's registration. Throwing aborts startup with ownership
+   * released and nothing re-enqueued.
    */
   beforeBootRecovery?: (context: { pool: Pool }) => Promise<void>;
 };
@@ -54,7 +46,6 @@ export type DispatcherLifecyclePhase =
   | "ownership_acquired"
   | "migrations_applied"
   | "boot_recovery_completed"
-  | "ready_paused"
   | "ready"
   | "stopped";
 
@@ -64,16 +55,13 @@ export type DispatcherLifecycleEvent = {
   attributes?: Record<string, string | number | boolean>;
 };
 
-export type DispatcherServicePhase = "ready_paused" | "ready" | "stopped";
+export type DispatcherServicePhase = "ready" | "stopped";
 
 export type DispatcherService = {
-  /** Absent while the service is `ready_paused`: no worker pool exists yet. */
   runtime?: DispatcherRuntime;
   config: DispatcherConfiguration;
   /** Current lifecycle state; `ready` is the only state that claims jobs. */
   readonly phase: DispatcherServicePhase;
-  /** Start claiming. Idempotent; only meaningful from `ready_paused`. */
-  resume(): Promise<void>;
   stop(): Promise<void>;
 };
 
@@ -165,7 +153,7 @@ export async function startDispatcherService(
     workerUtils = await makeWorkerUtils({ pgPool: pool });
     const startedWorkerUtils = workerUtils;
 
-    // The host's cutover gate. Failing here aborts with ownership released and
+    // The host's preflight. Failing here aborts with ownership released and
     // boot recovery never run — nothing has been re-enqueued yet.
     if (options.beforeBootRecovery) {
       await options.beforeBootRecovery({ pool });
@@ -184,7 +172,7 @@ export async function startDispatcherService(
     });
     emitPhase("boot_recovery_completed", { reenqueuedRuns });
 
-    let phase: DispatcherServicePhase = "ready_paused";
+    let phase: DispatcherServicePhase | "starting" = "starting";
     let maintenance: { stop(): Promise<void> } | undefined;
 
     const startClaiming = async () => {
@@ -262,11 +250,9 @@ export async function startDispatcherService(
     const service: DispatcherService = {
       config,
       get phase() {
-        return phase;
-      },
-      async resume() {
-        if (phase !== "ready_paused") return;
-        await startClaiming();
+        // `starting` is unobservable: the service is only handed out once
+        // `startClaiming` has moved it to `ready`.
+        return phase === "starting" ? "ready" : phase;
       },
       async stop() {
         const errors: unknown[] = [];
@@ -275,7 +261,7 @@ export async function startDispatcherService(
           const startedRuntime = runtime;
           await collectCleanupError(errors, () => startedRuntime.stop());
         } else {
-          // Paused: no runner ever owned the worker utils, so release them here.
+          // No runner ever owned the worker utils, so release them here.
           await collectCleanupError(errors, () => Promise.resolve(startedWorkerUtils.release()));
         }
         await collectCleanupError(errors, releaseOwnership);
@@ -290,11 +276,7 @@ export async function startDispatcherService(
       },
     };
 
-    if (options.startPaused) {
-      emitPhase("ready_paused");
-    } else {
-      await startClaiming();
-    }
+    await startClaiming();
     return service;
   } catch (error) {
     if (runtime) {
