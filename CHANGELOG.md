@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.13.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.12.0...workflow-world-v0.13.0) (2026-08-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* `readLatestCutoverProof`/`recordCutoverProof`, `countClaimableUnscopedFlowJobs`/`migrateUnscopedRunJobs`/`readFlowJobRun`, the `quarantine*` exports, `DispatcherServiceOptions.startPaused`, `DispatcherService.resume()` and the `ready_paused` lifecycle phase are removed; `workflow.cutover_proofs` and `workflow.run_quarantines` are dropped on migration.
+
+### Refactoring
+
+* remove the completed cutover machinery ([#47](https://github.com/evelandhq/workflow-world/issues/47)) ([2cb0839](https://github.com/evelandhq/workflow-world/commit/2cb083960d93d3b938dcea7f3d267347712ab651))
+
 ## [0.12.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.11.0...workflow-world-v0.12.0) (2026-08-19)
 
 
