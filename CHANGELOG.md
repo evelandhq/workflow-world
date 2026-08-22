@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.13.0...workflow-world-v0.13.1) (2026-08-22)
+
+
+### Fixes
+
+* keep workflow.run_quarantines for Releases baked with &lt;= 0.12.0 ([#49](https://github.com/evelandhq/workflow-world/issues/49)) ([5ae2fe9](https://github.com/evelandhq/workflow-world/commit/5ae2fe9eb723d09b0c7014fc7c7c98e67a9e9d13))
+
 ## [0.13.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.12.0...workflow-world-v0.13.0) (2026-08-22)
 
 
