@@ -52,12 +52,6 @@ export type DispatcherDeps = {
     jobName?: string;
     queueName?: string;
   }) => Promise<void>;
-  /**
-   * Whether the run carries an unresolved durable quarantine marker. Checked
-   * by the handler before any activation; defaults to the marker table in the
-   * dispatcher's own database.
-   */
-  isRunQuarantined?: (tenantId: string, runId: string) => Promise<boolean>;
   log?: (message: string, meta?: Record<string, unknown>) => void;
 };
 
