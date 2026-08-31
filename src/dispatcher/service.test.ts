@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   connectError: null as Error | null,
   lockAcquired: true,
   ownershipError: null as Error | null,
+  recoveryCandidates: [] as unknown[],
   recoveryError: null as Error | null,
   runtimeStopError: null as Error | null,
 }));
@@ -69,11 +70,17 @@ vi.mock("../storage-maintenance.js", () => ({
 }));
 
 vi.mock("./boot-recovery.js", () => ({
-  reclaimAndReenqueueActiveRunsForAllTenants: vi.fn(async () => {
-    state.calls.push("recover");
-    if (state.recoveryError) throw state.recoveryError;
-    return 1;
-  }),
+  reclaimAndReenqueueActiveRunsForAllTenants: vi.fn(
+    async (input: { filterRuns?: (runs: unknown[]) => Promise<unknown[]> | unknown[] }) => {
+      state.calls.push("recover");
+      if (state.recoveryError) throw state.recoveryError;
+      if (input.filterRuns) {
+        const kept = await input.filterRuns(state.recoveryCandidates);
+        return kept.length;
+      }
+      return 1;
+    },
+  ),
 }));
 
 vi.mock("./runner.js", () => ({
@@ -101,6 +108,7 @@ describe("dispatcher service lifecycle", () => {
     state.connectError = null;
     state.lockAcquired = true;
     state.ownershipError = null;
+    state.recoveryCandidates = [];
     state.recoveryError = null;
     state.runtimeStopError = null;
     vi.clearAllMocks();
@@ -250,6 +258,38 @@ describe("dispatcher service lifecycle", () => {
     ]);
     // Recovery reports what it re-enqueued, so a registration can carry it.
     expect(events[2]?.attributes).toMatchObject({ reenqueuedRuns: 1 });
+  });
+
+  it("hands the host's boot-recovery filter to the sweep and reports what it excluded", async () => {
+    state.recoveryCandidates = [
+      { tenantId: "p_a", runId: "wrun_1", deploymentId: "dep_live" },
+      { tenantId: "p_a", runId: "wrun_2", deploymentId: "dep_retired" },
+    ];
+    const seen: unknown[] = [];
+    const events: Array<{ phase: string; attributes?: Record<string, unknown> }> = [];
+
+    const service = await startDispatcherService({
+      env: {
+        NODE_ENV: "development",
+        WORKFLOW_WORLD_URL: "postgres://workflow.test/world",
+        WORKFLOW_DISPATCHER_ACTIVATION_API_URL: "http://activation.test",
+      },
+      activation,
+      filterBootRecoveryRuns: (runs) => {
+        seen.push(...runs);
+        return runs.filter((run) => run.deploymentId === "dep_live");
+      },
+      lifecycle: {
+        onPhase: (event) => {
+          events.push({ phase: event.phase, attributes: event.attributes });
+        },
+      },
+    });
+    await service.stop();
+
+    expect(seen).toEqual(state.recoveryCandidates);
+    const recovery = events.find((event) => event.phase === "boot_recovery_completed");
+    expect(recovery?.attributes).toMatchObject({ reenqueuedRuns: 1, filteredRuns: 1 });
   });
 
   it("a failing host preflight keeps boot recovery from ever running", async () => {

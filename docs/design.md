@@ -551,6 +551,52 @@ Every path into that table matters, including the one that is easy to miss: a
 dispatch that _throws_ rather than returning a failure outcome must still reach
 it, or the final attempt vanishes with no record at all.
 
+### Host-driven run reconciliation
+
+Run status is otherwise written only from inside the World, by the workflow's
+own lifecycle events. That default is right — the workflow owns its outcome —
+but it leaves the host platform with knowledge and no pen: it supervises the
+agent processes, so it alone knows when a run's executor is gone for good
+(idle-reaped, crashed, deployment retired). Without a write path those runs
+stay `running` forever, and boot recovery replays every one of them on every
+dispatcher start.
+
+`reconcileWorkflowRuns` is that write path, and it draws the same line the
+dead-letter design draws: a host verdict is not a workflow-authored outcome, so
+it never appends `run_failed` events or stream EOFs on the workflow's behalf.
+It offers three dispositions over an explicitly selected set of a tenant's
+active runs (by run id and/or deployment id — there is deliberately no
+"everything" form):
+
+- **fail** / **cancel** write the run row the way the World's own terminal
+  transitions do: conditional on the run still being active, hooks deleted
+  except retained tokens, waits deleted, retention deadlines recomputed by the
+  database trigger. `fail` records a machine-readable `error_code` and leaves
+  `error_cbor` NULL — this process cannot honestly mint runtime-serialized
+  error data, and pretending otherwise would poison hydration.
+- **quarantine** leaves the run's status alone and parks it behind an
+  unresolved dead letter whose payload is the same message boot recovery would
+  have reconstructed. Operator replay of a host quarantine and of a
+  retry-exhausted delivery is therefore one procedure, and resolution is the
+  replay boundary for both.
+
+The natural call sites are the host's instance reconciliation loop and the
+dispatcher's `beforeBootRecovery` preflight, which receives the pool exactly so
+orphans can be settled before the sweep ever sees them.
+
+### Filtered boot recovery
+
+Reconciliation settles runs the host has given up on. The complementary seam is
+for runs it has merely lost the ability to replay _right now_: boot recovery's
+`filterRuns` (surfaced as `filterBootRecoveryRuns` on the dispatcher service)
+is called once with the full candidate list — one call, not a per-run
+predicate, because "is this Deployment activatable?" is a control-plane lookup
+the host will want to batch — and only the runs it returns are re-enqueued.
+
+A skipped run is deferred, not settled: it stays active and is offered again on
+the next boot. Worker-lock reclaim still covers skipped runs, so a later
+settle-or-readmit is not held behind graphile's stale-lock threshold.
+
 ## Configuration
 
 Every variable has one canonical `WORKFLOW_*` name, with `EVELAND_*` accepted as

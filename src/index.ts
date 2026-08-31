@@ -32,6 +32,13 @@ export {
 } from "./migrate.js";
 export { reenqueueTenantRuns } from "./recovery.js";
 export {
+  reconcileWorkflowRuns,
+  type ReconcileWorkflowRunsOptions,
+  type ReconcileWorkflowRunsResult,
+  type ReconciledWorkflowRun,
+  type WorkflowRunReconciliationDisposition,
+} from "./reconciliation.js";
+export {
   backfillWorkflowRunRetentionClass,
   inspectWorkflowRunRetentionMismatches,
   previewWorkflowRunRetentionBackfill,

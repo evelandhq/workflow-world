@@ -169,6 +169,16 @@ The dispatcher does not manufacture a workflow `run_failed` event or stream EOF 
 a transport failure, so operators can choose between replay and an explicit workflow
 cancel/fail action without losing the original message.
 
+The host has two seams over this machinery. `reconcileWorkflowRuns` (root export)
+is the supported write path for runs whose executor the host knows is gone for
+good: it moves selected `pending`/`running` runs to `failed`/`cancelled` with the
+World's own terminal semantics, or quarantines them behind an unresolved dead
+letter whose payload is replayable exactly like an organic one. And
+`startDispatcherService({ filterBootRecoveryRuns })` lets the host decide, per
+boot, which of the sweep's candidates are worth replaying — a run bound to a
+Deployment that is not activatable can be skipped without being settled; it stays
+active and is offered again on the next boot.
+
 `WORKFLOW_QUEUE_NAMESPACE` is eve's, read by eve's own resolver on the deployment
 side only. Do not set it on the host: the dispatcher must take the namespace from
 the run it is recovering, never from its own environment.

@@ -1,6 +1,7 @@
 export { createActivationClient } from "./activation-client.js";
 export type { Activation, ActivationClient, ActivationOutcome } from "./activation-client.js";
 export { reenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
+export type { BootRecoveryRun } from "./boot-recovery.js";
 export { deriveMaxInFlightPerTenant, resolveDispatcherConfig } from "./config.js";
 export type { DispatcherConfiguration } from "./config.js";
 export {
