@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.13.1...workflow-world-v0.14.0) (2026-08-31)
+
+
+### Features
+
+* expose seams for host-driven run reconciliation and filtered boot recovery ([#58](https://github.com/evelandhq/workflow-world/issues/58)) ([87a9771](https://github.com/evelandhq/workflow-world/commit/87a97719bb1f4bd604362d93ba0b77bcb3fa7848)), closes [#57](https://github.com/evelandhq/workflow-world/issues/57)
+
 ## [0.13.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.13.0...workflow-world-v0.13.1) (2026-08-22)
 
 
