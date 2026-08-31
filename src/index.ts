@@ -10,6 +10,7 @@ import {
 } from "./config.js";
 import { createClient, type Drizzle } from "./drizzle/index.js";
 import { createQueue } from "./queue.js";
+import { createRunsCancellation } from "./run-cancellation.js";
 import {
   createEventsStorage,
   createHooksStorage,
@@ -31,6 +32,13 @@ export {
   tenantPartitionsExist,
 } from "./migrate.js";
 export { reenqueueTenantRuns } from "./recovery.js";
+export {
+  cancelWorkflowRuns,
+  listActiveWorkflowRuns,
+  type ActiveWorkflowRunRef,
+  type CancelWorkflowRunsInput,
+  type ListActiveWorkflowRunsInput,
+} from "./reconciliation.js";
 export {
   backfillWorkflowRunRetentionClass,
   inspectWorkflowRunRetentionMismatches,
@@ -72,9 +80,16 @@ export * from "./drizzle/schema.js";
  * namespace that boot recovery cannot honour.
  */
 function createStorage(drizzle: Drizzle, tenantId: string, queueNamespace?: string): Storage {
+  const events = createEventsStorage(drizzle, tenantId, queueNamespace);
   return {
-    runs: createRunsStorage(drizzle, tenantId),
-    events: createEventsStorage(drizzle, tenantId, queueNamespace),
+    runs: {
+      ...createRunsStorage(drizzle, tenantId),
+      // Optional in the interface, and `@workflow/core`'s `cancelRuns` falls
+      // back to one-by-one cancellation without it. Implemented so bulk
+      // cancellation and host-driven reconciliation share one write path.
+      cancelMany: createRunsCancellation(drizzle, tenantId, events),
+    },
+    events,
     hooks: createHooksStorage(drizzle, tenantId),
     steps: createStepsStorage(drizzle, tenantId),
   };

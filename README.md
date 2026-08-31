@@ -169,6 +169,27 @@ The dispatcher does not manufacture a workflow `run_failed` event or stream EOF 
 a transport failure, so operators can choose between replay and an explicit workflow
 cancel/fail action without losing the original message.
 
+#### Host-driven run reconciliation
+
+Only the host knows when a run's agent is gone for good — an idle-reaped
+RuntimeInstance whose Sessions it settled, or a Deployment that can never
+activate again. Two seams let it act on that knowledge without touching the
+World's tables:
+
+- `cancelWorkflowRuns(pool, { tenantId, runIds, cancelReason })` (root export)
+  settles abandoned runs through the World's own event-sourced termination
+  path, with idempotent per-run outcomes (`cancelled`, `already_cancelled`,
+  `not_cancellable`, `not_found`, `failed`) safe for a periodic sweep.
+  `listActiveWorkflowRuns(pool, { tenantId?, deploymentId? })` is the matching
+  read. The same implementation backs the World's optional `runs.cancelMany`.
+- `bootRecovery: { shouldRecoverRun }` on `startDispatcherService` lets the
+  host veto individual boot-recovery candidates (each carries `tenantId`,
+  `runId`, `deploymentId`, `queueNamespace`). Skips are per-sweep and a
+  throwing filter fails open, so the durable fix is still to settle the run.
+
+See [Host-driven run reconciliation](docs/design.md#host-driven-run-reconciliation)
+for the reasoning.
+
 `WORKFLOW_QUEUE_NAMESPACE` is eve's, read by eve's own resolver on the deployment
 side only. Do not set it on the host: the dispatcher must take the namespace from
 the run it is recovering, never from its own environment.

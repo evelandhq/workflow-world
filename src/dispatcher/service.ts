@@ -4,7 +4,10 @@ import { Pool, type PoolClient } from "pg";
 import { runMigrations } from "../migrate.js";
 import { startStorageMaintenanceLoop } from "../storage-maintenance.js";
 import { createActivationClient, type ActivationClient } from "./activation-client.js";
-import { reclaimAndReenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
+import {
+  reclaimAndReenqueueActiveRunsForAllTenants,
+  type BootRecoveryCandidate,
+} from "./boot-recovery.js";
 import { resolveDispatcherConfig, type DispatcherConfiguration } from "./config.js";
 import { consoleTelemetry, type DispatcherTelemetry } from "./observability.js";
 import { startDispatcher, type DispatcherRuntime } from "./runner.js";
@@ -40,6 +43,16 @@ export type DispatcherServiceOptions = {
    * released and nothing re-enqueued.
    */
   beforeBootRecovery?: (context: { pool: Pool }) => Promise<void>;
+  bootRecovery?: {
+    /**
+     * Per-run veto over what boot recovery re-enqueues. See
+     * `BootRecoveryCandidate` in `boot-recovery.ts` for the exact contract; in
+     * short, `false` skips the run for this sweep only, and a thrown error
+     * fails open. Typically decided from state read during
+     * `beforeBootRecovery`, which runs first on the same pool.
+     */
+    shouldRecoverRun?: (candidate: BootRecoveryCandidate) => boolean | Promise<boolean>;
+  };
 };
 
 export type DispatcherLifecyclePhase =
@@ -162,6 +175,9 @@ export async function startDispatcherService(
     const reenqueuedRuns = await reclaimAndReenqueueActiveRunsForAllTenants({
       pool,
       workerUtils,
+      ...(options.bootRecovery?.shouldRecoverRun
+        ? { shouldRecoverRun: options.bootRecovery.shouldRecoverRun }
+        : {}),
       log: (message, meta) =>
         telemetry.emit({
           severity: "info",

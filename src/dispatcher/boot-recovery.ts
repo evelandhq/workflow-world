@@ -27,10 +27,28 @@ import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
  * It is safe to run repeatedly: `jobKey` collapses duplicates, and the workflow
  * handler replays the event log rather than re-executing completed work.
  */
+/** One active run boot recovery is about to re-enqueue, as the host sees it. */
+export type BootRecoveryCandidate = {
+  tenantId: string;
+  runId: string;
+  deploymentId: string;
+  queueNamespace: string | null;
+};
+
 type BootRecoveryInput = {
   pool: Pool;
   workerUtils: WorkerUtils;
   log?: (message: string, meta?: Record<string, unknown>) => void;
+  /**
+   * Host veto over individual candidates — return `false` to leave a run out
+   * of this sweep (e.g. it is bound to a Deployment the host knows can never
+   * activate). Skipping is per-sweep, not durable: the run stays `pending`/
+   * `running` and the next boot asks again, so the host should also settle the
+   * run (see `cancelWorkflowRuns`) rather than filter it forever. A filter
+   * that throws fails open — the run is recovered, because re-enqueueing is
+   * the safe default and replay is idempotent.
+   */
+  shouldRecoverRun?: (candidate: BootRecoveryCandidate) => boolean | Promise<boolean>;
 };
 
 export function reenqueueActiveRunsForAllTenants(input: BootRecoveryInput): Promise<number> {
@@ -85,7 +103,34 @@ async function recoverActiveRunsForAllTenants(
 
   let enqueued = 0;
   let unknownNamespace = 0;
+  let skippedByHost = 0;
   for (const row of rows) {
+    if (input.shouldRecoverRun) {
+      let recover = true;
+      try {
+        recover = await input.shouldRecoverRun({
+          tenantId: row.tenant_id,
+          runId: row.id,
+          deploymentId: row.deployment_id,
+          queueNamespace: row.queue_namespace,
+        });
+      } catch (error) {
+        input.log?.("boot recovery filter failed; recovering the run anyway", {
+          runId: row.id,
+          tenantId: row.tenant_id,
+          error: String(error),
+        });
+      }
+      if (!recover) {
+        skippedByHost += 1;
+        input.log?.("skipped a run at the host filter's request", {
+          runId: row.id,
+          tenantId: row.tenant_id,
+          deploymentId: row.deployment_id,
+        });
+        continue;
+      }
+    }
     // The namespace the run's own deployment resolved, recorded when the run was
     // created. It cannot be resolved here: this process runs on the host, so
     // `WORKFLOW_QUEUE_NAMESPACE` would be the host's value rather than the
@@ -144,12 +189,13 @@ async function recoverActiveRunsForAllTenants(
     }
   }
 
-  if (enqueued > 0) {
+  if (enqueued > 0 || skippedByHost > 0) {
     input.log?.("re-enqueued active runs on boot", {
       runs: enqueued,
       // Surfaced as a count too, so an upgrade that stranded namespaced runs is
       // visible in one line rather than only in the per-run entries above.
       ...(unknownNamespace > 0 ? { runsWithUnknownQueueNamespace: unknownNamespace } : {}),
+      ...(skippedByHost > 0 ? { runsSkippedByHostFilter: skippedByHost } : {}),
     });
   }
   return enqueued;

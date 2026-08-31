@@ -551,6 +551,37 @@ Every path into that table matters, including the one that is easy to miss: a
 dispatch that _throws_ rather than returning a failure outcome must still reach
 it, or the final attempt vanishes with no record at all.
 
+### Host-driven run reconciliation
+
+Run status is World-owned, but only the host knows when a run's agent is gone
+for good: an idle-reaped RuntimeInstance whose Sessions it has settled, or a
+Deployment that can never activate again. Without a supported write path those
+runs stay `pending`/`running` forever and boot recovery replays all of them on
+every restart — the leak behind evelandhq/eveland#425.
+
+Two seams close it, both host-called and both routed through the World's own
+machinery rather than raw table writes:
+
+- **`cancelWorkflowRuns(pool, { tenantId, runIds, cancelReason })`** settles
+  abandoned runs through the same event-sourced termination path the World
+  uses itself — `run_cancelled` event (carrying `cancelReason`), the
+  terminal-guarded status UPDATE, hook/wait cleanup. `runs.cancelMany` (the
+  optional bulk-cancel surface the `Storage` interface declares) is the same
+  implementation, tenant-bound. Outcomes are per-run and idempotent, so a
+  periodic reconciler can re-sweep safely. Dead letters are deliberately left
+  unresolved — they are operator evidence, and a terminal status already
+  excludes the run from recovery and dispatch on its own.
+- **`shouldRecoverRun`** (`DispatcherServiceOptions.bootRecovery`) is a per-run
+  veto over the boot sweep, for runs the host has judged but not yet settled —
+  typically decided from state read during `beforeBootRecovery`. Skipping is
+  per-sweep, not durable, and a throwing filter fails open: re-enqueueing is
+  the safe default because replay is idempotent.
+
+The division of judgment is deliberate: the World never decides that a run is
+abandoned (it cannot — activatability is control-plane state), and the host
+never writes run status (it must not — the event log would diverge from the
+row). Each side supplies exactly the half it owns.
+
 ## Configuration
 
 Every variable has one canonical `WORKFLOW_*` name, with `EVELAND_*` accepted as

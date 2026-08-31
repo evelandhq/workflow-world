@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActivationClient } from "./activation-client.js";
+import { reclaimAndReenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
 import { startDispatcherService } from "./service.js";
 
 const state = vi.hoisted(() => ({
@@ -280,6 +281,25 @@ describe("dispatcher service lifecycle", () => {
       "pool:end",
     ]);
     expect(state.calls).not.toContain("recover");
+  });
+
+  it("hands the host's boot-recovery filter to the recovery sweep", async () => {
+    const shouldRecoverRun = vi.fn(() => true);
+    const service = await startDispatcherService({
+      env: {
+        NODE_ENV: "development",
+        WORKFLOW_WORLD_URL: "postgres://workflow.test/world",
+        WORKFLOW_DISPATCHER_ACTIVATION_API_URL: "http://activation.test",
+      },
+      activation,
+      bootRecovery: { shouldRecoverRun },
+    });
+
+    expect(vi.mocked(reclaimAndReenqueueActiveRunsForAllTenants)).toHaveBeenCalledWith(
+      expect.objectContaining({ shouldRecoverRun }),
+    );
+
+    await service.stop();
   });
 
   it("releases ownership and the pool when worker shutdown fails", async () => {
