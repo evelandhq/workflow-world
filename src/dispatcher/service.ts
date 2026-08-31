@@ -4,7 +4,10 @@ import { Pool, type PoolClient } from "pg";
 import { runMigrations } from "../migrate.js";
 import { startStorageMaintenanceLoop } from "../storage-maintenance.js";
 import { createActivationClient, type ActivationClient } from "./activation-client.js";
-import { reclaimAndReenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
+import {
+  reclaimAndReenqueueActiveRunsForAllTenants,
+  type BootRecoveryRun,
+} from "./boot-recovery.js";
 import { resolveDispatcherConfig, type DispatcherConfiguration } from "./config.js";
 import { consoleTelemetry, type DispatcherTelemetry } from "./observability.js";
 import { startDispatcher, type DispatcherRuntime } from "./runner.js";
@@ -36,10 +39,21 @@ export type DispatcherServiceOptions = {
   /**
    * Host preflight, run after ownership and migrations but before boot
    * recovery — e.g. to read the World's schema generation and cluster identity
-   * for the host's registration. Throwing aborts startup with ownership
-   * released and nothing re-enqueued.
+   * for the host's registration, or to settle orphaned runs through
+   * `reconcileWorkflowRuns` so the sweep never sees them. Throwing aborts
+   * startup with ownership released and nothing re-enqueued.
    */
   beforeBootRecovery?: (context: { pool: Pool }) => Promise<void>;
+  /**
+   * Host filter over boot recovery's candidates, called once with the full
+   * list; only the runs returned are re-enqueued. This is for runs the host
+   * knows cannot be replayed right now — bound to a Deployment that is not
+   * activatable — without forcing it to settle them. A skipped run stays
+   * active and is offered again on the next boot.
+   */
+  filterBootRecoveryRuns?: (
+    runs: BootRecoveryRun[],
+  ) => Promise<BootRecoveryRun[]> | BootRecoveryRun[];
 };
 
 export type DispatcherLifecyclePhase =
@@ -159,9 +173,23 @@ export async function startDispatcherService(
       await options.beforeBootRecovery({ pool });
     }
 
+    // Counted here rather than returned by the sweep so its public return type
+    // stays a plain count; the wrapper also guards against a filter that
+    // returns entries the sweep never offered.
+    let filteredRuns = 0;
+    const hostFilter = options.filterBootRecoveryRuns;
     const reenqueuedRuns = await reclaimAndReenqueueActiveRunsForAllTenants({
       pool,
       workerUtils,
+      ...(hostFilter
+        ? {
+            filterRuns: async (runs: BootRecoveryRun[]) => {
+              const kept = await hostFilter(runs);
+              filteredRuns = Math.max(0, runs.length - kept.length);
+              return kept;
+            },
+          }
+        : {}),
       log: (message, meta) =>
         telemetry.emit({
           severity: "info",
@@ -170,7 +198,10 @@ export async function startDispatcherService(
           attributes: (meta ?? {}) as Record<string, string | number | boolean>,
         }),
     });
-    emitPhase("boot_recovery_completed", { reenqueuedRuns });
+    emitPhase("boot_recovery_completed", {
+      reenqueuedRuns,
+      ...(filteredRuns > 0 ? { filteredRuns } : {}),
+    });
 
     let phase: DispatcherServicePhase | "starting" = "starting";
     let maintenance: { stop(): Promise<void> } | undefined;
