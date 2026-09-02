@@ -63,10 +63,10 @@
     "check:eve-drift": "node scripts/eve-pin-drift.mjs"
   },
   "dependencies": {
-    "@workflow/errors": "5.0.0-beta.17",
-    "@workflow/utils": "5.0.0-beta.8",
-    "@workflow/world": "5.0.0-beta.28",
-    "@workflow/world-local": "5.0.0-beta.37",
+    "@workflow/errors": "5.0.0-beta.19",
+    "@workflow/utils": "5.0.0-beta.10",
+    "@workflow/world": "5.0.0-beta.32",
+    "@workflow/world-local": "5.0.0-beta.41",
     "cbor-x": "1.6.0",
     "drizzle-orm": "0.45.2",
     "graphile-worker": "0.16.6",
@@ -77,9 +77,9 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.10",
-    "@workflow/core": "5.0.0-beta.43",
+    "@workflow/core": "5.0.0-beta.47",
     "@workflow/world-testing": "5.0.0-beta.42",
-    "eve": "0.48.0",
+    "eve": "0.49.0",
     "oxfmt": "0.58.0",
     "oxlint": "1.73.0",
     "typescript": "~5.9.0",

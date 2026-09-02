@@ -26,16 +26,23 @@ test("the harness is really configured for external mode", () => {
  * its own copy, so nothing forces the two to agree — several versions of
  * `@workflow/world` coexist in this tree.
  *
- * In beta.42 the package default is v6 and slot identity is mandatory. Assert
- * the runtime's current version so the test moves with that protocol floor.
+ * In beta.42 the package default is v6 and slot identity is mandatory. From
+ * beta.32 of `@workflow/world` (eve 0.49) the runtime floor is the slot-identity
+ * version and `SPEC_VERSION_CURRENT` sits one above it at the sealed log, so
+ * the two no longer coincide: this World deliberately declares the floor (see
+ * `src/index.ts`) because every eve line Eveland hosts must be able to read
+ * the version it stamps. Assert the floor, and that it stays inside the
+ * runtime's accepted range.
  *
  * Asserting it here means a bump on either side surfaces as a version mismatch
  * instead of as a mysterious dispatch failure twelve tests later.
  */
 test("this World's specVersion matches what the test runtime demands", async () => {
   const world = createWorld({ tenantId: TENANT_ID, deploymentId: DEPLOYMENT_ID });
-  const { SPEC_VERSION_CURRENT } = await import("@workflow/world");
-  expect(world.specVersion).toBe(SPEC_VERSION_CURRENT);
+  const { SPEC_VERSION_SUPPORTS_SLOT_IDENTITY, SPEC_VERSION_MAX_SUPPORTED } =
+    await import("@workflow/world");
+  expect(world.specVersion).toBe(SPEC_VERSION_SUPPORTS_SLOT_IDENTITY);
+  expect(world.specVersion).toBeLessThanOrEqual(SPEC_VERSION_MAX_SUPPORTED);
 });
 
 createTestSuite(PACKAGE_NAME);

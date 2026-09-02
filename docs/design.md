@@ -118,12 +118,21 @@ Ranked by how expensive they are to violate.
 the reference implementation with a tenant predicate added. The remaining
 optional members carry decisions worth stating.
 
-**`specVersion` is the literal `6`.** eve compiles the runtime protocol check
-into every release. Through core beta.40 that was literal equality; beta.41 uses
-the inclusive range from `SPEC_VERSION_CURRENT` through
-`SPEC_VERSION_MAX_SUPPORTED`. In beta.42 both the floor and ceiling are 6 and
-slot identity is mandatory rather than a capability; a contract test verifies
-that the installed runtime and this World agree.
+**`specVersion` is the slot-identity version, `6`, declared on purpose rather
+than the package's `SPEC_VERSION_CURRENT`.** eve compiles the runtime protocol
+check into every release. Through core beta.40 that was literal equality;
+beta.41 uses an inclusive range. In beta.42 both the floor and ceiling are 6 and
+slot identity is mandatory rather than a capability. `@workflow/world` beta.32
+(eve 0.49) minted spec 7, the "sealed log": the runtime's floor stays at 6 while
+`SPEC_VERSION_CURRENT` and the ceiling move to 7, and the runtime stamps each new
+run with whatever the World declares. That stamp is read by every eve in
+Eveland's window, and a line that only reads 6 (eve 0.47.x) rejects a spec-7 run
+outright, so this World declares 6 until no such line is deployable. Declaring 6
+gives nothing up: spec 7's reader contract exists for backends that pre-assign
+event positions and must seal abandoned ones with `noop` events, and this World
+allocates each position inside the INSERT that occupies it, so it never has a
+hole to seal. A conformance test verifies that the installed runtime and this
+World agree.
 The package must also declare `@workflow/world` (or `@workflow/core`) on a
 matching version line, because eve checks the manifest's major and prerelease
 tag before it ever loads the world.

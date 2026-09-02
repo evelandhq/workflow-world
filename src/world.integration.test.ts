@@ -1,5 +1,10 @@
 import { EntityConflictError } from "@workflow/errors";
-import { slotToEventId, SPEC_VERSION_CURRENT } from "@workflow/world";
+import {
+  slotToEventId,
+  SPEC_VERSION_CURRENT,
+  SPEC_VERSION_MAX_SUPPORTED,
+  SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
+} from "@workflow/world";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createWorld } from "./index.js";
@@ -156,8 +161,15 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
   });
 
   test("specVersion matches what the eve runtime enforces", () => {
-    expect(SPEC_VERSION_CURRENT).toBe(6);
-    expect(alpha.specVersion).toBe(SPEC_VERSION_CURRENT);
+    // @workflow/world beta.32 (eve 0.49) minted spec 7 while the runtime floor
+    // stayed at slot identity (6). The World declares the floor on purpose so
+    // every eve line in Eveland's window can read the runs it stamps; see the
+    // note on `specVersion` in src/index.ts. The package still writes and
+    // reads 7, which the run created above at SPEC_VERSION_CURRENT exercises.
+    expect(SPEC_VERSION_SUPPORTS_SLOT_IDENTITY).toBe(6);
+    expect(SPEC_VERSION_CURRENT).toBe(7);
+    expect(alpha.specVersion).toBe(SPEC_VERSION_SUPPORTS_SLOT_IDENTITY);
+    expect(alpha.specVersion).toBeLessThanOrEqual(SPEC_VERSION_MAX_SUPPORTED);
   });
 
   test("writing for an unprovisioned tenant fails loudly", async () => {
