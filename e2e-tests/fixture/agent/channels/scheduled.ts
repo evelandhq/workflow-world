@@ -27,12 +27,25 @@ export default defineChannel({
       );
       return Response.json({ sessionId: session.id });
     }),
-    POST("/e2e/preserve-interactive", async (_request, { from }) => {
+    // Two routes rather than one, because the test has to sit between them:
+    // from eve 0.49 a session-create answers as soon as Workflow accepts the
+    // run, before the address's continuation hook exists, and a delivery that
+    // lands in that gap is a racing first message rather than a follow-up.
+    //
+    // The owner is a conversation, not a task, and that is load-bearing. With
+    // no model credentials a task session finishes within a few hundred
+    // milliseconds and disposes the address's hook on the way out, so a
+    // delivery that waited for the hook would find it already gone and start a
+    // fresh root. A conversation stays parked for its next input, hook held,
+    // which is what an interactive owner is.
+    POST("/e2e/preserve-interactive/owner", async (_request, { from }) => {
       const interactive = await from("preserve-e2e").send("create an interactive owner", {
         auth: null,
-        mode: "task",
         title: "Interactive retention preservation e2e",
       });
+      return Response.json({ sessionId: interactive.id });
+    }),
+    POST("/e2e/preserve-interactive/deliver", async (_request, { from }) => {
       const scheduled = await withRunRetentionIntent("scheduled", () =>
         from("preserve-e2e").send("scheduled follow-up on the existing owner", {
           auth: null,
@@ -40,7 +53,7 @@ export default defineChannel({
           turnPolicy: "queue",
         }),
       );
-      return Response.json({ sessionId: interactive.id, scheduledSessionId: scheduled.id });
+      return Response.json({ sessionId: scheduled.id });
     }),
   ],
 });

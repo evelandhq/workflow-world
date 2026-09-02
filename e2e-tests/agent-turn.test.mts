@@ -7,7 +7,9 @@ import { waitForRequiredEventTypes } from "./event-types.mts";
 import { ENABLED_EVE_VERSIONS } from "./eve-versions.mts";
 import {
   buildAgent,
+  createInteractiveOwner,
   databaseFor,
+  deliverScheduledTurn,
   deploymentFor,
   installedEveVersion,
   installedWorldVersion,
@@ -15,7 +17,6 @@ import {
   startAgent,
   startPersistentSession,
   startScheduledSession,
-  startScheduledTurnOnInteractiveSession,
   startSession,
   tenantFor,
   type StartedAgent,
@@ -180,8 +181,18 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
       });
 
       test("a scheduled delivery preserves an existing interactive root", async () => {
-        const { sessionId, scheduledSessionId } =
-          await startScheduledTurnOnInteractiveSession(port);
+        const { sessionId } = await createInteractiveOwner(port);
+
+        // From eve 0.49 a session-create answers as soon as Workflow accepts the
+        // run, before the address's continuation hook exists. A delivery that
+        // lands in that gap is not a follow-up but a racing first message: eve
+        // starts a second candidate root, settles the conflict inside the
+        // workflow, and answers with the loser's id. That is eve's contract, not
+        // this World's, so wait for the hook the way a real scheduler has to;
+        // what this test owns is that the delivery, once it joins the owner,
+        // leaves the whole graph interactive.
+        await waitForContinuationHook(pool, tenantId, sessionId);
+        const { sessionId: scheduledSessionId } = await deliverScheduledTurn(port);
         expect(scheduledSessionId).toBe(sessionId);
 
         const rows = await waitForRetentionGraph(pool, tenantId, sessionId);
@@ -223,6 +234,39 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
     });
   }
 });
+
+/**
+ * Waits for the session to hold the continuation hook of the fixture's
+ * `preserve-e2e` address, which is what a later delivery to that address joins.
+ */
+async function waitForContinuationHook(pool: Pool, tenantId: string, sessionId: string) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const { rows } = await pool.query(
+      `select 1
+         from workflow.workflow_hooks
+        where tenant_id = $1 and run_id = $2 and token like '%preserve-e2e%'
+        limit 1`,
+      [tenantId, sessionId],
+    );
+    if (rows.length > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  // Say what the World holds instead, so a miss is diagnosable from CI output
+  // alone: a session that already finished (and disposed its hooks) reads very
+  // differently from one that never created them.
+  const run = await pool.query<{ status: string }>(
+    `select status from workflow.workflow_runs where tenant_id = $1 and id = $2`,
+    [tenantId, sessionId],
+  );
+  const hooks = await pool.query<{ run_id: string; token: string }>(
+    `select run_id, token from workflow.workflow_hooks where tenant_id = $1 order by created_at`,
+    [tenantId],
+  );
+  throw new Error(
+    `session ${sessionId} (status ${run.rows[0]?.status ?? "missing"}) never took ownership ` +
+      `of the preserve-e2e address; hooks held: ${JSON.stringify(hooks.rows)}`,
+  );
+}
 
 async function waitForRetentionGraph(pool: Pool, tenantId: string, rootRunId: string) {
   let rows: { name: string; retention_class: string }[] = [];
