@@ -228,17 +228,28 @@ export async function startPersistentSession(port: number): Promise<{ sessionId:
   return (await response.json()) as { sessionId: string };
 }
 
-/** Creates an interactive owner, then delivers to it from a scheduled context. */
-export async function startScheduledTurnOnInteractiveSession(
+/** Creates the interactive owner of the fixture's `preserve-e2e` address. */
+export async function createInteractiveOwner(port: number): Promise<{ sessionId: string }> {
+  return await postFixtureRoute(port, "/e2e/preserve-interactive/owner", "interactive owner");
+}
+
+/**
+ * Delivers to that address from a scheduled context. The id is whatever eve
+ * answered with: the owner's when the delivery joined it, a fresh candidate's
+ * when it raced the owner's startup instead.
+ */
+export async function deliverScheduledTurn(port: number): Promise<{ sessionId: string }> {
+  return await postFixtureRoute(port, "/e2e/preserve-interactive/deliver", "scheduled delivery");
+}
+
+async function postFixtureRoute(
   port: number,
-): Promise<{ sessionId: string; scheduledSessionId: string }> {
-  const response = await fetch(`http://127.0.0.1:${String(port)}/e2e/preserve-interactive`, {
-    method: "POST",
-  });
+  path: string,
+  label: string,
+): Promise<{ sessionId: string }> {
+  const response = await fetch(`http://127.0.0.1:${String(port)}${path}`, { method: "POST" });
   if (!response.ok) {
-    throw new Error(
-      `existing session delivery failed: ${String(response.status)} ${await response.text()}`,
-    );
+    throw new Error(`${label} failed: ${String(response.status)} ${await response.text()}`);
   }
-  return (await response.json()) as { sessionId: string; scheduledSessionId: string };
+  return (await response.json()) as { sessionId: string };
 }

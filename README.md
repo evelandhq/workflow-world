@@ -364,11 +364,11 @@ World, which conformance never loads an eve to check.
 
 An eve release is almost never a reason to do anything here. What matters is not
 that eve shipped, but whether the `@workflow/*` set it installs moved. The
-current supported window, 0.34.0 through 0.38.3, contains three sets: 0.34.0 uses
-world beta.25 and world-local beta.34; 0.35.0 through 0.37.1 use beta.26 and
-beta.35; 0.38.3 uses beta.27 and beta.36. Core moves from beta.41 to beta.42 at
-0.38.3. Exact patches still matter: Workflow pins have moved within an eve minor
-line before, so a minor is not a set.
+current supported window, {0.47.x, 0.49.x}, contains two sets: every 0.47.x
+release uses world beta.28, world-local beta.37 and core beta.43; 0.49.0 uses
+world beta.32, world-local beta.41 and core beta.47. (0.48 was superseded within
+hours and never deployed.) Exact patches still matter: Workflow pins have moved
+within an eve minor line before, so a minor is not a set.
 
 Two versions with very different cadences are easy to conflate:
 

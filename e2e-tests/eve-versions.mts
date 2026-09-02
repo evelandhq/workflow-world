@@ -2,23 +2,25 @@
  * Exact releases from Eveland's supported eve window. The compatibility policy,
  * not npm's `latest`, is the authority on what may be deployed.
  *
- * The current window contains three distinct Workflow package sets:
+ * The current window is {0.47.x, 0.49.x}. 0.48 is skipped: 0.49.0 superseded it
+ * within hours of the window sliding onto it, so no deployment ever ran on it.
+ * The window contains two distinct Workflow package sets:
  *
- * | package                 | 0.34.0  | 0.35.0–0.37.1 | 0.38.3  |
- * | ----------------------- | ------- | ------------- | ------- |
- * | `@workflow/world`       | beta.25 | beta.26       | beta.27 |
- * | `@workflow/world-local` | beta.34 | beta.35       | beta.36 |
- * | `@workflow/core`        | beta.41 | beta.41       | beta.42 |
- * | `@workflow/errors`      | beta.16 | beta.16       | beta.17 |
- * | `@workflow/utils`       | beta.8  | beta.8        | beta.8  |
+ * | package                 | 0.47.0–0.47.7 | 0.49.0  |
+ * | ----------------------- | ------------- | ------- |
+ * | `@workflow/world`       | beta.28       | beta.32 |
+ * | `@workflow/world-local` | beta.37       | beta.41 |
+ * | `@workflow/core`        | beta.43       | beta.47 |
+ * | `@workflow/errors`      | beta.17       | beta.19 |
+ * | `@workflow/utils`       | beta.8        | beta.10 |
  *
- * Enabled entries cover each set once: the oldest supported release and the
- * latest verified release for each distinct set. The two intermediate releases
- * remain documented but disabled because they install the same set as 0.37.1.
- * Exact patches matter because Workflow pins have moved within a minor line in
- * the past. Each enabled entry costs an npm install plus a full `eve build`.
- * Local runs cover all enabled entries; CI supplies EVE_VERSION so each matrix
- * job covers only the release named in its label.
+ * Enabled entries cover each set once, at the release Eveland verified for that
+ * line: 0.47.7 and 0.49.0. The window's floor, 0.47.0, stays documented but
+ * disabled because it installs the same set as 0.47.7. Exact patches matter
+ * because Workflow pins have moved within a minor line in the past. Each enabled
+ * entry costs an npm install plus a full `eve build`. Local runs cover all
+ * enabled entries; CI supplies EVE_VERSION so each matrix job covers only the
+ * release named in its label.
  */
 export type EveVersion = {
   version: string;
@@ -27,11 +29,9 @@ export type EveVersion = {
 };
 
 export const EVE_VERSIONS: readonly EveVersion[] = [
-  { version: "0.34.0", enabled: true },
-  { version: "0.35.0", enabled: false },
-  { version: "0.36.0", enabled: false },
-  { version: "0.37.1", enabled: true },
-  { version: "0.38.3", enabled: true },
+  { version: "0.47.0", enabled: false },
+  { version: "0.47.7", enabled: true },
+  { version: "0.49.0", enabled: true },
 ];
 
 const eveVersionUnderTest = process.env.EVE_VERSION;
