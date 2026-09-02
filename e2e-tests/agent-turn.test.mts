@@ -251,7 +251,21 @@ async function waitForContinuationHook(pool: Pool, tenantId: string, sessionId: 
     if (rows.length > 0) return;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error(`session ${sessionId} never took ownership of the preserve-e2e address`);
+  // Say what the World holds instead, so a miss is diagnosable from CI output
+  // alone: a session that already finished (and disposed its hooks) reads very
+  // differently from one that never created them.
+  const run = await pool.query<{ status: string }>(
+    `select status from workflow.workflow_runs where tenant_id = $1 and id = $2`,
+    [tenantId, sessionId],
+  );
+  const hooks = await pool.query<{ run_id: string; token: string }>(
+    `select run_id, token from workflow.workflow_hooks where tenant_id = $1 order by created_at`,
+    [tenantId],
+  );
+  throw new Error(
+    `session ${sessionId} (status ${run.rows[0]?.status ?? "missing"}) never took ownership ` +
+      `of the preserve-e2e address; hooks held: ${JSON.stringify(hooks.rows)}`,
+  );
 }
 
 async function waitForRetentionGraph(pool: Pool, tenantId: string, rootRunId: string) {
