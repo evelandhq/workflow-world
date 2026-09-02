@@ -1,5 +1,5 @@
 import type { Storage, World } from "@workflow/world";
-import { resolveQueueNamespace, SPEC_VERSION_CURRENT } from "@workflow/world";
+import { resolveQueueNamespace, SPEC_VERSION_SUPPORTS_SLOT_IDENTITY } from "@workflow/world";
 import { Pool } from "pg";
 import {
   type EvelandWorldConfig,
@@ -180,11 +180,25 @@ export function createWorld(
      * `[SPEC_VERSION_CURRENT, SPEC_VERSION_MAX_SUPPORTED]`. Beta.42 then raised
      * both the current version and the required floor to v6.
      *
+     * Beta.32 of `@workflow/world` (eve 0.49) minted spec v7, the "sealed log",
+     * and split the check in two: the runtime floor stays at slot identity (v6)
+     * while `SPEC_VERSION_CURRENT` moves to v7, so a World may declare either.
+     * What it declares is what the runtime stamps on every run it creates
+     * (`run_created` carries `world.specVersion`), and the stamped version is
+     * what every OTHER runtime in Eveland's window must be able to read. Eve
+     * 0.47.x reads v6 only, so this World keeps declaring v6 for as long as a
+     * v6-only line is deployable; it costs nothing, because v7's only reader
+     * obligation is the `noop` filler a backend emits when it pre-assigns
+     * event positions, and this World allocates each position inside the
+     * INSERT that occupies it (`insertEventRow`), so there is never a hole to
+     * seal. Move to `SPEC_VERSION_CURRENT` only once every eve line Eveland
+     * hosts reads v7 (`requiresNewerWorld(7)` is false on all of them).
+     *
      * New runs therefore use dense slot event ids. The per-run marker still
      * keeps pre-upgrade v5 runs on ULIDs for older Eve releases in the supported
      * rolling window. The contract test asserts the installed Eve agrees.
      */
-    specVersion: SPEC_VERSION_CURRENT,
+    specVersion: SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
     /**
      * Declared so the runtime knows hook token retention is honoured here. A
      * World that stays silent is treated as not supporting it, which was the

@@ -410,6 +410,17 @@ above was the staging space for slot identity. In beta.42 the runtime floor and
 rather than an optional capability. Compatibility with existing v5 runs is
 pinned by a per-run scheme marker rather than by rewriting their event ids.
 
+`@workflow/world` beta.32 (eve 0.49) split the two ends of that range: the
+runtime floor stays at slot identity (v6) while `SPEC_VERSION_CURRENT` moves to
+v7, the "sealed log", and the runtime stamps each new run with whatever the
+World declares. This World declares v6 deliberately (`src/index.ts`), because
+the stamp has to be readable by every eve line Eveland can still deploy and a
+v6-only line rejects a v7 run outright. It costs nothing: v7's reader contract
+is the `noop` filler a backend emits when it pre-assigns event positions, and
+this World allocates each position inside the INSERT that occupies it, so it
+never has a hole to seal. Move the declaration to `SPEC_VERSION_CURRENT` only
+once every hosted eve line reads v7.
+
 ## Releasing
 
 Releases are cut by [release-please](https://github.com/googleapis/release-please),
