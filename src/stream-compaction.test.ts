@@ -121,6 +121,34 @@ describe("createStreamRehydrator", () => {
     expect(rehydrator.rehydrate(compactStreamChunk(compacted)).equals(compacted)).toBe(true);
   });
 
+  test("rebuilds snapshots for a stream Eve wrote delta-only (message stream v25)", () => {
+    // Eve 0.50 writes appends without `messageSoFar`, so nothing is stripped on
+    // the way in and the stored rows look exactly like compacted v24 rows. A
+    // 0.49 reader still needs the snapshot, and a 0.50 reader accepts one only
+    // when it ends with the delta, so assert both properties directly.
+    const deltaOnly = (delta: string) => ({
+      data: { messageDelta: delta, sequence: 0, stepIndex: 0, turnId: "turn_0" },
+      type: "message.appended",
+      meta: { at: "2026-09-03T00:00:00.000Z", id: "evt_v25" },
+    });
+    const stored = ["你好", "世界", "!"].map((delta) => encodeEveChunk(deltaOnly(delta)));
+    for (const chunk of stored) {
+      expect(compactStreamChunk(chunk)).toEqual(chunk);
+    }
+
+    const rehydrator = createStreamRehydrator();
+    const snapshots = stored.map(
+      (chunk) =>
+        (decodeEveChunk(rehydrator.rehydrate(chunk))[0] as { data: { messageSoFar: string } }).data
+          .messageSoFar,
+    );
+
+    expect(snapshots).toEqual(["你好", "你好世界", "你好世界!"]);
+    for (const [index, delta] of ["你好", "世界", "!"].entries()) {
+      expect(snapshots[index]!.endsWith(delta)).toBe(true);
+    }
+  });
+
   test("can resume from a database-safe checkpoint without replaying the prefix", () => {
     const first = encodeEveChunk(messageAppended("checkpoint ", "checkpoint "));
     const second = encodeEveChunk(messageAppended("resume", "checkpoint resume"));

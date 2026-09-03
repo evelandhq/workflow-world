@@ -125,9 +125,11 @@ beta.41 uses an inclusive range. In beta.42 both the floor and ceiling are 6 and
 slot identity is mandatory rather than a capability. `@workflow/world` beta.32
 (eve 0.49) minted spec 7, the "sealed log": the runtime's floor stays at 6 while
 `SPEC_VERSION_CURRENT` and the ceiling move to 7, and the runtime stamps each new
-run with whatever the World declares. That stamp is read by every eve in
-Eveland's window, and a line that only reads 6 (eve 0.47.x) rejects a spec-7 run
-outright, so this World declares 6 until no such line is deployable. Declaring 6
+run with whatever the World declares. Both lines in the {0.49.x, 0.50.x} window
+read 6 or 7, so the window no longer forces the choice -- but a v6-only reader
+(eve 0.47.x and older) rejects a spec-7 run outright, and such a Release can
+still be serving after the window slid past it, so this World declares 6 until
+no v6-only eve can still be running. Declaring 6
 gives nothing up: spec 7's reader contract exists for backends that pre-assign
 event positions and must seal abandoned ones with `noop` events, and this World
 allocates each position inside the INSERT that occupies it, so it never has a

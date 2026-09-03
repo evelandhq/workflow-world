@@ -364,11 +364,20 @@ World, which conformance never loads an eve to check.
 
 An eve release is almost never a reason to do anything here. What matters is not
 that eve shipped, but whether the `@workflow/*` set it installs moved. The
-current supported window, {0.47.x, 0.49.x}, contains two sets: every 0.47.x
-release uses world beta.28, world-local beta.37 and core beta.43; 0.49.0 uses
-world beta.32, world-local beta.41 and core beta.47. (0.48 was superseded within
-hours and never deployed.) Exact patches still matter: Workflow pins have moved
-within an eve minor line before, so a minor is not a set.
+current supported window, {0.49.x, 0.50.x}, contains a single set: both lines
+use world beta.32, world-local beta.41 and core beta.47. (0.48 was superseded
+within hours and never deployed; 0.47.x, whose set was world beta.28,
+world-local beta.37 and core beta.43, left the window with eve 0.50.0.) Exact
+patches still matter: Workflow pins have moved within an eve minor line before,
+so a minor is not a set.
+
+The other axis an eve release can move is the message stream, which the World
+touches through snapshot stripping and rehydration. eve 0.50.0 took it to v25,
+where appends carry a delta and no cumulative snapshot -- the same shape a
+compacted v24 row already had, so nothing here changed. Rehydration stays
+mandatory while 0.49.x is deployable, because a v24 runtime serves persisted
+appends verbatim; a v25 runtime normalizes the rebuilt snapshot away again
+before the wire.
 
 Two versions with very different cadences are easy to conflate:
 
@@ -413,13 +422,15 @@ pinned by a per-run scheme marker rather than by rewriting their event ids.
 `@workflow/world` beta.32 (eve 0.49) split the two ends of that range: the
 runtime floor stays at slot identity (v6) while `SPEC_VERSION_CURRENT` moves to
 v7, the "sealed log", and the runtime stamps each new run with whatever the
-World declares. This World declares v6 deliberately (`src/index.ts`), because
-the stamp has to be readable by every eve line Eveland can still deploy and a
-v6-only line rejects a v7 run outright. It costs nothing: v7's reader contract
-is the `noop` filler a backend emits when it pre-assigns event positions, and
-this World allocates each position inside the INSERT that occupies it, so it
-never has a hole to seal. Move the declaration to `SPEC_VERSION_CURRENT` only
-once every hosted eve line reads v7.
+World declares. This World declares v6 deliberately (`src/index.ts`). Every line
+in the {0.49.x, 0.50.x} window reads v6 or v7, so the declaration is no longer
+what keeps the window readable -- but a Release built against a v6-only eve can
+still be running when the window slides past it, and a v6-only reader rejects a
+v7 run outright. Declaring v6 costs nothing either way: v7's reader contract is
+the `noop` filler a backend emits when it pre-assigns event positions, and this
+World allocates each position inside the INSERT that occupies it, so it never
+has a hole to seal. Move the declaration to `SPEC_VERSION_CURRENT` only once no
+v6-only eve can still be serving.
 
 ## Releasing
 
