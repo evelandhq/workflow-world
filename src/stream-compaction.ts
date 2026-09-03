@@ -118,7 +118,14 @@ function accumulatorKey(family: string, data: Record<string, unknown>): string {
   return `${family}:${String(data.turnId)}:${String(data.stepIndex)}:${String(data.sequence)}`;
 }
 
-/** Strip Eve's cumulative snapshots while preserving unknown bytes exactly. */
+/**
+ * Strip Eve's cumulative snapshots while preserving unknown bytes exactly.
+ *
+ * Eve's message stream v25 (0.50.0) already writes appends as bare deltas, so
+ * on a 0.50 run this is a no-op and every row lands in the same shape a
+ * compacted v24 row does. That is deliberate, and it is why the rehydrator
+ * below cannot -- and need not -- tell the two apart.
+ */
 export function compactStreamChunk(chunk: Buffer): Buffer {
   const frames = parseFrames(chunk);
   if (!frames) return chunk;
@@ -138,7 +145,18 @@ export function compactStreamChunk(chunk: Buffer): Buffer {
   return changed ? Buffer.concat(rebuilt.map(encodeFrame)) : chunk;
 }
 
-/** Rehydrate compacted rows, optionally resuming from a persisted checkpoint. */
+/**
+ * Rehydrate compacted rows, optionally resuming from a persisted checkpoint.
+ *
+ * Rehydration stays mandatory while any supported Eve line speaks stream v24:
+ * a v24 runtime hands persisted append events to its clients verbatim and they
+ * expect the cumulative snapshot to be there. A v25 runtime (0.50.0) instead
+ * normalizes every persisted append back to a delta before it reaches the wire,
+ * accepting a snapshot through its legacy path as long as the snapshot ends
+ * with the delta -- which the accumulator here guarantees by construction. So
+ * putting the snapshot back is required by the older line and harmless to the
+ * newer one, and this stays correct until the whole window speaks v25.
+ */
 export function createStreamRehydrator(checkpoint?: StreamRehydrationCheckpoint): StreamRehydrator {
   const accumulators = new Map<string, string>();
   if (checkpoint?.version === 1 && Array.isArray(checkpoint.accumulators)) {

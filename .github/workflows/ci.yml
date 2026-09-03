@@ -128,9 +128,11 @@ jobs:
         # Mirrors the enabled entries in e2e-tests/eve-versions.mts. Keep them in
         # step — the file is what the suite reads; this list is only what CI
         # pays for. One entry per distinct `@workflow/*` set, at the release
-        # Eveland verified for that line: 0.47.7 for world beta.28 and 0.49.0
-        # for beta.32 (0.48 was superseded before anything deployed on it).
-        eve: ["0.47.7", "0.49.0"]
+        # Eveland verified for that line. Both install the same Workflow set
+        # (world beta.32); they are still both run because 0.49.x speaks
+        # message stream v24 and 0.50.x speaks v25, and the World's snapshot
+        # stripping sits on that wire.
+        eve: ["0.49.0", "0.50.0"]
     services:
       postgres:
         image: postgres:17-alpine
