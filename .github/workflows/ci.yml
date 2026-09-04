@@ -127,12 +127,12 @@ jobs:
       matrix:
         # Mirrors the enabled entries in e2e-tests/eve-versions.mts. Keep them in
         # step — the file is what the suite reads; this list is only what CI
-        # pays for. One entry per distinct `@workflow/*` set, at the release
-        # Eveland verified for that line. Both install the same Workflow set
-        # (world beta.32); they are still both run because 0.49.x speaks
-        # message stream v24 and 0.50.x speaks v25, and the World's snapshot
-        # stripping sits on that wire.
-        eve: ["0.49.0", "0.50.0"]
+        # pays for. The window is {0.49.x, 0.50.x, 0.51.x}, and two axes cross
+        # here: the bundled Workflow set (0.51.1 moved core to beta.48 and
+        # world-local to beta.42 at a patch) and the message stream the World's
+        # snapshot stripping sits on (v24 on 0.49.x, v25 from 0.50.x). Each
+        # entry is the only sample of its combination.
+        eve: ["0.49.0", "0.50.0", "0.51.1"]
     services:
       postgres:
         image: postgres:17-alpine
