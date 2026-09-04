@@ -167,7 +167,10 @@ While that row is unresolved, the still-active workflow run is quarantined from
 dispatcher boot recovery; resolving it makes the run eligible for recovery again.
 The dispatcher does not manufacture a workflow `run_failed` event or stream EOF for
 a transport failure, so operators can choose between replay and an explicit workflow
-cancel/fail action without losing the original message.
+cancel/fail action without losing the original message. Taking the second choice
+resolves the letters by itself: a run reaching a terminal status resolves every
+unresolved letter it left behind, because neither the replay nor the quarantine
+those rows stand for can mean anything once the run is over.
 
 The host has two seams over this machinery. `reconcileWorkflowRuns` (root export)
 is the supported write path for runs whose executor the host knows is gone for
