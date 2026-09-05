@@ -558,6 +558,15 @@ again; an operator who wants to abandon it should cancel/fail it through the
 workflow control surface instead. This keeps transport failure, workflow
 outcome, and manual replay as three distinct states.
 
+Quarantine is a claim about a run that can still be replayed, so it ends when
+the run does: a trigger resolves a run's unresolved letters as it reaches a
+terminal status, whichever writer put it there. Without that, abandoning a
+wedged run leaves its letters standing forever and the operator-facing
+"unresolved" count stops measuring outstanding work and starts measuring
+history — one permanently unstartable Deployment can contribute hundreds of
+rows. `resolved_at` is never re-stamped, so an operator's own resolution
+timestamp survives.
+
 Every path into that table matters, including the one that is easy to miss: a
 dispatch that _throws_ rather than returning a failure outcome must still reach
 it, or the final attempt vanishes with no record at all.
