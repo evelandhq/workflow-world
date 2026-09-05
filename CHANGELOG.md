@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.14.0...workflow-world-v0.15.0) (2026-09-05)
+
+
+### Features
+
+* resolve a run's dead letters when it reaches a terminal status ([#67](https://github.com/evelandhq/workflow-world/issues/67)) ([b911524](https://github.com/evelandhq/workflow-world/commit/b911524397bab423c3ec1ae1dfd5d437a01a5316))
+
 ## [0.14.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.13.1...workflow-world-v0.14.0) (2026-08-31)
 
 
