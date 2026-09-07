@@ -2,26 +2,29 @@
  * Exact releases from Eveland's supported eve window. The compatibility policy,
  * not npm's `latest`, is the authority on what may be deployed.
  *
- * The current window is {0.49.x, 0.50.x, 0.51.x} -- three consecutive lines,
- * verified at 0.49.0, 0.50.0, and 0.51.1. eve 0.51.1 moved the bundled Workflow
- * packages at a PATCH, so the window carries two distinct sets again:
+ * The current window is {0.50.x, 0.51.x, 0.52.x} -- three consecutive lines,
+ * verified at 0.50.0, 0.51.1, and 0.52.2. 0.49.x has slid out. eve 0.52.2
+ * bundles the same Workflow packages as 0.51.1, so the window still carries two
+ * distinct sets, split at the 0.51.1 patch that moved them:
  *
- * | package                 | 0.49.0-0.51.0 | 0.51.1  |
- * | ----------------------- | ------------- | ------- |
- * | `@workflow/world`       | beta.32       | beta.32 |
- * | `@workflow/world-local` | beta.41       | beta.42 |
- * | `@workflow/core`        | beta.47       | beta.48 |
- * | `@workflow/errors`      | beta.19       | beta.19 |
- * | `@workflow/utils`       | beta.10       | beta.10 |
+ * | package                 | 0.50.0-0.51.0 | 0.51.1-0.52.2 |
+ * | ----------------------- | ------------- | ------------- |
+ * | `@workflow/world`       | beta.32       | beta.33       |
+ * | `@workflow/world-local` | beta.41       | beta.42       |
+ * | `@workflow/core`        | beta.47       | beta.48       |
+ * | `@workflow/errors`      | beta.19       | beta.20       |
+ * | `@workflow/utils`       | beta.10       | beta.10       |
  *
- * The set is not the only axis that matters here: 0.49.x speaks message stream
- * v24 while 0.50.x and 0.51.x speak v25, and the World's snapshot stripping and
- * rehydration sit directly on that wire. Crossing the two axes leaves all three
- * entries earning their cost, because each is the window's only sample of its
- * combination -- 0.49.0 is set A on v24, 0.50.0 is set A on v25, and 0.51.1 is
- * set B on v25. 0.51.1 additionally exercises subagent calls as durable tool
- * runs, which eve 0.51 introduced by preparing the framework agent tool as a
- * workflow tool.
+ * The message-stream axis is gone: 0.49.x was the last line on v24, and the
+ * whole window now speaks v25, so the World's snapshot stripping and
+ * rehydration see one wire. 0.50.0 is the only sample of set A and 0.51.1 the
+ * first of set B. 0.52.2 shares set B with 0.51.1 and still earns its entry: it
+ * is the newest line, so it is what new builds get, and eve 0.52 rewired how
+ * inline turns handle workflow tools -- they now route through one ordered
+ * parent inbox, and a retried dispatch may start another run -- which is
+ * exactly the World traffic this suite exercises. 0.51.1 stays because it is
+ * the release that introduced set B and subagent calls as durable tool runs,
+ * under the pre-0.52 dispatch path.
  *
  * Exact patches matter because Workflow pins have moved within a minor line in
  * the past. Each enabled entry costs an npm install plus a full `eve build`.
@@ -35,9 +38,9 @@ export type EveVersion = {
 };
 
 export const EVE_VERSIONS: readonly EveVersion[] = [
-  { version: "0.49.0", enabled: true },
   { version: "0.50.0", enabled: true },
   { version: "0.51.1", enabled: true },
+  { version: "0.52.2", enabled: true },
 ];
 
 const eveVersionUnderTest = process.env.EVE_VERSION;
