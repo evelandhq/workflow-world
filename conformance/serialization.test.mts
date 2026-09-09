@@ -1,10 +1,12 @@
 import { hydrateWorkflowReturnValue } from "@workflow/core/serialization";
+import { getQueueTopicPrefix, type ValidQueueName } from "@workflow/world";
 import { createFetcher, startServer } from "@workflow/world-testing/dist/src/util.mjs";
 import { makeWorkerUtils } from "graphile-worker";
 import { Pool } from "pg";
 import { expect, test } from "vitest";
 import { reenqueueActiveRunsForAllTenants } from "../src/dispatcher/boot-recovery.js";
-import { PACKAGE_NAME, resolveConformanceDatabaseUrl } from "./env.mts";
+import { createWorld } from "../src/index.js";
+import { DEPLOYMENT_ID, PACKAGE_NAME, resolveConformanceDatabaseUrl, TENANT_ID } from "./env.mts";
 
 /**
  * Per-run serialization under concurrent delivery — the gap upstream's
@@ -40,12 +42,12 @@ type BrokenWfOutput = { numbers: number[] };
 
 async function runBrokenWf(options: {
   /** Called while the run is in flight, before we start waiting for it. */
-  duringFlight?: () => Promise<void>;
+  duringFlight?: (runId: string) => Promise<void>;
 }): Promise<{ status: string; sorted: number[]; overshoot: number[]; invocations: number }> {
   const server = await startServer({ world: PACKAGE_NAME }).then(createFetcher);
   const { runId } = await server.invoke("workflows/noop.ts", "brokenWf", []);
 
-  await options.duringFlight?.();
+  await options.duringFlight?.(runId);
 
   let status = "";
   for (let attempt = 0; attempt < 400; attempt += 1) {
@@ -92,29 +94,62 @@ test(
 );
 
 /**
- * The gate. Nothing here is hand-built. `reenqueueActiveRunsForAllTenants` IS the
- * dispatcher's own boot sweep; its jobKey is `msg_recover_<runId>`, which
- * collapses only against another sweep, never against the World's own flow job
- * (whose jobKey is a fresh ULID per send). So a sweep overlapping a live run adds
- * a genuine second concurrent delivery through production code — the ordinary
- * case of a dispatcher restarting while work is in flight.
+ * The gate. Nothing here is hand-built: the competing delivery goes through the
+ * World's own `queue()`, the production path a resolved hook takes to wake a
+ * run, and it lands as a genuine second job for the run — its jobKey is a fresh
+ * ULID per send, so nothing collapses it — while the first is in flight. The
+ * per-run queue name is the only thing keeping the two from running at once.
+ *
+ * The dispatcher's own boot sweep used to be the injector here. It no longer
+ * can be: a run in flight always has a live job on its queue (the delivery
+ * being held, or the continuation the runtime enqueues before acking), and the
+ * sweep skips exactly those runs. So it is asserted the other way round — the
+ * sweep, run repeatedly during flight, never so much as offers this run to the
+ * host filter.
  */
 test(
-  "a boot sweep during a live run does not duplicate step bodies",
+  "a second delivery during a live run does not duplicate step bodies, and the boot sweep leaves the run alone",
   { timeout: 120_000 },
   async () => {
     const pool = new Pool({ connectionString: resolveConformanceDatabaseUrl(), max: 6 });
     const workerUtils = await makeWorkerUtils({ pgPool: pool });
+    // The same tenant and deployment the spawned executor runs as, so the send
+    // is addressed exactly as the executor's own continuations are.
+    const world = createWorld({
+      connectionString: resolveConformanceDatabaseUrl(),
+      tenantId: TENANT_ID,
+      deploymentId: DEPLOYMENT_ID,
+      runner: "external",
+    });
     try {
+      const offered: string[] = [];
       const result = await runBrokenWf({
-        duringFlight: async () => {
+        duringFlight: async (runId) => {
+          const { rows } = await pool.query<{ name: string }>(
+            "select name from workflow.workflow_runs where tenant_id = $1 and id = $2",
+            [TENANT_ID, runId],
+          );
+          const workflowName = rows[0]?.name;
+          expect(workflowName).toBeDefined();
+          const queueName = `${getQueueTopicPrefix("workflow")}${workflowName}` as ValidQueueName;
+
+          let sent = 0;
           let enqueued = 0;
-          for (let sweep = 0; sweep < 12; sweep += 1) {
-            enqueued += await reenqueueActiveRunsForAllTenants({ pool, workerUtils });
+          for (let round = 0; round < 12; round += 1) {
+            await world.queue(queueName, { runId });
+            sent += 1;
+            enqueued += await reenqueueActiveRunsForAllTenants({
+              pool,
+              workerUtils,
+              filterRuns: (runs) => {
+                offered.push(...runs.filter((run) => run.runId === runId).map((run) => run.runId));
+                return runs;
+              },
+            });
             await new Promise((resolve) => setTimeout(resolve, 15));
           }
           console.log(
-            `[gate] production boot sweeps enqueued ${String(enqueued)} recovery message(s)`,
+            `[gate] ${String(sent)} competing send(s) through the World; boot sweeps enqueued ${String(enqueued)} recovery message(s) for other runs`,
           );
         },
       });
@@ -123,7 +158,9 @@ test(
         `[gate] flowInvocations=${String(result.invocations)} steps=${String(result.sorted.length)} overshoot=${JSON.stringify(result.overshoot)}`,
       );
       expect(result.overshoot).toEqual([]);
+      expect(offered).toEqual([]);
     } finally {
+      await world.close?.();
       await workerUtils.release();
       await pool.end();
     }

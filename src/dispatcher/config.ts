@@ -17,6 +17,8 @@ export type DispatcherConfiguration = {
   leaseRenewIntervalMs: number;
   activationLeaseTtlMs: number;
   queueGcIntervalMs: number;
+  bootRecoveryDeploymentsPerWave: number;
+  bootRecoveryWaveIntervalMs: number;
   executorFailureLimit: number;
   executorFailureMinSpanMs: number;
   maintenanceIntervalMs: number;
@@ -43,6 +45,19 @@ export type DispatcherConfiguration = {
  * standalone package cannot keep — so the host declares it.
  */
 const DEFAULT_ACTIVATION_LEASE_TTL_MS = 180_000;
+
+/**
+/**
+ * How boot recovery paces the deployments it wakes: this many per wave, one
+ * wave every interval. A recovered run's only cost is its deployment's cold
+ * start, and a restart that recovers runs across twenty deployments asked the
+ * host for twenty cold starts in the same second — which is what took the
+ * machine down. Four every thirty seconds spreads that over a few minutes,
+ * long enough for each wave's containers to come up and settle before the next
+ * lands. `0` for the interval disables pacing.
+ */
+const DEFAULT_BOOT_RECOVERY_DEPLOYMENTS_PER_WAVE = 4;
+const DEFAULT_BOOT_RECOVERY_WAVE_INTERVAL_MS = 30_000;
 
 /**
  * Two connections are permanently held (lifecycle advisory lock, Graphile
@@ -181,6 +196,14 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
     // safe: the sweep only deletes queues with no jobs left, so running it more
     // often costs a query and running it less lets rows sit around.
     queueGcIntervalMs: positiveNumber(env.WORKFLOW_DISPATCHER_QUEUE_GC_INTERVAL_MS, 300_000),
+    bootRecoveryDeploymentsPerWave: positiveNumber(
+      env.WORKFLOW_DISPATCHER_BOOT_RECOVERY_DEPLOYMENTS_PER_WAVE,
+      DEFAULT_BOOT_RECOVERY_DEPLOYMENTS_PER_WAVE,
+    ),
+    bootRecoveryWaveIntervalMs: nonNegativeNumber(
+      env.WORKFLOW_DISPATCHER_BOOT_RECOVERY_WAVE_INTERVAL_MS,
+      DEFAULT_BOOT_RECOVERY_WAVE_INTERVAL_MS,
+    ),
     // A run whose executor answers 5xx this many deliveries in a row, over at
     // least the span, is dead-lettered instead of retried to exhaustion. The
     // span keeps a short database outage from quarantining healthy runs.

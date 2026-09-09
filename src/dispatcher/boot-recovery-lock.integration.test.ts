@@ -19,6 +19,10 @@ import { FLOW_JOB_NAME } from "./runner.js";
  * while its handler is blocked, leaving both job and queue locked by its random
  * worker id. The replacement service must recover before starting its workers.
  *
+ * Recovery here is the unlock alone. The stranded job is still the run's own
+ * wake-up, so once its worker id is released graphile delivers it under its
+ * original message id; the sweep must not add a recovery job beside it.
+ *
  * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
 const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
@@ -148,9 +152,11 @@ describe.skipIf(!testUrl)("boot recovery of a stranded Graphile queue lock", () 
     });
     targetRunId = created.run!.runId;
     const queueName = runQueueName(TENANT, targetRunId);
-    await world.queue(`${getQueueTopicPrefix("workflow", NAMESPACE)}greet` as ValidQueueName, {
-      runId: targetRunId,
-    });
+    const { messageId: originalMessageId } = await world.queue(
+      `${getQueueTopicPrefix("workflow", NAMESPACE)}greet` as ValidQueueName,
+      { runId: targetRunId },
+    );
+    if (!originalMessageId) throw new Error("the World's enqueue returned no message id");
     await admin.query(
       `update graphile_worker._private_jobs as jobs
           set priority = -32768
@@ -202,13 +208,17 @@ describe.skipIf(!testUrl)("boot recovery of a stranded Graphile queue lock", () 
       telemetry: { emit() {}, async shutdown() {} },
     });
 
-    await waitFor(
-      () => delivered.includes(`msg_recover_${targetRunId!}`),
-      30_000,
-      "recovered run delivery",
-    );
+    await waitFor(() => delivered.includes(originalMessageId), 30_000, "stranded job delivery");
     expect(Date.now() - startedAt).toBeLessThan(30_000);
     expect(peakInFlight).toBe(1);
+    // The unlock was the recovery. No second job was written for a run whose
+    // own delivery was merely stuck behind a dead worker's lock.
+    expect(delivered).not.toContain(`msg_recover_${targetRunId}`);
+    const recoveryJobs = await admin.query(
+      "select 1 from graphile_worker._private_jobs where payload->>'messageId' = $1",
+      [`msg_recover_${targetRunId}`],
+    );
+    expect(recoveryJobs.rows).toHaveLength(0);
 
     const stillLive = await readQueueLock(LIVE_QUEUE);
     expect(stillLive?.queue_locked_by).toBe(liveLock.queue_locked_by);

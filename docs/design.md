@@ -526,24 +526,41 @@ event log. A restart legitimately forgets, and the consequence is a replay.
 derive state from the event log rather than from message order. Do not add
 ordering later without re-checking that assumption.
 
-| failure                         | what happens                             | recovered by                             |
-| ------------------------------- | ---------------------------------------- | ---------------------------------------- |
-| agent crashes mid-step          | held POST fails → job fails              | graphile retry, then re-activation       |
-| dispatcher crashes mid-POST     | job and per-run queue stay locked        | ownership-gated unlock + re-enqueue      |
-| deployment archived or failed   | activation is not-activatable → terminal | should be unreachable; alarms            |
-| deployment unavailable or cold  | activation unavailable → retry           | graphile retry                           |
-| lease lapses during a long step | executor reaped mid-step                 | **prevented** by renewal, not recovered  |
-| `maxAttempts` exhausted         | graphile stops retrying                  | dead-letter quarantine + operator action |
-| run fails at execution forever  | 5xx streak → dead-letter, redelivery off | quarantine + operator action             |
-| duplicate enqueue               | job key dedupes at enqueue               | by construction, keyed paths only        |
+| failure                         | what happens                             | recovered by                                |
+| ------------------------------- | ---------------------------------------- | ------------------------------------------- |
+| agent crashes mid-step          | held POST fails → job fails              | graphile retry, then re-activation          |
+| dispatcher crashes mid-POST     | job and per-run queue stay locked        | ownership-gated unlock; graphile redelivers |
+| deployment archived or failed   | activation is not-activatable → terminal | should be unreachable; alarms               |
+| deployment unavailable or cold  | activation unavailable → retry           | graphile retry                              |
+| lease lapses during a long step | executor reaped mid-step                 | **prevented** by renewal, not recovered     |
+| `maxAttempts` exhausted         | graphile stops retrying                  | dead-letter quarantine + operator action    |
+| run fails at execution forever  | 5xx streak → dead-letter, redelivery off | quarantine + operator action                |
+| duplicate enqueue               | job key dedupes at enqueue               | by construction, keyed paths only           |
 
 Boot recovery runs before the worker pool starts and only while the service holds
 a lifecycle PostgreSQL advisory lock. It joins active runs to their exact
 `wfrun:<tenant>:<run>` queue rows, collects the old random `locked_by` values,
 passes those ids to Graphile's `forceUnlockWorkers`, and then performs the
-run-keyed re-enqueue. A job key alone cannot recover the run: it deduplicates or
-replaces a job but does not clear `_private_job_queues.locked_by`, whose stale
-threshold is four hours.
+run-keyed re-enqueue for the runs that have no job left. A job key alone cannot
+recover the run: it deduplicates or replaces a job but does not clear
+`_private_job_queues.locked_by`, whose stale threshold is four hours.
+
+The re-enqueue is the narrow half. A run whose queue still holds a job graphile
+will deliver — due now, due later for a sleep, or locked by the worker id just
+released — needs nothing more: that job is its wake-up. Re-enqueueing beside it
+was correct (the handler replays) and expensive (one activation per run), and
+with a few hundred active runs on a few dozen deployments every restart became
+a cold-start storm. The sweep now skips those runs and re-enqueues only runs
+with no retryable job on their queue. That set still includes runs waiting on a
+hook, which hold no job by design; their replay is harmless, and narrowing them
+out is the next iteration.
+
+What the sweep does enqueue it paces by deployment: the deployments it meets are
+grouped `WORKFLOW_DISPATCHER_BOOT_RECOVERY_DEPLOYMENTS_PER_WAVE` at a time, and
+each group's jobs are due `WORKFLOW_DISPATCHER_BOOT_RECOVERY_WAVE_INTERVAL_MS`
+after the previous group's. The unit is the deployment because its cold start
+is the cost — a deployment's second run is warm — and the host, not the
+dispatcher, has to absorb those starts.
 
 The order is a correctness boundary: ownership, unlock, re-enqueue, worker pool,
 ready. Unlocking after the new pool starts could clear a lock belonging to the
@@ -643,6 +660,8 @@ for runs it has merely lost the ability to replay _right now_: boot recovery's
 is called once with the full candidate list — one call, not a per-run
 predicate, because "is this Deployment activatable?" is a control-plane lookup
 the host will want to batch — and only the runs it returns are re-enqueued.
+Candidates are the runs the sweep would enqueue: a run whose own job is still
+queued is not offered, since nothing would be written for it either way.
 
 A skipped run is deferred, not settled: it stays active and is offered again on
 the next boot. Worker-lock reclaim still covers skipped runs, so a later
