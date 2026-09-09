@@ -550,10 +550,17 @@ will deliver — due now, due later for a sleep, or locked by the worker id just
 released — needs nothing more: that job is its wake-up. Re-enqueueing beside it
 was correct (the handler replays) and expensive (one activation per run), and
 with a few hundred active runs on a few dozen deployments every restart became
-a cold-start storm. The sweep now skips those runs and re-enqueues only runs
-with no retryable job on their queue. That set still includes runs waiting on a
-hook, which hold no job by design; their replay is harmless, and narrowing them
-out is the next iteration.
+a cold-start storm. The sweep now skips those runs.
+
+It also skips runs that hold a hook. A hook is the run's other wake-up: whoever
+resolves it enqueues the run's next delivery through the World's own `queue()`,
+whenever that happens, and a dispatcher restart changes nothing about that. On
+the incident host every candidate left after the live-job skip was an agent
+session parked on its inbox hook; recovering them woke eighteen deployments,
+skipping them woke none. The trade-off is a run that created a hook, moved on,
+and then lost the only job that would have driven it: it now resumes when that
+hook does rather than at the next boot. What the sweep re-enqueues, then, is
+the run with nothing else to wake it — no retryable job, no hook.
 
 What the sweep does enqueue it paces by deployment: the deployments it meets are
 grouped `WORKFLOW_DISPATCHER_BOOT_RECOVERY_DEPLOYMENTS_PER_WAVE` at a time, and

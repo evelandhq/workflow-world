@@ -123,6 +123,36 @@ describe.skipIf(!testUrl)("boot recovery skips live jobs and paces by deployment
     expect(skipped?.meta?.runs).toBeGreaterThanOrEqual(2);
   }, 60_000);
 
+  test("a run parked on a hook is not re-enqueued", async () => {
+    // The incident's residue: with live-job runs skipped, every remaining
+    // candidate on the host was a session waiting on its inbox hook, and
+    // recovering them still woke eighteen deployments. The hook's resolution
+    // enqueues the run itself, so boot has nothing to add.
+    const parked = await createActiveRun("dep_pace_hook");
+    await dropOwnJob(parked);
+    const world = worlds.get("dep_pace_hook")!;
+    await world.events.create(parked, {
+      eventType: "hook_created",
+      correlationId: `whk_${suffix}_${parked.slice(-6)}`,
+      eventData: { token: `inbox:${parked}` },
+      specVersion: 5,
+    } as Parameters<typeof world.events.create>[1]);
+    const orphaned = await createActiveRun("dep_pace_hook");
+    await dropOwnJob(orphaned);
+
+    const logged: Array<{ message: string; meta?: Record<string, unknown> }> = [];
+    await reenqueueActiveRunsForAllTenants({
+      pool: admin,
+      workerUtils,
+      log: (message, meta) => logged.push({ message, ...(meta ? { meta } : {}) }),
+    });
+
+    expect(await recoveryJob(parked)).toBeUndefined();
+    expect(await recoveryJob(orphaned)).toBeDefined();
+    const skipped = logged.find((entry) => /parked on a hook/.test(entry.message));
+    expect(skipped?.meta?.runs).toBeGreaterThanOrEqual(1);
+  }, 60_000);
+
   test("a job graphile has given up on does not count as live", async () => {
     const exhausted = await createActiveRun("dep_pace_exhausted");
     await admin.query(
