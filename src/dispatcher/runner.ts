@@ -3,6 +3,7 @@ import { getQueueTopicPrefix } from "@workflow/world";
 import { makeWorkerUtils, run, type Runner, type WorkerUtils } from "graphile-worker";
 import type { Pool } from "pg";
 import {
+  createExecutorFailureTracker,
   createFairness,
   createMessageDedup,
   createRunLookup,
@@ -10,6 +11,7 @@ import {
   readRunId,
   type DispatchOutcome,
   type DispatcherDeps,
+  type ExecutorFailureTracker,
   type Fairness,
   type MessageDedup,
 } from "./dispatcher.js";
@@ -29,6 +31,10 @@ export type DispatcherConfig = {
   pollIntervalMs: number;
   maxInFlightPerTenant: number;
   queueGcIntervalMs: number;
+  /** Consecutive executor 5xx on one run before it is dead-lettered. */
+  executorFailureLimit?: number;
+  /** The streak must also span at least this long; see the tracker. */
+  executorFailureMinSpanMs?: number;
 };
 
 export type DispatcherRuntime = {
@@ -36,6 +42,7 @@ export type DispatcherRuntime = {
   workerUtils: WorkerUtils;
   fairness: Fairness;
   dedup: MessageDedup;
+  executorFailures: ExecutorFailureTracker;
   stop(): Promise<void>;
 };
 
@@ -95,11 +102,20 @@ export async function startDispatcher(input: {
     });
   };
 
+  const executorFailures =
+    input.deps.executorFailures ??
+    createExecutorFailureTracker({
+      ...(config.executorFailureLimit === undefined ? {} : { limit: config.executorFailureLimit }),
+      ...(config.executorFailureMinSpanMs === undefined
+        ? {}
+        : { minSpanMs: config.executorFailureMinSpanMs }),
+    });
   const deps: DispatcherDeps = {
     ...input.deps,
     runLookup: input.deps.runLookup ?? createRunLookup(pool),
     reenqueue,
     onDeadLetter,
+    executorFailures,
   };
 
   const makeHandler = (jobName: string) => async (payload: unknown, helpers: unknown) => {
@@ -202,6 +218,7 @@ export async function startDispatcher(input: {
     workerUtils,
     fairness,
     dedup,
+    executorFailures,
     async stop() {
       clearInterval(queueGcTimer);
       try {

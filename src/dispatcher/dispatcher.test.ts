@@ -5,8 +5,10 @@ import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ActivationClient, ActivationOutcome } from "./activation-client.js";
 import {
+  createExecutorFailureTracker,
   createFairness,
   createMessageDedup,
+  createRunLookup,
   type DispatchOutcome,
   dispatchMessage,
   readRunId,
@@ -258,6 +260,130 @@ describe("dispatch outcomes", () => {
       runLookup: async () => ({ deploymentId: "dep_1", status: "completed" }),
     });
     await expect(dispatch(d)).resolves.toEqual({ type: "completed" });
+  });
+
+  test("a message for a quarantined run is dropped without touching the executor", async () => {
+    // The run already has an unresolved dead letter. Every delivery would
+    // reproduce the failure that produced it, and a run that fails at execution
+    // enqueues its own wake-ups, so redelivery is what turns one bad run into a
+    // storm. Boot recovery has always skipped such runs; live dispatch must too.
+    const log = vi.fn();
+    const activation = activationClient({
+      type: "activated",
+      activation: { leaseId: "l", endpointPort: 1 },
+    });
+    const d = deps({
+      activation,
+      log,
+      runLookup: async () => ({ deploymentId: "dep_1", status: "running", quarantined: true }),
+    });
+    await expect(dispatch(d)).resolves.toEqual({ type: "completed" });
+    expect(activation.activate).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      "dropping message for quarantined run",
+      expect.objectContaining({ tenantId: "p_alpha", runId: "wrun_1" }),
+    );
+  });
+
+  test("a run whose executor keeps answering 5xx is dead-lettered after the streak", async () => {
+    // A 500 means the executor ran the message and threw. The same run failing
+    // that way delivery after delivery cannot be fixed by graphile's 49
+    // attempts; it can only keep its deployment awake for days.
+    const port = await startFakeAgent(() => ({ status: 500, body: "Failed query: insert" }));
+    let clock = 0;
+    const tracker = createExecutorFailureTracker({ limit: 3, minSpanMs: 60_000, now: () => clock });
+    const d = deps({
+      activation: activationClient(
+        { type: "activated", activation: { leaseId: "l", endpointPort: port } },
+        port,
+      ),
+      runLookup: async () => ({ deploymentId: "dep_1", status: "running" }),
+      executorFailures: tracker,
+    });
+    await expect(dispatch(d)).resolves.toMatchObject({ type: "retry" });
+    clock = 30_000;
+    await expect(dispatch(d)).resolves.toMatchObject({ type: "retry" });
+    // Third failure, but the streak has not lasted the minimum span yet.
+    clock = 45_000;
+    await expect(dispatch(d)).resolves.toMatchObject({ type: "retry" });
+    clock = 61_000;
+    const outcome = await dispatch(d);
+    expect(outcome).toMatchObject({ type: "dead-letter" });
+    expect((outcome as { reason: string }).reason).toMatch(
+      /HTTP 500 on 4 consecutive deliveries of run wrun_1 over 61s; last response: Failed query/,
+    );
+    // The streak is spent with the dead letter; a later delivery starts over.
+    expect(tracker.stats().tracked).toBe(0);
+  });
+
+  test("a delivery that gets through ends the executor failure streak", async () => {
+    let status = 500;
+    const port = await startFakeAgent(() => ({ status, body: status === 500 ? "boom" : "{}" }));
+    let clock = 0;
+    const tracker = createExecutorFailureTracker({ limit: 2, minSpanMs: 0, now: () => clock });
+    const d = deps({
+      activation: activationClient(
+        { type: "activated", activation: { leaseId: "l", endpointPort: port } },
+        port,
+      ),
+      runLookup: async () => ({ deploymentId: "dep_1", status: "running" }),
+      executorFailures: tracker,
+    });
+    await expect(dispatch(d)).resolves.toMatchObject({ type: "retry" });
+    status = 200;
+    await expect(dispatch(d)).resolves.toEqual({ type: "completed" });
+    status = 500;
+    clock = 1;
+    // One failure after a success is a fresh streak, not the second of the old one.
+    await expect(dispatch(d)).resolves.toMatchObject({ type: "retry" });
+  });
+
+  test("transport failures never count toward the executor failure streak", async () => {
+    // Nothing is listening: the process is dead or restarting, which is exactly
+    // what retries exist for. Only a response the executor produced can prove
+    // the run itself is the problem.
+    const tracker = createExecutorFailureTracker({ limit: 1, minSpanMs: 0 });
+    const d = deps({
+      activation: activationClient(
+        { type: "activated", activation: { leaseId: "l", endpointPort: 1 } },
+        1,
+      ),
+      runLookup: async () => ({ deploymentId: "dep_1", status: "running" }),
+      executorFailures: tracker,
+    });
+    await expect(dispatch(d)).resolves.toMatchObject({ type: "retry" });
+    await expect(dispatch(d)).resolves.toMatchObject({ type: "retry" });
+    expect(tracker.stats().tracked).toBe(0);
+  });
+
+  test("executor failures are tracked per run, and forgotten past the bound", () => {
+    const tracker = createExecutorFailureTracker({ limit: 2, minSpanMs: 0, trackedRuns: 2 });
+    expect(tracker.record("t:a")).toMatchObject({ count: 1, exhausted: false });
+    expect(tracker.record("t:b")).toMatchObject({ count: 1, exhausted: false });
+    // A third run evicts the oldest streak ("a"); "a" starts over afterwards
+    // and, being the newest again, pushes "b" out instead of "c".
+    tracker.record("t:c");
+    expect(tracker.stats().tracked).toBe(2);
+    expect(tracker.record("t:a")).toMatchObject({ count: 1, exhausted: false });
+    expect(tracker.record("t:c")).toMatchObject({ count: 2, exhausted: true });
+    expect(tracker.record("t:b")).toMatchObject({ count: 1, exhausted: false });
+    tracker.reset("t:c");
+    expect(tracker.record("t:c")).toMatchObject({ count: 1, exhausted: false });
+  });
+
+  test("the run lookup reads quarantine from unresolved dead letters", async () => {
+    const query = vi.fn(async () => ({
+      rows: [{ deployment_id: "dep_9", status: "running", quarantined: true }],
+    }));
+    const lookup = createRunLookup({ query } as never);
+    await expect(lookup({ tenantId: "t", runId: "wrun_9" })).resolves.toEqual({
+      deploymentId: "dep_9",
+      status: "running",
+      quarantined: true,
+    });
+    const [sql, params] = query.mock.calls[0] as unknown as [string, unknown[]];
+    expect(sql).toMatch(/exists[\s\S]+dispatch_dead_letters[\s\S]+resolved_at is null/i);
+    expect(params).toEqual(["t", "wrun_9"]);
   });
 
   test("the activation lease is released even when dispatch fails", async () => {
