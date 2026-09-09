@@ -189,6 +189,14 @@ export async function startDispatcherService(
     const reenqueuedRuns = await reclaimAndReenqueueActiveRunsForAllTenants({
       pool,
       workerUtils,
+      ...(config.bootRecoveryWaveIntervalMs > 0
+        ? {
+            pacing: {
+              deploymentsPerWave: config.bootRecoveryDeploymentsPerWave,
+              waveIntervalMs: config.bootRecoveryWaveIntervalMs,
+            },
+          }
+        : {}),
       ...(hostFilter
         ? {
             filterRuns: async (runs: BootRecoveryRun[]) => {

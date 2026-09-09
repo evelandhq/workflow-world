@@ -27,6 +27,7 @@ import {
   runMigrations,
 } from "./migrate.js";
 import { reenqueueTenantRuns } from "./recovery.js";
+import { derivePartitionName } from "./tenant.js";
 
 type ActiveRun = { runId: string; workflowName: string };
 type ActiveStatus = "pending" | "running";
@@ -215,33 +216,66 @@ describe.skipIf(!testUrl)("reenqueueTenantRuns on a shared database", () => {
     ]);
   });
 
-  test("start() enqueues graphile jobs for its own tenant only", async () => {
+  test("start() in external mode enqueues nothing", async () => {
+    // The dispatcher owns recovery in external mode, and an agent boot is not a
+    // recovery event. Every job this used to enqueue was un-keyed and routed to
+    // the deployment its run is pinned to, so one deployment's boot woke every
+    // deployment in the project that had an active run — and each of those
+    // booted and did the same. Both tenants have a pending run here; neither
+    // may gain a job.
     await beta.start();
 
-    // The public `graphile_worker.jobs` view omits `payload`, and the payload is
-    // the only place the tenant is recorded, so this reads the private table.
-    const { rows } = await admin.query<{
-      task_identifier: string;
-      queue_name: string | null;
-      payload: { tenantId: string; deploymentId: string };
-    }>(
-      `select t.identifier as task_identifier, q.queue_name, j.payload
-         from graphile_worker._private_jobs j
-         join graphile_worker._private_tasks t on t.id = j.task_id
-         left join graphile_worker._private_job_queues q on q.id = j.job_queue_id
-        where j.payload->>'tenantId' = any($1)`,
-      [[ALPHA, BETA]],
-    );
+    const { rows } = await tenantJobs(admin, [ALPHA, BETA]);
+    expect(rows).toEqual([]);
+  }, 60_000);
 
-    expect(rows.map((row) => row.payload.tenantId)).toEqual([BETA]);
-    // External mode shares one job name across tenants — the dispatcher claims
-    // across all of them on purpose — so the per-run queue name is the only
-    // thing serializing deliveries for a run.
-    expect(rows[0]?.task_identifier).toBe(FLOW_JOB_NAME);
-    expect(rows[0]?.queue_name).toBe(runQueueName(BETA, betaRunId));
-    expect(rows[0]?.payload.deploymentId).toBe("dep_beta_1");
+  test("start() in embedded mode enqueues graphile jobs for its own tenant only", async () => {
+    // Embedded keeps upstream's boot sweep: the in-process runner is the only
+    // claimer, so a job it locked before dying would otherwise sit until
+    // graphile's stale-lock threshold. The port is one nothing listens on, so
+    // the runner start is deferred and the enqueued job survives to be read.
+    const embedded = createWorld({
+      connectionString: testUrl!,
+      tenantId: ALPHA,
+      deploymentId: "dep_alpha_1",
+      runner: "embedded",
+      port: 1,
+    });
+    try {
+      await embedded.start();
+
+      const { rows } = await tenantJobs(admin, [ALPHA, BETA]);
+      expect(rows.map((row) => row.payload.tenantId)).toEqual([ALPHA]);
+      // Embedded job names carry the tenant suffix so a shared database cannot
+      // let one project's runner claim another's work; the per-run queue name
+      // still serializes deliveries for the run.
+      expect(rows[0]?.task_identifier).toBe(derivePartitionName(FLOW_JOB_NAME, ALPHA));
+      expect(rows[0]?.queue_name).toBe(runQueueName(ALPHA, alphaRunId));
+      expect(rows[0]?.payload.deploymentId).toBe("dep_alpha_1");
+    } finally {
+      await embedded.close?.();
+    }
   }, 60_000);
 });
+
+/**
+ * The public `graphile_worker.jobs` view omits `payload`, and the payload is
+ * the only place the tenant is recorded, so this reads the private table.
+ */
+function tenantJobs(admin: Pool, tenantIds: string[]) {
+  return admin.query<{
+    task_identifier: string;
+    queue_name: string | null;
+    payload: { tenantId: string; deploymentId: string };
+  }>(
+    `select t.identifier as task_identifier, q.queue_name, j.payload
+       from graphile_worker._private_jobs j
+       join graphile_worker._private_tasks t on t.id = j.task_id
+       left join graphile_worker._private_job_queues q on q.id = j.job_queue_id
+      where j.payload->>'tenantId' = any($1)`,
+    [tenantIds],
+  );
+}
 
 function fakeRuns(runsByStatus: Partial<Record<ActiveStatus, ActiveRun[]>>) {
   const list = vi.fn(async (params: any) => ({

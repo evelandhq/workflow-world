@@ -232,10 +232,25 @@ export function createWorld(
     },
     async start() {
       await queue.start();
-      // Upstream calls `reenqueueActiveRuns`, which lists runs unfiltered and
-      // would re-enqueue every project's active runs from any agent's boot.
-      // This is the tenant-scoped equivalent, and it is the root fix for the
-      // class of bug that per-project databases were papering over.
+      // In external mode an agent boot is not a recovery event. Jobs are
+      // durable in Postgres and the dispatcher owns recovery: a held delivery
+      // that dies with this process fails its job and graphile retries it, and
+      // a dispatcher restart reclaims dead worker locks itself. Re-enqueueing
+      // here was worse than redundant — the sweep lists the whole project's
+      // active runs, each enqueue is a fresh, un-keyed job, and the dispatcher
+      // routes every one to the deployment its run is pinned to. So one
+      // deployment booting woke every other deployment with an active run,
+      // each of which booted and re-enqueued the same runs again: a fleet-wide
+      // cold-start cascade on every upgrade.
+      if (resolved.runner === "external") {
+        return;
+      }
+      // Embedded keeps upstream's behaviour. There the in-process runner is the
+      // only claimer, and a job locked by a runner that died with this process
+      // would otherwise wait out graphile's four-hour stale-lock threshold.
+      // Upstream's `reenqueueActiveRuns` lists runs unfiltered and would
+      // re-enqueue every project's active runs from any agent's boot; this is
+      // the tenant-scoped equivalent.
       await reenqueueTenantRuns({
         runs: storage.runs,
         enqueue: queue.queue,
