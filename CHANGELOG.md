@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.15.0...workflow-world-v0.15.1) (2026-09-09)
+
+
+### Fixes
+
+* **dispatcher:** dead-letter a run whose executor keeps failing and stop redelivering to quarantined runs ([#72](https://github.com/evelandhq/workflow-world/issues/72)) ([7b31382](https://github.com/evelandhq/workflow-world/commit/7b31382235e187626bab904485a84750dad3ed75))
+* **storage:** index hook tokens by md5 so model-issued call ids of any length can register ([#70](https://github.com/evelandhq/workflow-world/issues/70)) ([a10e36a](https://github.com/evelandhq/workflow-world/commit/a10e36a0d674f8e5101f16cc6e28ad68d65b66a4))
+
 ## [0.15.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.14.0...workflow-world-v0.15.0) (2026-09-05)
 
 
