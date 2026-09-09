@@ -273,7 +273,10 @@ export const hooks = schema.table(
   (tb) => [
     primaryKey({ columns: [tb.tenantId, tb.hookId] }),
     index("workflow_hooks_tenant_run_index").on(tb.tenantId, tb.runId),
-    index("workflow_hooks_tenant_token_index").on(tb.tenantId, tb.token),
+    // Expression index: a plain btree on the token column rejects entries over
+    // 2704 bytes, and hook tokens carry model-issued tool-call ids of unbounded
+    // length. Lookups must filter on `md5(token)` to use it (migration 0018).
+    index("workflow_hooks_tenant_token_md5_index").on(tb.tenantId, sql`md5(${tb.token})`),
   ],
 );
 

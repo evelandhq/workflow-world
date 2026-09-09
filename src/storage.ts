@@ -85,6 +85,7 @@ import {
   notExists,
   notInArray,
   or,
+  type Placeholder,
   type SQL,
   sql,
 } from "drizzle-orm";
@@ -94,6 +95,18 @@ import type { SerializedContent } from "./drizzle/schema.js";
 import { resolveRunRetentionForCreation } from "./run-retention-resolution.js";
 import { dedupIndexName } from "./tenant.js";
 import { compact } from "./util.js";
+
+/**
+ * Every by-token lookup goes through this predicate so it can use the
+ * `(tenant_id, md5(token))` expression index from migration 0018. A plain btree
+ * on the token column refused rows whose entry exceeded 2704 bytes, and a hook
+ * token embeds a model-issued tool-call id that some providers pad with a
+ * multi-kilobyte reasoning signature (eveland#521). The exact comparison stays
+ * in the predicate so an md5 collision cannot resolve to a different token.
+ */
+function hookTokenEquals(token: string | Placeholder): SQL {
+  return sql`md5(${Schema.hooks.token}) = md5(${token}) and ${Schema.hooks.token} = ${token}`;
+}
 
 /**
  * Read helper for the deprecated `error` text column (legacy: JSON-stringified
@@ -738,7 +751,7 @@ export function createEventsStorage(
     .where(
       and(
         eq(Schema.hooks.tenantId, tenantId),
-        eq(Schema.hooks.token, sql.placeholder("token")),
+        hookTokenEquals(sql.placeholder("token")),
         or(gt(Schema.hooks.tokenRetentionUntil, sql`now()`), notExists(ownerRunIsTerminal)),
       ),
     )
@@ -1953,7 +1966,7 @@ export function createEventsStorage(
             .where(
               and(
                 eq(Schema.hooks.tenantId, tenantId),
-                eq(Schema.hooks.token, eventData.token),
+                hookTokenEquals(eventData.token),
                 exists(ownerRunIsTerminal),
                 hookRetentionEnded,
               ),
@@ -2408,7 +2421,7 @@ export function createHooksStorage(drizzle: Drizzle, tenantId: string): Storage[
     .where(
       and(
         eq(Schema.hooks.tenantId, tenantId),
-        eq(hooks.token, sql.placeholder("token")),
+        hookTokenEquals(sql.placeholder("token")),
         available,
       ),
     )
