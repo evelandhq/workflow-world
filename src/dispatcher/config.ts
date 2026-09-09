@@ -1,5 +1,9 @@
 import os from "node:os";
 import { resolveStreamCompaction } from "../config.js";
+import {
+  DEFAULT_EXECUTOR_FAILURE_LIMIT,
+  DEFAULT_EXECUTOR_FAILURE_MIN_SPAN_MS,
+} from "./dispatcher.js";
 
 export type DispatcherConfiguration = {
   worldUrl: string;
@@ -12,6 +16,8 @@ export type DispatcherConfiguration = {
   leaseRenewIntervalMs: number;
   activationLeaseTtlMs: number;
   queueGcIntervalMs: number;
+  executorFailureLimit: number;
+  executorFailureMinSpanMs: number;
   maintenanceIntervalMs: number;
   maintenanceStreamBatchSize: number;
   maintenanceMaxBatches: number;
@@ -141,6 +147,17 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
     // safe: the sweep only deletes queues with no jobs left, so running it more
     // often costs a query and running it less lets rows sit around.
     queueGcIntervalMs: positiveNumber(env.WORKFLOW_DISPATCHER_QUEUE_GC_INTERVAL_MS, 300_000),
+    // A run whose executor answers 5xx this many deliveries in a row, over at
+    // least the span, is dead-lettered instead of retried to exhaustion. The
+    // span keeps a short database outage from quarantining healthy runs.
+    executorFailureLimit: positiveNumber(
+      env.WORKFLOW_DISPATCHER_EXECUTOR_FAILURE_LIMIT,
+      DEFAULT_EXECUTOR_FAILURE_LIMIT,
+    ),
+    executorFailureMinSpanMs: nonNegativeNumber(
+      env.WORKFLOW_DISPATCHER_EXECUTOR_FAILURE_MIN_SPAN_MS,
+      DEFAULT_EXECUTOR_FAILURE_MIN_SPAN_MS,
+    ),
     maintenanceIntervalMs: nonNegativeNumber(
       env.WORKFLOW_DISPATCHER_MAINTENANCE_INTERVAL_MS,
       60_000,

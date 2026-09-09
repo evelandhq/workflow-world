@@ -5,9 +5,12 @@ export type { BootRecoveryRun } from "./boot-recovery.js";
 export { deriveMaxInFlightPerTenant, resolveDispatcherConfig } from "./config.js";
 export type { DispatcherConfiguration } from "./config.js";
 export {
+  createExecutorFailureTracker,
   createFairness,
   createMessageDedup,
   createRunLookup,
+  DEFAULT_EXECUTOR_FAILURE_LIMIT,
+  DEFAULT_EXECUTOR_FAILURE_MIN_SPAN_MS,
   dispatchMessage,
   readRunId,
   resolveAffinity,
@@ -16,6 +19,7 @@ export type {
   Affinity,
   DispatchOutcome,
   DispatcherDeps,
+  ExecutorFailureTracker,
   Fairness,
   MessageDedup,
   RunLookup,

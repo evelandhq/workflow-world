@@ -106,6 +106,8 @@ honoured by only one end is a silent failure rather than a loud one.
 | `WORKFLOW_DISPATCHER_ACTIVATION_LEASE_TTL_MS`         | `180000`           | must match what the host's control API issues                                                            |
 | `WORKFLOW_DISPATCHER_LEASE_RENEW_INTERVAL_MS`         | `TTL / 3`          | must be well below the TTL, and is checked. Transient failures are absorbed while the lease has headroom |
 | `WORKFLOW_DISPATCHER_QUEUE_GC_INTERVAL_MS`            | `300000`           | reclaims the per-run graphile queue rows; graphile does not free them on its own                         |
+| `WORKFLOW_DISPATCHER_EXECUTOR_FAILURE_LIMIT`          | `5`                | consecutive executor `5xx` on one run before it is dead-lettered instead of retried to exhaustion        |
+| `WORKFLOW_DISPATCHER_EXECUTOR_FAILURE_MIN_SPAN_MS`    | `60000`            | the streak must also last this long, so a short database outage does not quarantine healthy runs         |
 | `WORKFLOW_DISPATCHER_MAINTENANCE_INTERVAL_MS`         | `60000`            | storage maintenance cadence; `0` disables the automatic loop                                             |
 | `WORKFLOW_DISPATCHER_MAINTENANCE_STREAM_BATCH_SIZE`   | `50000`            | maximum physical stream rows deleted by one statement                                                    |
 | `WORKFLOW_DISPATCHER_MAINTENANCE_MAX_BATCHES`         | `20`               | maximum stream/run deletion batches per pass                                                             |
@@ -162,9 +164,11 @@ When first upgrading from a version that did not take this ownership lock, stop
 the old dispatcher before starting the new one; the new lock cannot fence a
 binary that never participates in it.
 
-An exhausted or terminal dispatch is written to `workflow.dispatch_dead_letters`.
-While that row is unresolved, the still-active workflow run is quarantined from
-dispatcher boot recovery; resolving it makes the run eligible for recovery again.
+An exhausted or terminal dispatch is written to `workflow.dispatch_dead_letters`,
+and so is a run whose executor keeps answering `5xx` delivery after delivery (see
+`WORKFLOW_DISPATCHER_EXECUTOR_FAILURE_LIMIT`). While that row is unresolved, the
+still-active workflow run is quarantined: boot recovery skips it and live dispatch
+drops its messages with a log line; resolving it makes the run deliverable again.
 The dispatcher does not manufacture a workflow `run_failed` event or stream EOF for
 a transport failure, so operators can choose between replay and an explicit workflow
 cancel/fail action without losing the original message. Taking the second choice

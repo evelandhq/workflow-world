@@ -14,12 +14,18 @@ import { postVqsMessage, type VqsResult } from "./vqs-client.js";
  */
 export type Affinity =
   | { type: "deployment"; deploymentId: string; runId?: string }
-  | { type: "unroutable"; reason: string };
+  | { type: "unroutable"; kind: "terminal" | "quarantined"; reason: string };
 
-export type RunLookup = (input: {
-  tenantId: string;
-  runId: string;
-}) => Promise<{ deploymentId: string; status: string } | null>;
+export type RunLookup = (input: { tenantId: string; runId: string }) => Promise<{
+  deploymentId: string;
+  status: string;
+  /**
+   * The run has an unresolved dead letter. Boot recovery has always excluded
+   * such runs; live dispatch honours the same quarantine so a run that cannot
+   * execute stops being redelivered the moment it is dead-lettered.
+   */
+  quarantined?: boolean;
+} | null>;
 
 export type DispatchOutcome =
   | { type: "completed" }
@@ -53,6 +59,11 @@ export type DispatcherDeps = {
     queueName?: string;
   }) => Promise<void>;
   log?: (message: string, meta?: Record<string, unknown>) => void;
+  /**
+   * Per-run accounting of consecutive executor failures. Absent means the
+   * containment is off and every executor 5xx retries until graphile gives up.
+   */
+  executorFailures?: ExecutorFailureTracker;
 };
 
 /** Extracts the run id from a vqs payload without interpreting the rest of it. */
@@ -89,7 +100,20 @@ export async function resolveAffinity(
   if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
     return {
       type: "unroutable",
+      kind: "terminal",
       reason: `Run ${runId} is already terminal (${run.status}).`,
+    };
+  }
+  if (run.quarantined) {
+    // Every delivery of a quarantined run would reproduce the failure that
+    // dead-lettered it, and a run that fails at execution keeps enqueueing its
+    // own wake-ups, so redelivering here is what turns one bad run into a
+    // storm. The dead letter already holds a replayable copy of the message;
+    // resolving it is the operator's explicit retry boundary.
+    return {
+      type: "unroutable",
+      kind: "quarantined",
+      reason: `Run ${runId} has an unresolved dead letter; delivery stays parked until an operator resolves it.`,
     };
   }
   return { type: "deployment", deploymentId: run.deploymentId, runId };
@@ -113,11 +137,19 @@ export async function dispatchMessage(
   const affinity = await resolveAffinity(message, deps.runLookup);
   if (affinity.type === "unroutable") {
     // Not an error: a terminal run's straggler message has nowhere to go and
-    // nothing to do. Dropping it is correct and must not burn retries.
-    deps.log?.("dropping message for terminal run", {
-      tenantId: message.tenantId,
-      reason: affinity.reason,
-    });
+    // nothing to do, and a quarantined run's message is parked behind its dead
+    // letter. Dropping either is correct and must not burn retries.
+    const runId = readRunId(message);
+    deps.log?.(
+      affinity.kind === "quarantined"
+        ? "dropping message for quarantined run"
+        : "dropping message for terminal run",
+      {
+        tenantId: message.tenantId,
+        ...(runId === undefined ? {} : { runId }),
+        reason: affinity.reason,
+      },
+    );
     return { type: "completed" };
   }
 
@@ -173,9 +205,15 @@ export async function dispatchMessage(
       }),
   );
 
-  if (result.type === "completed") return { type: "completed" };
+  const failureKey =
+    affinity.runId === undefined ? undefined : `${message.tenantId}:${affinity.runId}`;
+  if (result.type === "completed") {
+    if (failureKey !== undefined) deps.executorFailures?.reset(failureKey);
+    return { type: "completed" };
+  }
 
   if (result.type === "reschedule") {
+    if (failureKey !== undefined) deps.executorFailures?.reset(failureKey);
     // Enqueued before returning, so a dispatcher crash between the two cannot
     // lose the wake-up. The message id is preserved deliberately: the runtime
     // uses it as the step-ownership lease.
@@ -193,11 +231,95 @@ export async function dispatchMessage(
       reason: `Executor rejected the dispatch with HTTP ${String(result.status)}: ${result.text}`,
     };
   }
+  // A 5xx means the executor ran the message and threw. Once is a blip; the
+  // same run failing that way delivery after delivery is a run that can never
+  // execute — a bundle that cannot replay its log, a row the database refuses —
+  // and graphile's 49 attempts with exponential backoff would keep waking its
+  // deployment for days while the run enqueues more wake-ups of its own.
+  // Transport errors (status 0: the process is dead or restarting) are exactly
+  // what retries exist for and never count.
+  if (failureKey !== undefined && result.status >= 500 && deps.executorFailures) {
+    const streak = deps.executorFailures.record(failureKey);
+    if (streak.exhausted) {
+      deps.executorFailures.reset(failureKey);
+      return {
+        type: "dead-letter",
+        reason:
+          `Executor answered HTTP ${String(result.status)} on ${String(streak.count)} consecutive ` +
+          `deliveries of run ${String(affinity.runId)} over ${String(Math.round(streak.spanMs / 1000))}s; ` +
+          `last response: ${result.text}`,
+      };
+    }
+  }
   return {
     type: "retry",
     reason: `Dispatch failed (HTTP ${String(result.status)}): ${result.text}`,
   };
 }
+
+/** Five 5xx deliveries of one run spread over at least a minute. */
+export const DEFAULT_EXECUTOR_FAILURE_LIMIT = 5;
+export const DEFAULT_EXECUTOR_FAILURE_MIN_SPAN_MS = 60_000;
+
+/**
+ * Consecutive executor-5xx accounting per run, behind the dead-letter decision
+ * in `dispatchMessage`.
+ *
+ * A streak is exhausted when it reaches `limit` failures AND has lasted at least
+ * `minSpanMs`. The span guard is what separates a run that cannot execute from a
+ * database blip: a run that fails at execution fans out wake-up messages, so a
+ * thirty-second outage can produce a burst of 5xx within seconds, and counting
+ * alone would quarantine healthy runs behind it. A doomed run keeps failing
+ * across graphile's backoff, so it clears the span on its own.
+ *
+ * In-process and bounded on purpose, like the dedup cache: a restart forgets the
+ * streaks, and the consequence is a few more retries rather than a wrong answer.
+ */
+export function createExecutorFailureTracker(
+  input: { limit?: number; minSpanMs?: number; trackedRuns?: number; now?: () => number } = {},
+) {
+  const limit = input.limit ?? DEFAULT_EXECUTOR_FAILURE_LIMIT;
+  const minSpanMs = input.minSpanMs ?? DEFAULT_EXECUTOR_FAILURE_MIN_SPAN_MS;
+  const trackedRuns = input.trackedRuns ?? 10_000;
+  const now = input.now ?? Date.now;
+  if (!Number.isFinite(limit) || limit < 1) {
+    throw new Error("Executor failure limit must be a positive number.");
+  }
+  // Insertion-ordered, so the oldest streak is the first one iteration yields.
+  const streaks = new Map<string, { count: number; firstAt: number }>();
+  return {
+    /** Records one executor 5xx for the run and reports the streak it now has. */
+    record(key: string): { count: number; spanMs: number; exhausted: boolean } {
+      const at = now();
+      const previous = streaks.get(key);
+      const streak = previous
+        ? { count: previous.count + 1, firstAt: previous.firstAt }
+        : { count: 1, firstAt: at };
+      // Re-insert so the streak that just advanced is the newest.
+      streaks.delete(key);
+      streaks.set(key, streak);
+      if (streaks.size > trackedRuns) {
+        const oldest = streaks.keys().next().value;
+        if (oldest !== undefined) streaks.delete(oldest);
+      }
+      const spanMs = Math.max(0, at - streak.firstAt);
+      return {
+        count: streak.count,
+        spanMs,
+        exhausted: streak.count >= limit && spanMs >= minSpanMs,
+      };
+    },
+    /** A delivery that did not end in an executor 5xx ends the streak. */
+    reset(key: string): void {
+      streaks.delete(key);
+    },
+    stats(): { tracked: number; limit: number; minSpanMs: number } {
+      return { tracked: streaks.size, limit, minSpanMs };
+    },
+  };
+}
+
+export type ExecutorFailureTracker = ReturnType<typeof createExecutorFailureTracker>;
 
 /**
  * Per-tenant in-flight accounting behind graphile's `forbiddenFlags`.
@@ -313,17 +435,34 @@ export function createMessageDedup(input: { limit?: number } = {}) {
 
 export type MessageDedup = ReturnType<typeof createMessageDedup>;
 
-/** Reads a run's deployment and status straight from the shared world schema. */
+/**
+ * Reads a run's deployment and status straight from the shared world schema,
+ * plus whether an unresolved dead letter quarantines it — the same anti-join
+ * boot recovery applies, served by the partial index on unresolved rows.
+ */
 export function createRunLookup(pool: Pool): RunLookup {
   return async ({ tenantId, runId }) => {
-    const { rows } = await pool.query<{ deployment_id: string; status: string }>(
-      `select deployment_id, status
-         from workflow.workflow_runs
-        where tenant_id = $1 and id = $2
+    const { rows } = await pool.query<{
+      deployment_id: string;
+      status: string;
+      quarantined: boolean;
+    }>(
+      `select runs.deployment_id, runs.status,
+              exists (
+                select 1
+                  from workflow.dispatch_dead_letters as dead
+                 where dead.tenant_id = runs.tenant_id
+                   and dead.run_id = runs.id
+                   and dead.resolved_at is null
+              ) as quarantined
+         from workflow.workflow_runs as runs
+        where runs.tenant_id = $1 and runs.id = $2
         limit 1`,
       [tenantId, runId],
     );
     const row = rows[0];
-    return row ? { deploymentId: row.deployment_id, status: row.status } : null;
+    return row
+      ? { deploymentId: row.deployment_id, status: row.status, quarantined: row.quarantined }
+      : null;
   };
 }

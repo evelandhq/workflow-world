@@ -450,6 +450,7 @@ to a different deployment.
 | `200 {timeoutSeconds: N}` | not complete — re-enqueue the _same_ `messageId` at `now + N` |
 | `4xx`                     | terminal; never retried, and dead-lettered                    |
 | `5xx` / network / timeout | throw → graphile retry with backoff, `maxAttempts: 49`        |
+| `5xx`, same run, repeated | dead-lettered once the streak reaches the configured limit    |
 
 The reschedule case has two load-bearing properties. The `messageId` is preserved
 because the runtime uses it as the step-ownership lease, so minting a fresh one
@@ -522,6 +523,7 @@ ordering later without re-checking that assumption.
 | deployment unavailable or cold  | activation unavailable → retry           | graphile retry                           |
 | lease lapses during a long step | executor reaped mid-step                 | **prevented** by renewal, not recovered  |
 | `maxAttempts` exhausted         | graphile stops retrying                  | dead-letter quarantine + operator action |
+| run fails at execution forever  | 5xx streak → dead-letter, redelivery off | quarantine + operator action             |
 | duplicate enqueue               | job key dedupes at enqueue               | by construction                          |
 
 Boot recovery runs before the worker pool starts and only while the service holds
@@ -557,6 +559,24 @@ the active run becomes eligible for boot recovery and deployment protection
 again; an operator who wants to abandon it should cancel/fail it through the
 workflow control surface instead. This keeps transport failure, workflow
 outcome, and manual replay as three distinct states.
+
+Quarantine also holds live dispatch, not only boot recovery: a message that
+arrives for a run with an unresolved dead letter is dropped with a log line
+instead of being delivered. A run that fails at execution enqueues wake-ups of
+its own on every failed replay, so redelivering to it is what turns one bad run
+into hundreds of jobs and a deployment that is woken every few minutes to fail
+again. The dead letter keeps a replayable copy of the message; resolving it is
+the explicit retry boundary.
+
+The same reasoning puts a run into quarantine before graphile's attempts are
+spent. An executor `5xx` means the flow route ran the message and threw; once is
+a blip, but the same run failing that way on `WORKFLOW_DISPATCHER_EXECUTOR_FAILURE_LIMIT`
+consecutive deliveries spread over at least
+`WORKFLOW_DISPATCHER_EXECUTOR_FAILURE_MIN_SPAN_MS` is a run that can never
+execute — a bundle that cannot replay its log, a row the database refuses — and
+it is dead-lettered then. Transport failures never count: a dead or restarting
+process is exactly what retries exist for. The streak is in-process and bounded,
+like the dedup cache; a dispatcher restart forgets it and costs a few retries.
 
 Quarantine is a claim about a run that can still be replayed, so it ends when
 the run does: a trigger resolves a run's unresolved letters as it reaches a
