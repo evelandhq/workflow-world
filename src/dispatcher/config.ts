@@ -1,5 +1,6 @@
 import os from "node:os";
 import { resolveStreamCompaction } from "../config.js";
+import { MIN_OWNERSHIP_LIVENESS_MS } from "./ownership.js";
 import {
   DEFAULT_EXECUTOR_FAILURE_LIMIT,
   DEFAULT_EXECUTOR_FAILURE_MIN_SPAN_MS,
@@ -24,6 +25,15 @@ export type DispatcherConfiguration = {
   maintenanceMaxStreamsToPack: number;
   maintenanceRunBatchSize: number;
   maintenanceCompactSnapshots: boolean;
+  /**
+   * The liveness budget for the session holding the ownership lock: how long a
+   * dead owner may keep it before the server reclaims it. See `ownership.ts`.
+   */
+  ownershipLivenessMs: number;
+  /** Retry cadence while another dispatcher holds the lock. */
+  ownershipRetryIntervalMs: number;
+  /** How long to keep retrying; `null` waits until the lock frees, `0` fails on the first miss. */
+  ownershipWaitMs: number | null;
 };
 
 /**
@@ -40,6 +50,13 @@ const DEFAULT_ACTIVATION_LEASE_TTL_MS = 180_000;
  * round-trips of every worker — enough to work, but needlessly serialised.
  */
 const MIN_DISPATCHER_POOL_SIZE = 4;
+
+/**
+ * How long a dead dispatcher may keep the ownership lock before the server
+ * reclaims it. Generous against a brief network stall, small against the two
+ * hours a Linux kernel takes to notice a vanished peer on its own.
+ */
+const DEFAULT_OWNERSHIP_LIVENESS_MS = 90_000;
 
 /**
  * How many tenants one dispatcher may have in flight at once, derived from the
@@ -132,11 +149,28 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
     Math.max(1, poolSize - 2),
   );
 
+  const ownershipLivenessMs = positiveNumber(
+    env.WORKFLOW_DISPATCHER_OWNERSHIP_LIVENESS_MS,
+    DEFAULT_OWNERSHIP_LIVENESS_MS,
+  );
+  if (ownershipLivenessMs < MIN_OWNERSHIP_LIVENESS_MS) {
+    throw new Error(
+      `WORKFLOW_DISPATCHER_OWNERSHIP_LIVENESS_MS (${String(ownershipLivenessMs)}ms) is below the minimum of ` +
+        `${String(MIN_OWNERSHIP_LIVENESS_MS)}ms: the keepalive and heartbeat cadence is derived from it.`,
+    );
+  }
+
   return {
     worldUrl,
     apiUrl,
     poolSize,
     concurrency,
+    ownershipLivenessMs,
+    ownershipRetryIntervalMs: positiveNumber(
+      env.WORKFLOW_DISPATCHER_OWNERSHIP_RETRY_INTERVAL_MS,
+      5_000,
+    ),
+    ownershipWaitMs: optionalNonNegativeNumber(env.WORKFLOW_DISPATCHER_OWNERSHIP_WAIT_MS),
     pollIntervalMs: positiveNumber(env.WORKFLOW_DISPATCHER_POLL_INTERVAL_MS, 500),
     maxInFlightPerTenant: positiveNumber(
       env.WORKFLOW_DISPATCHER_MAX_INFLIGHT_PER_TENANT,
@@ -186,6 +220,12 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
 function positiveNumber(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** Unset or unparsable means "no bound", which a numeric fallback cannot express. */
+function optionalNonNegativeNumber(value: string | undefined): number | null {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function nonNegativeNumber(value: string | undefined, fallback: number): number {
