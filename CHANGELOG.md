@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.2](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.15.1...workflow-world-v0.15.2) (2026-09-09)
+
+
+### Fixes
+
+* break the boot-recovery cold-start cascade ([#74](https://github.com/evelandhq/workflow-world/issues/74)) ([bf5a3ee](https://github.com/evelandhq/workflow-world/commit/bf5a3ee4209cc0de206b0646e2ab8fc7db9440be))
+* **dispatcher:** reclaim a dead dispatcher's ownership lock in seconds and wait for it instead of crash-looping ([#73](https://github.com/evelandhq/workflow-world/issues/73)) ([a2f4f10](https://github.com/evelandhq/workflow-world/commit/a2f4f10697db083a3f70a9e9436104f5b9e39085))
+
 ## [0.15.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.15.0...workflow-world-v0.15.1) (2026-09-09)
 
 
