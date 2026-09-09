@@ -10,6 +10,8 @@ const state = vi.hoisted(() => ({
   recoveryCandidates: [] as unknown[],
   recoveryError: null as Error | null,
   runtimeStopError: null as Error | null,
+  /** The 'error' listener the ownership client registered, so a test can end its session. */
+  ownershipClientError: null as ((error: Error) => void) | null,
 }));
 
 const workerUtils = vi.hoisted(() => ({
@@ -34,11 +36,23 @@ vi.mock("pg", () => ({
             state.calls.push("ownership:unlock");
             return { rows: [{ unlocked: true }] };
           }
+          if (/from pg_locks/i.test(sql)) {
+            state.calls.push("ownership:holder");
+            return { rows: [] };
+          }
+          // Session liveness settings and the heartbeat are exercised against
+          // a real server in ownership.integration.test.ts.
+          if (/^set /i.test(sql) || sql === "select 1") return { rows: [] };
           throw new Error(`unexpected ownership query: ${sql}`);
         },
-        release: () => {
-          state.calls.push("ownership:release");
+        release: (destroy?: unknown) => {
+          state.calls.push(destroy ? "ownership:destroy" : "ownership:release");
         },
+        on: (event: string, listener: (error: Error) => void) => {
+          if (event === "error") state.ownershipClientError = listener;
+        },
+        once: () => {},
+        removeListener: () => {},
       };
     }
 
@@ -107,6 +121,7 @@ describe("dispatcher service lifecycle", () => {
     state.calls.length = 0;
     state.connectError = null;
     state.lockAcquired = true;
+    state.ownershipClientError = null;
     state.ownershipError = null;
     state.recoveryCandidates = [];
     state.recoveryError = null;
@@ -193,7 +208,7 @@ describe("dispatcher service lifecycle", () => {
     ]);
   });
 
-  it("refuses to start a second dispatcher generation", async () => {
+  it("refuses to start a second dispatcher generation when told not to wait", async () => {
     state.lockAcquired = false;
 
     await expect(
@@ -202,6 +217,7 @@ describe("dispatcher service lifecycle", () => {
           NODE_ENV: "development",
           WORKFLOW_WORLD_URL: "postgres://workflow.test/world",
           WORKFLOW_DISPATCHER_ACTIVATION_API_URL: "http://activation.test",
+          WORKFLOW_DISPATCHER_OWNERSHIP_WAIT_MS: "0",
         },
         activation,
       }),
@@ -210,9 +226,79 @@ describe("dispatcher service lifecycle", () => {
     expect(state.calls).toEqual([
       "ownership:connect",
       "ownership:lock",
+      "ownership:holder",
       "ownership:release",
       "pool:end",
     ]);
+  });
+
+  it("waits for the lock instead of failing when the holder goes away", async () => {
+    state.lockAcquired = false;
+    const warnings: string[] = [];
+    // The second attempt succeeds: the previous owner's session was reclaimed.
+    const started = startDispatcherService({
+      env: {
+        NODE_ENV: "development",
+        WORKFLOW_WORLD_URL: "postgres://workflow.test/world",
+        WORKFLOW_DISPATCHER_ACTIVATION_API_URL: "http://activation.test",
+        WORKFLOW_DISPATCHER_OWNERSHIP_RETRY_INTERVAL_MS: "10",
+      },
+      activation,
+      telemetry: {
+        emit(event) {
+          if (event.severity === "warn") warnings.push(event.eventName);
+        },
+        async shutdown() {},
+      },
+    });
+    await vi.waitFor(() => expect(state.calls).toContain("ownership:holder"));
+    state.lockAcquired = true;
+    const service = await started;
+    expect(service.phase).toBe("ready");
+    expect(warnings).toContain("workflow_dispatcher.ownership_wait");
+    // At least one miss (lock → holder lookup) before the attempt that won,
+    // and nothing past ownership ran until it did.
+    const attempts = state.calls.filter((call) => call === "ownership:lock").length;
+    expect(attempts).toBeGreaterThanOrEqual(2);
+    expect(state.calls.indexOf("migrate")).toBeGreaterThan(
+      state.calls.lastIndexOf("ownership:lock"),
+    );
+    await service.stop();
+  });
+
+  it("stops itself when the owning session is terminated under it", async () => {
+    const phases: string[] = [];
+    const service = await startDispatcherService({
+      env: {
+        NODE_ENV: "development",
+        WORKFLOW_WORLD_URL: "postgres://workflow.test/world",
+        WORKFLOW_DISPATCHER_ACTIVATION_API_URL: "http://activation.test",
+      },
+      activation,
+      lifecycle: { onPhase: (event) => phases.push(event.phase) },
+    });
+    expect(service.phase).toBe("ready");
+    expect(state.ownershipClientError).not.toBeNull();
+
+    // What pg emits on a checked-out client when the server ends its session.
+    state.ownershipClientError!(new Error("terminating connection due to administrator command"));
+
+    await vi.waitFor(() => expect(service.phase).toBe("stopped"));
+    expect(phases).toEqual([
+      "ownership_acquired",
+      "migrations_applied",
+      "boot_recovery_completed",
+      "ready",
+      "ownership_lost",
+      "stopped",
+    ]);
+    // The dead client is destroyed, never unlocked on; everything else drains.
+    expect(state.calls).not.toContain("ownership:unlock");
+    expect(state.calls).toContain("ownership:destroy");
+    expect(state.calls.at(-1)).toBe("pool:end");
+    // A later stop() is the same, already-finished shutdown.
+    await service.stop();
+    expect(phases.filter((phase) => phase === "stopped")).toHaveLength(1);
   });
 
   it("closes the pool when the ownership connection cannot be established", async () => {

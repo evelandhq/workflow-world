@@ -114,6 +114,9 @@ honoured by only one end is a silent failure rather than a loud one.
 | `WORKFLOW_DISPATCHER_MAINTENANCE_MAX_STREAMS_TO_PACK` | `100`              | maximum terminal streams rewritten into blocks per pass                                                  |
 | `WORKFLOW_DISPATCHER_MAINTENANCE_RUN_BATCH_SIZE`      | `1000`             | maximum expired workflow graphs deleted by one statement                                                 |
 | `WORKFLOW_WORLD_STREAM_COMPACTION`                    | `on`               | also controls snapshot stripping during terminal block rewrites                                          |
+| `WORKFLOW_DISPATCHER_OWNERSHIP_LIVENESS_MS`           | `90000`            | how long a dead dispatcher may keep the ownership lock before the server reclaims it — see below         |
+| `WORKFLOW_DISPATCHER_OWNERSHIP_RETRY_INTERVAL_MS`     | `5000`             | retry cadence while another dispatcher holds the lock                                                    |
+| `WORKFLOW_DISPATCHER_OWNERSHIP_WAIT_MS`               | unbounded          | give up on the lock after this long; `0` fails on the first miss, as versions before 0.16 always did     |
 
 #### Sizing the dispatcher pool
 
@@ -163,6 +166,47 @@ dispatcher pointed at the same database fails closed instead of sharing claims.
 When first upgrading from a version that did not take this ownership lock, stop
 the old dispatcher before starting the new one; the new lock cannot fence a
 binary that never participates in it.
+
+#### Ownership liveness
+
+A session-level advisory lock is released when its session ends, and PostgreSQL
+only learns that a session has ended when the socket closes. A dispatcher that
+crashes on the same host as the database closes its socket at once. One whose
+host lost power, or whose connection crosses a NAT, VPN, or port forward that
+swallows the close, leaves an idle backend holding the lock until the kernel's
+TCP keepalive gives up — over two hours at Linux defaults — and every restart in
+that window would find the database owned by a ghost.
+
+So the owning session is made to prove it is alive, in two independent layers
+derived from one budget, `WORKFLOW_DISPATCHER_OWNERSHIP_LIVENESS_MS` (`L`):
+
+- server-side TCP keepalives on the owning session (`tcp_keepalives_idle = L/3`,
+  `tcp_keepalives_interval = L/9`, three probes), which notice a vanished peer
+  within `2L/3` with no cooperation from the client;
+- `idle_session_timeout = L` on the owning session (PostgreSQL 14+) plus a
+  `select 1` heartbeat every `L/3`, so a session that stops heartbeating — a
+  wedged process, a black-holed network — is terminated by the server itself.
+
+The heartbeat is also the client's own view of the same fact: when it fails, or
+the server ends the session (an operator's `pg_terminate_backend`, the timeout
+above, a restart), the dispatcher reports `ownership_lost` through its lifecycle
+callback and stops itself. It no longer owns the database and must not claim; the
+host's supervisor starts a fresh process, which acquires the lock anew. A server
+that refuses any of the settings (an older major, a platform without keepalive
+control) logs `workflow_dispatcher.ownership_liveness_unavailable` at startup
+and runs with whatever layers it accepted.
+
+A dispatcher that finds the lock held now waits for it instead of exiting: it
+retries every `WORKFLOW_DISPATCHER_OWNERSHIP_RETRY_INTERVAL_MS`, logging
+`workflow_dispatcher.ownership_wait` with the holder's pid, `application_name`,
+client address and connection time from `pg_locks` each time, and starts the
+moment the holder is gone. That is what a restart during the liveness window
+looks like — a few warnings, then `ready` — rather than a crash loop that trips
+the supervisor's start limit. Set `WORKFLOW_DISPATCHER_OWNERSHIP_WAIT_MS` to
+bound the wait; `0` restores the old fail-fast behaviour. The holder is also
+readable programmatically through `readDispatcherOwnershipHolder`, and
+`terminateDispatcherOwnershipHolder` is the escape hatch for a holder the layers
+cannot reach (a pre-0.16 dispatcher that never set them).
 
 An exhausted or terminal dispatch is written to `workflow.dispatch_dead_letters`,
 and so is a run whose executor keeps answering `5xx` delivery after delivery (see

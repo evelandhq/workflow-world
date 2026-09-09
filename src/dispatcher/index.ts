@@ -27,6 +27,22 @@ export type {
 export { withRenewedLease } from "./lease.js";
 export { main } from "./main.js";
 export { consoleTelemetry } from "./observability.js";
+export {
+  acquireDispatcherOwnership,
+  deriveOwnershipLiveness,
+  describeOwnershipHolder,
+  DISPATCHER_OWNERSHIP_LOCK_KEY,
+  MIN_OWNERSHIP_LIVENESS_MS,
+  OwnershipHeldElsewhereError,
+  readDispatcherOwnershipHolder,
+  terminateDispatcherOwnershipHolder,
+} from "./ownership.js";
+export type {
+  AcquireOwnershipOptions,
+  DispatcherOwnership,
+  OwnershipHolder,
+  OwnershipLivenessSettings,
+} from "./ownership.js";
 export type { DispatcherEvent, DispatcherTelemetry } from "./observability.js";
 export { FLOW_JOB_NAME, startDispatcher } from "./runner.js";
 export type { DispatcherConfig, DispatcherRuntime } from "./runner.js";

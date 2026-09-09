@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { makeWorkerUtils, type WorkerUtils } from "graphile-worker";
-import { Pool, type PoolClient } from "pg";
+import { Pool } from "pg";
 import { runMigrations } from "../migrate.js";
 import { startStorageMaintenanceLoop } from "../storage-maintenance.js";
 import { createActivationClient, type ActivationClient } from "./activation-client.js";
@@ -10,10 +10,9 @@ import {
 } from "./boot-recovery.js";
 import { resolveDispatcherConfig, type DispatcherConfiguration } from "./config.js";
 import { consoleTelemetry, type DispatcherTelemetry } from "./observability.js";
+import { acquireDispatcherOwnership, type DispatcherOwnership } from "./ownership.js";
 import { startDispatcher, type DispatcherRuntime } from "./runner.js";
 import { resolveDispatchRuntimeSecret, resolveSecretWithDevFallback } from "./secrets.js";
-
-const DISPATCHER_OWNERSHIP_LOCK_KEY = 0x65_76_64_70; // "evdp"
 
 /**
  * The whole service as a function, so the CLI is a three-line wrapper and a test
@@ -32,6 +31,11 @@ export type DispatcherServiceOptions = {
    * `ownership_acquired → migrations_applied → boot_recovery_completed →
    * ready → stopped`. A supervisor gates on these — never on stdout text,
    * which proves only that the process printed something.
+   *
+   * `ownership_lost` is out of band: the session holding the ownership lock
+   * died under a running dispatcher, which then stops itself and reports
+   * `stopped`. The host should treat it as a crash and let its supervisor
+   * start a fresh process, which acquires the lock anew.
    */
   lifecycle?: {
     onPhase?: (event: DispatcherLifecycleEvent) => void;
@@ -61,6 +65,7 @@ export type DispatcherLifecyclePhase =
   | "migrations_applied"
   | "boot_recovery_completed"
   | "ready"
+  | "ownership_lost"
   | "stopped";
 
 export type DispatcherLifecycleEvent = {
@@ -104,34 +109,10 @@ export async function startDispatcherService(
     connectionString: config.worldUrl,
     max: config.poolSize,
     application_name: `workflow-dispatcher-${randomUUID().slice(0, 8)}`,
+    // Client-side keepalives, so this process notices a vanished server the
+    // way the server is made to notice a vanished dispatcher (ownership.ts).
+    keepAlive: true,
   });
-
-  // Session-scoped and held on a checked-out client until shutdown. This must
-  // precede migrations and recovery: once a generation reaches either, no
-  // other participating dispatcher may still be working against this database.
-  let ownershipClient: PoolClient;
-  try {
-    ownershipClient = await pool.connect();
-  } catch (error) {
-    await pool.end().catch(() => {});
-    throw error;
-  }
-  let ownership;
-  try {
-    ownership = await ownershipClient.query<{ locked: boolean }>(
-      "select pg_try_advisory_lock($1) as locked",
-      [DISPATCHER_OWNERSHIP_LOCK_KEY],
-    );
-  } catch (error) {
-    ownershipClient.release();
-    await pool.end().catch(() => {});
-    throw error;
-  }
-  if (ownership.rows[0]?.locked !== true) {
-    ownershipClient.release();
-    await pool.end().catch(() => {});
-    throw new Error("Another workflow dispatcher already owns this database.");
-  }
 
   const emitPhase = (
     phase: DispatcherLifecyclePhase,
@@ -139,17 +120,44 @@ export async function startDispatcherService(
   ) => {
     options.lifecycle?.onPhase?.({ phase, at: new Date(), ...(attributes ? { attributes } : {}) });
   };
+
+  // Session-scoped and held on a checked-out client until shutdown. This must
+  // precede migrations and recovery: once a generation reaches either, no
+  // other participating dispatcher may still be working against this database.
+  //
+  // Losing it later is handled below: the heartbeat on the owning session
+  // reports through `onLost`, and whatever this service has started by then is
+  // stopped — a dispatcher without the lock must not claim.
+  let lostError: unknown;
+  let stopOnLoss: (() => Promise<void>) | undefined;
+  let ownership: DispatcherOwnership;
+  try {
+    ownership = await acquireDispatcherOwnership(pool, {
+      telemetry,
+      livenessMs: config.ownershipLivenessMs,
+      retryIntervalMs: config.ownershipRetryIntervalMs,
+      waitMs: config.ownershipWaitMs,
+      onLost: (error) => {
+        lostError = error;
+        emitPhase("ownership_lost", { error: String(error) });
+        if (stopOnLoss) {
+          void stopOnLoss().catch((stopError: unknown) => {
+            telemetry.emit({
+              severity: "error",
+              eventName: "workflow_dispatcher.shutdown_failed",
+              body: `stopping after ownership loss failed: ${String(stopError)}`,
+            });
+          });
+        }
+      },
+    });
+  } catch (error) {
+    await pool.end().catch(() => {});
+    throw error;
+  }
   emitPhase("ownership_acquired");
 
-  let ownershipReleased = false;
-  const releaseOwnership = async () => {
-    if (ownershipReleased) return;
-    ownershipReleased = true;
-    await ownershipClient
-      .query("select pg_advisory_unlock($1)", [DISPATCHER_OWNERSHIP_LOCK_KEY])
-      .catch(() => {});
-    ownershipClient.release();
-  };
+  const releaseOwnership = () => ownership.release();
 
   let workerUtils: WorkerUtils | undefined;
   let runtime: DispatcherRuntime | undefined;
@@ -287,29 +295,43 @@ export async function startDispatcherService(
         // `startClaiming` has moved it to `ready`.
         return phase === "starting" ? "ready" : phase;
       },
-      async stop() {
-        const errors: unknown[] = [];
-        if (maintenance) await collectCleanupError(errors, () => maintenance!.stop());
-        if (runtime) {
-          const startedRuntime = runtime;
-          await collectCleanupError(errors, () => startedRuntime.stop());
-        } else {
-          // No runner ever owned the worker utils, so release them here.
-          await collectCleanupError(errors, () => Promise.resolve(startedWorkerUtils.release()));
-        }
-        await collectCleanupError(errors, releaseOwnership);
-        await collectCleanupError(errors, () => pool.end());
-        await collectCleanupError(errors, () => telemetry.shutdown());
-        phase = "stopped";
-        emitPhase("stopped");
-        if (errors.length === 1) throw errors[0];
-        if (errors.length > 1) {
-          throw new AggregateError(errors, "Dispatcher shutdown failed.");
-        }
+      stop() {
+        // Idempotent: a signal and an ownership loss can both ask for it.
+        stopping ??= stopEverything();
+        return stopping;
       },
     };
 
+    let stopping: Promise<void> | undefined;
+    const stopEverything = async () => {
+      const errors: unknown[] = [];
+      if (maintenance) await collectCleanupError(errors, () => maintenance!.stop());
+      if (runtime) {
+        const startedRuntime = runtime;
+        await collectCleanupError(errors, () => startedRuntime.stop());
+      } else {
+        // No runner ever owned the worker utils, so release them here.
+        await collectCleanupError(errors, () => Promise.resolve(startedWorkerUtils.release()));
+      }
+      await collectCleanupError(errors, releaseOwnership);
+      await collectCleanupError(errors, () => pool.end());
+      await collectCleanupError(errors, () => telemetry.shutdown());
+      phase = "stopped";
+      emitPhase("stopped");
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Dispatcher shutdown failed.");
+      }
+    };
+
     await startClaiming();
+    // From here a loss stops the running service; a loss that landed while we
+    // were still starting is a failed start, not a service that stops later.
+    stopOnLoss = () => service.stop();
+    if (lostError !== undefined) {
+      await service.stop().catch(() => {});
+      throw lostError;
+    }
     return service;
   } catch (error) {
     if (runtime) {
