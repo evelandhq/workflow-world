@@ -10,6 +10,10 @@ import {
  * restart. The workflow handler is idempotent — it replays the event log — so
  * duplicate enqueues are safe.
  *
+ * Embedded mode only. The World's `start()` skips this in external mode, where
+ * the dispatcher owns recovery and an agent boot recovers nothing; see the
+ * comment there for the cascade that calling it from every boot produced.
+ *
  * This exists instead of upstream's `reenqueueActiveRuns` because that function
  * lists runs unfiltered. With one database per project that was merely wasteful;
  * on a shared database it would mean every agent's boot re-enqueues every

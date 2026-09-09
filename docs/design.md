@@ -79,6 +79,17 @@ runtime runs steps inline inside the flow handler.
 `embedded` is not a transitional mode — it is the local-development story
 permanently, and it is the mode upstream's suite assumes.
 
+Recovery follows the runner. The World's `start()` re-enqueues the tenant's
+active runs only in `embedded` mode, where the in-process runner is the sole
+claimer and a job locked by a runner that died with the process would otherwise
+wait out graphile's stale-lock threshold. In `external` mode it enqueues
+nothing: the dispatcher reclaims dead worker locks and replays on its own boot,
+and an agent boot is not a recovery event. It used to re-enqueue in both modes,
+and on a shared database that was a cascade — each enqueue is an un-keyed job,
+and the dispatcher routes it to the deployment the run is pinned to, so one
+deployment's boot woke every deployment with an active run, each of which booted
+and did the same.
+
 It needs isolation the single-tenant original did not. On a shared database an
 in-process runner claiming a shared graphile job name would claim other tenants'
 jobs, and graphile's `forbiddenFlags` is a deny-list that cannot express "only
@@ -524,7 +535,7 @@ ordering later without re-checking that assumption.
 | lease lapses during a long step | executor reaped mid-step                 | **prevented** by renewal, not recovered  |
 | `maxAttempts` exhausted         | graphile stops retrying                  | dead-letter quarantine + operator action |
 | run fails at execution forever  | 5xx streak → dead-letter, redelivery off | quarantine + operator action             |
-| duplicate enqueue               | job key dedupes at enqueue               | by construction                          |
+| duplicate enqueue               | job key dedupes at enqueue               | by construction, keyed paths only        |
 
 Boot recovery runs before the worker pool starts and only while the service holds
 a lifecycle PostgreSQL advisory lock. It joins active runs to their exact
