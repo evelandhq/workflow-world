@@ -418,26 +418,47 @@ run it recovers without a recorded namespace, and a
 incomplete drain is visible rather than silent. See
 [Upgrading past 0.3.0](docs/design.md#upgrading-past-030).
 
+## Development
+
+Use Node.js 24 or newer and the pnpm version pinned in `package.json`:
+
+```bash
+npm install --global pnpm@11.7.0
+pnpm install --frozen-lockfile
+pnpm run build
+```
+
+Commit dependency changes in `pnpm-lock.yaml`; use `pnpm add` or `pnpm install`
+when updating dependencies. `pnpm-workspace.yaml` allows install scripts only
+for the native dependencies listed there. Review that list when adding a package
+that needs an install script. The release-age exception for `eve@0.52.5` covers
+the existing tested pin; review any new exception when updating Eve.
+
+CI uses pnpm for repository dependencies, builds, and tests. Tarball consumer
+checks and the E2E agent fixtures keep npm to match the production installation
+path; releases also keep `npm publish` for trusted publishing. Run these commands
+with pnpm available on `PATH`, since `prepack` invokes the pnpm build script.
+
 ## Tests
 
 ```bash
 # unit + integration; needs a Postgres it may create schemas in
-EVELAND_WORKFLOW_WORLD_TEST_URL=postgres://…/wfw_test npm test
+EVELAND_WORKFLOW_WORLD_TEST_URL=postgres://…/wfw_test pnpm test
 
 # upstream's conformance suite, in EXTERNAL mode, dispatcher in the loop
-WORKFLOW_WORLD_CONFORMANCE_URL=postgres://…/wfw_conformance npm run test:conformance
+WORKFLOW_WORLD_CONFORMANCE_URL=postgres://…/wfw_conformance pnpm run test:conformance
 ```
 
 ```bash
 # a real eve agent, built and driven for each supported eve version
-WORKFLOW_WORLD_E2E_URL=postgres://…/postgres npm run test:e2e
+WORKFLOW_WORLD_E2E_URL=postgres://…/postgres pnpm run test:e2e
 ```
 
 ```bash
 # by hand, not in CI: one dispatch held open for 200s against the production
 # lease settings, plus the control that proves the renewals are what kept it
 # alive. Minutes per run, which is why it is not in the matrix.
-WORKFLOW_WORLD_LEASE_CHECK_URL=postgres://…/wfw_lease npm run check:long-step
+WORKFLOW_WORLD_LEASE_CHECK_URL=postgres://…/wfw_lease pnpm run check:long-step
 ```
 
 The conformance project is the gate that matters: it runs
@@ -481,7 +502,7 @@ The check runs weekly and files an issue only when a newer eve actually moves th
 set. Expect it to be silent for months:
 
 ```bash
-npm run check:eve-drift
+pnpm run check:eve-drift
 ```
 
 When it does fire, it is a heads-up rather than a deadline. Nothing can be

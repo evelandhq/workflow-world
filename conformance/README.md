@@ -43,5 +43,5 @@ separate gate in this same project.
 Needs a Postgres and a built `dist/`.
 
 ```bash
-WORKFLOW_WORLD_CONFORMANCE_URL=postgres://user:pass@127.0.0.1:5432/wfw_conformance npm run test:conformance
+WORKFLOW_WORLD_CONFORMANCE_URL=postgres://user:pass@127.0.0.1:5432/wfw_conformance pnpm run test:conformance
 ```

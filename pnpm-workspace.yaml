@@ -1,0 +1,14 @@
+# Keep E2E consumer fixtures outside the workspace.
+packages:
+  - .
+
+# Native dependencies with install scripts in the imported npm lockfile.
+allowBuilds:
+  "@swc/core": true
+  cbor-extract: true
+  esbuild: true
+  fsevents: true
+
+# Already pinned and verified by the existing Eve compatibility matrix.
+minimumReleaseAgeExclude:
+  - eve@0.52.5

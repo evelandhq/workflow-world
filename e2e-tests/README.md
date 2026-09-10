@@ -44,10 +44,10 @@ assertion about _this_ package.
 ## Running it
 
 ```bash
-WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres npm run test:e2e
+WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
 
 # Run one enabled version, as each CI matrix job does.
-EVE_VERSION=0.38.3 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres npm run test:e2e
+EVE_VERSION=0.38.3 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
 ```
 
 The URL is used both to create the per-version database and, rewritten, to connect

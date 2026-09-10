@@ -68,11 +68,12 @@ jobs:
           # The tag release-please just cut, not whatever main has moved on to.
           ref: ${{ needs.release-please.outputs.tag }}
 
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-          cache: npm
+          cache: pnpm
 
       # Trusted publishing needs npm >= 11.5.1, which is newer than what the
       # Node 24 image happens to bundle. Pinning it here rather than trusting
@@ -82,7 +83,7 @@ jobs:
           npm install -g npm@^11.5.1
           npm --version
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       # `prepack` runs the build, so `dist/` is produced from this exact tag.
       # No --provenance flag: trusted publishing attaches it on its own.

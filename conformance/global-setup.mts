@@ -31,7 +31,7 @@ function assertBuilt(): void {
   const entry = path.join(repoRoot, "dist", "index.js");
   if (!fs.existsSync(entry)) {
     throw new Error(
-      `dist/ is not built (${entry} is missing). The conformance harness runs the published resolution, so run \`npm run build\` first.`,
+      `dist/ is not built (${entry} is missing). The conformance harness runs the published resolution, so run \`pnpm run build\` first.`,
     );
   }
 }

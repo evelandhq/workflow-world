@@ -176,11 +176,11 @@ Add PostgreSQL integration coverage proving all of the following:
 Run the normal repository gates:
 
 ```bash
-npm run typecheck
-npm run lint
-npm run fmt:check
-npm test
-npm run test:conformance
+pnpm run typecheck
+pnpm run lint
+pnpm run fmt:check
+pnpm test
+pnpm run test:conformance
 ```
 
 The real-Eve E2E suite is desirable but not a blocker if it requires credentials;
