@@ -13,7 +13,7 @@
  * clock per invocation. Putting that in the matrix would tax every push for a
  * property that changes about once a year.
  *
- *   npm run check:long-step
+ *   pnpm run check:long-step
  *
  * Needs `WORKFLOW_WORLD_LEASE_CHECK_URL` (or `WORKFLOW_WORLD_CONFORMANCE_URL`)
  * pointing at a Postgres it may migrate, and a built `dist/`.
@@ -79,7 +79,7 @@ const DATABASE_URL =
 if (!DATABASE_URL) {
   console.error(
     "WORKFLOW_WORLD_LEASE_CHECK_URL is required: this check migrates and writes to a real Postgres.\n" +
-      "  WORKFLOW_WORLD_LEASE_CHECK_URL=postgres://user:pass@127.0.0.1:5432/wfw_lease npm run check:long-step",
+      "  WORKFLOW_WORLD_LEASE_CHECK_URL=postgres://user:pass@127.0.0.1:5432/wfw_lease pnpm run check:long-step",
   );
   process.exit(2);
 }

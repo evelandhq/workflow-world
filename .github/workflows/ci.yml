@@ -11,15 +11,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run fmt:check
-      - run: npm run typecheck
-      - run: npm run build
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
+      - run: pnpm run fmt:check
+      - run: pnpm run typecheck
+      - run: pnpm run build
 
   test:
     name: Unit and integration
@@ -39,12 +40,13 @@ jobs:
       EVELAND_WORKFLOW_WORLD_TEST_URL: postgres://wfw:wfw@127.0.0.1:5432/wfw_test
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npm test
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
 
   conformance:
     name: Conformance, external mode (${{ matrix.name }})
@@ -104,13 +106,14 @@ jobs:
       WORKFLOW_WORLD_CONFORMANCE_URL: postgres://wfw:wfw@127.0.0.1:5432/wfw_conformance
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Run upstream's suite against runner=external
-        run: npm run test:conformance
+        run: pnpm run test:conformance
         env:
           # Empty means "unset": `positiveNumber` falls back on a non-positive
           # parse, and the stub compares STUB_RENEW_FAIL against "1".
@@ -156,24 +159,40 @@ jobs:
       EVE_VERSION: ${{ matrix.eve }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # These fixtures intentionally install with npm, independently of pnpm.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node24-npm-consumers-${{ hashFiles('pnpm-lock.yaml', 'e2e-tests/eve-versions.mts') }}
+          restore-keys: |
+            ${{ runner.os }}-node24-npm-consumers-
       - name: Build a real eve agent and drive one turn through this World
-        run: npm run test:e2e
+        run: pnpm run test:e2e
 
   pack:
     name: Tarball contract
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # These fixtures intentionally install with npm, independently of pnpm.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node24-npm-consumers-${{ hashFiles('pnpm-lock.yaml', 'e2e-tests/eve-versions.mts') }}
+          restore-keys: |
+            ${{ runner.os }}-node24-npm-consumers-
       - name: Pack
         # `--pack-destination` does not create the directory; npm opens the
         # tarball for writing and fails with ENOENT if it is missing.

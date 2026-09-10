@@ -56,10 +56,10 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "oxlint",
-    "prepack": "npm run build",
-    "test:conformance": "npm run build && vitest run --config conformance/vitest.config.mts",
+    "prepack": "pnpm run build",
+    "test:conformance": "pnpm run build && vitest run --config conformance/vitest.config.mts",
     "test:e2e": "vitest run --config e2e-tests/vitest.config.mts",
-    "check:long-step": "npm run build && node scripts/long-step-lease.mjs",
+    "check:long-step": "pnpm run build && node scripts/long-step-lease.mjs",
     "check:eve-drift": "node scripts/eve-pin-drift.mjs"
   },
   "dependencies": {
@@ -87,5 +87,6 @@
   },
   "engines": {
     "node": ">=24.0.0"
-  }
+  },
+  "packageManager": "pnpm@11.7.0"
 }

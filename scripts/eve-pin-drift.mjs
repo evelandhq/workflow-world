@@ -229,12 +229,12 @@ lines.push(
   "`packages/core/src/eve-compatibility.ts` verifies a version on that line — check it",
   "before bumping, and pin the version *it* verifies rather than npm's `latest`.",
   "",
-  "When it is time: bump the `eve` devDependency, run `npm install`, and let",
+  "When it is time: bump the `eve` devDependency, run `pnpm install`, and let",
   "`src/eve-pin-contract.test.ts` name the packages that have to move with it.",
   "Confirm `specVersion` remains compatible — eve compiles the runtime's check into each",
   "release, as literal equality through `@workflow/core` beta.40 and as a",
   "floor-and-ceiling range from beta.41 on, and the floor still rejects a World",
-  "pinned behind the runtime. Then run `npm run test:e2e`, which is the only thing",
+  "pinned behind the runtime. Then run `pnpm run test:e2e`, which is the only thing",
   "here that loads a real eve.",
 );
 

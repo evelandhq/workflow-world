@@ -42,7 +42,7 @@ jobs:
         with:
           node-version: 24
 
-      # No `npm ci`: the script reads package.json and the registry, and nothing
+      # No dependency install: the script reads package.json and the registry, and nothing
       # else. Installing the tree would cost a minute a week to prove nothing.
       - name: Check
         id: check
