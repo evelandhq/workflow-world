@@ -64,13 +64,40 @@ graphile's `forbiddenFlags` is a deny-list that cannot express "only mine". Only
 npm install @evelandhq/workflow-world
 ```
 
-Point the Workflow SDK at it (`experimental.workflow.world`), then apply the
-schema and provision each tenant:
+## Quick Start (Workflow SDK, without Eve)
+
+Use Node.js 24+ and PostgreSQL. The standalone
+[Next.js example](./examples/nextjs/README.md) installs the public npm package,
+provisions a tenant, and runs a workflow with a step and a durable sleep in
+`embedded` mode. It pins `workflow@5.0.0-beta.48` to match this World's runtime
+dependencies; the SDK's default `latest` tag is a separate release line.
+
+The SDK loads the World through these environment variables:
 
 ```bash
-npx workflow-world-setup                   # migrations
-npx workflow-dispatcher                    # the long-running dispatcher
+WORKFLOW_TARGET_WORLD=@evelandhq/workflow-world
+WORKFLOW_WORLD_URL=postgres://world:world@127.0.0.1:5432/world
+WORKFLOW_WORLD_TENANT_ID=quickstart
+WORKFLOW_WORLD_DEPLOYMENT_ID=local-v1
+WORKFLOW_WORLD_RUNNER=embedded
 ```
+
+Configure your framework's Workflow integration too (for Next.js,
+`withWorkflow` from `workflow/next`). `experimental.workflow.world` is Eve's
+integration setting, not the general SDK setup.
+
+Before starting the app, run `workflow-world-setup` with the database URL in its
+environment. It applies schema migrations and initializes Graphile; **it does
+not create tenant partitions**. Call `ensureTenantPartitions(pool, tenantId)`
+once per tenant afterwards. The example's `npm run setup` performs both steps;
+see its [provisioning script](./examples/nextjs/scripts/provision-tenant.mjs).
+
+Once embedded mode works, switch to `WORKFLOW_WORLD_RUNNER=external`, configure
+the host activation API and shared runtime secret described below, and run
+`npx workflow-dispatcher` as an always-running host process. The activation API
+must locate or wake the run's pinned deployment and implement the lease contract
+in [the design document](./docs/design.md). The dispatcher and activation service
+must remain available while executors scale to zero.
 
 ## Configuration
 

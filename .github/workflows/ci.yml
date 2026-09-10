@@ -202,3 +202,38 @@ jobs:
           grep -q "Apache License" node_modules/@evelandhq/workflow-world/LICENSE
           grep -q "world-postgres" node_modules/@evelandhq/workflow-world/NOTICE
           echo "tarball contract ok"
+
+  sdk-quickstart:
+    name: Standalone Workflow SDK Quick Start (published package)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: world
+          POSTGRES_PASSWORD: world
+          POSTGRES_DB: world
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: examples/nextjs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: examples/nextjs/package-lock.json
+      - run: npm ci
+      - run: cp .env.example .env.local
+      - run: npm run setup
+      - run: npm run build
+      - name: Run the compiled workflow through the published World
+        run: |
+          npm start > /tmp/quickstart.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true; cat /tmp/quickstart.log' EXIT
+          npm run smoke
