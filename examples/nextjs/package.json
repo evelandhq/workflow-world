@@ -1,0 +1,23 @@
+{
+  "name": "eveland-workflow-nextjs-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "node --env-file=.env.local node_modules/@evelandhq/workflow-world/bin/setup.js && node --env-file=.env.local scripts/provision-tenant.mjs",
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
+    "start": "next start",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@evelandhq/workflow-world": "0.15.2",
+    "next": "16.3.4",
+    "pg": "8.20.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "workflow": "5.0.0-beta.48"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}
