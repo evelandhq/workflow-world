@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.15.2...workflow-world-v0.16.0) (2026-09-11)
+
+
+### Features
+
+* **streams:** drop read-side snapshot rehydration and checkpoints ([#79](https://github.com/evelandhq/workflow-world/issues/79)) ([8783fd0](https://github.com/evelandhq/workflow-world/commit/8783fd07b7d3ea24bf7354fab832caa63f890463))
+
 ## [0.15.2](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.15.1...workflow-world-v0.15.2) (2026-09-09)
 
 
