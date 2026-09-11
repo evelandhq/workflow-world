@@ -8,6 +8,7 @@ import {
   runMigrations,
 } from "./migrate.js";
 import { packTerminalStreamBlocks } from "./stream-block-maintenance.js";
+import { compactStreamChunk } from "./stream-compaction.js";
 
 const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
@@ -132,7 +133,7 @@ describe.skipIf(!testUrl)("terminal stream block maintenance", () => {
       wire.reduce((total, row) => total + row.length, 0),
     );
     const read = await world.streams.getChunks(runId, streamId, { limit: 10 });
-    expect(read.data.map(({ data }) => Buffer.from(data))).toEqual(wire);
+    expect(read.data.map(({ data }) => Buffer.from(data))).toEqual(wire.map(compactStreamChunk));
   });
 
   test("includes a chunk committed between candidate selection and rewriting", async () => {

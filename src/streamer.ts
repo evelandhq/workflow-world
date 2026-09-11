@@ -12,16 +12,12 @@ import type {
   Streamer,
   StreamInfoResponse,
 } from "@workflow/world";
-import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { Client, type Pool } from "pg";
 import { monotonicFactory } from "ulid";
 import * as z from "zod";
 import { type Drizzle, Schema } from "./drizzle/index.js";
 import { packStreamChunks, unpackStreamRow } from "./stream-blocks.js";
-import {
-  createCheckpointingRehydrator,
-  type StoredStreamCheckpoint,
-} from "./stream-checkpoints.js";
 import { compactStreamChunk } from "./stream-compaction.js";
 import { tenantStreamChannel } from "./tenant.js";
 import { Mutex } from "./util.js";
@@ -297,7 +293,7 @@ export function createStreamer(
       },
 
       async getChunks(
-        runId: string,
+        _runId: string,
         name: string,
         options?: GetChunksOptions,
       ): Promise<StreamChunksResponse> {
@@ -326,59 +322,6 @@ export function createStreamer(
           eof: streams.eof,
         };
 
-        let savedCheckpoint: StoredStreamCheckpoint | undefined;
-        if (cursorChunkId) {
-          const [row] = await drizzle
-            .select({
-              chunkId: Schema.streamCheckpoints.chunkId,
-              nextIndex: Schema.streamCheckpoints.nextIndex,
-              state: Schema.streamCheckpoints.state,
-            })
-            .from(Schema.streamCheckpoints)
-            .where(
-              and(
-                eq(Schema.streamCheckpoints.tenantId, tenantId),
-                eq(Schema.streamCheckpoints.streamId, name),
-                lte(Schema.streamCheckpoints.chunkId, cursorChunkId as `chnk_${string}`),
-              ),
-            )
-            .orderBy(desc(Schema.streamCheckpoints.chunkId))
-            .limit(1);
-          savedCheckpoint = row;
-        }
-
-        const progress = createCheckpointingRehydrator({}, savedCheckpoint);
-        const checkpoints: StoredStreamCheckpoint[] = [];
-        if (cursorChunkId) {
-          const checkpointChunkId = savedCheckpoint?.chunkId ?? null;
-          const prefixRows = await drizzle
-            .select(physicalSelection)
-            .from(streams)
-            .where(
-              and(
-                eq(streams.tenantId, tenantId),
-                eq(streams.streamId, name),
-                eq(streams.eof, false),
-                lte(streams.chunkId, cursorChunkId as `chnk_${string}`),
-                ...(checkpointChunkId
-                  ? [
-                      sql`coalesce(${streams.lastChunkId}, ${streams.chunkId}) > ${checkpointChunkId}`,
-                    ]
-                  : []),
-              ),
-            )
-            .orderBy(asc(streams.chunkId));
-
-          let prefixIndex = savedCheckpoint?.nextIndex ?? 0;
-          for (const chunk of prefixRows.flatMap(unpackStreamRow)) {
-            if (checkpointChunkId && chunk.id <= checkpointChunkId) continue;
-            if (chunk.id > cursorChunkId) continue;
-            const fed = progress.feed(chunk.id, chunk.data, prefixIndex);
-            prefixIndex += 1;
-            if (fed.checkpoint) checkpoints.push(fed.checkpoint);
-          }
-        }
-
         // One physical row yields at least one logical chunk, so `limit + 1`
         // rows are sufficient even when the cursor starts inside a block.
         const rows = await drizzle
@@ -397,32 +340,18 @@ export function createStreamer(
           .orderBy(asc(streams.chunkId))
           .limit(limit + 1);
 
+        // Stored bytes are handed through verbatim: every supported Eve line
+        // writes delta-only appends (stream v25), so there is no snapshot to
+        // rebuild and no accumulator state to carry across pages.
         const logicalRows = rows
           .flatMap(unpackStreamRow)
           .filter((chunk) => !cursorChunkId || chunk.id > cursorChunkId);
         const hasMore = logicalRows.length > limit;
         const pageRows = logicalRows.slice(0, limit);
-        const chunks = pageRows.map((row, index) => {
-          const fed = progress.feed(row.id, row.data, baseIndex + index);
-          if (fed.checkpoint) checkpoints.push(fed.checkpoint);
-          return { index: baseIndex + index, data: new Uint8Array(fed.data) };
-        });
-
-        if (checkpoints.length > 0) {
-          await drizzle
-            .insert(Schema.streamCheckpoints)
-            .values(
-              checkpoints.map((checkpoint) => ({
-                tenantId,
-                streamId: name,
-                runId,
-                chunkId: checkpoint.chunkId as `chnk_${string}`,
-                nextIndex: checkpoint.nextIndex,
-                state: checkpoint.state,
-              })),
-            )
-            .onConflictDoNothing();
-        }
+        const chunks = pageRows.map((row, index) => ({
+          index: baseIndex + index,
+          data: new Uint8Array(row.data),
+        }));
 
         const [eofRow] = await drizzle
           .select({ eof: streams.eof })
@@ -487,7 +416,7 @@ export function createStreamer(
       },
 
       async get(
-        runId: string,
+        _runId: string,
         name: string,
         startIndex?: number,
       ): Promise<ReadableStream<Uint8Array>> {
@@ -500,9 +429,6 @@ export function createStreamer(
             let lastChunkId = "";
             let offset = startIndex ?? 0;
             let buffer = [] as StreamChunkEvent[] | null;
-            let logicalIndex = 0;
-            const progress = createCheckpointingRehydrator();
-            const checkpoints: StoredStreamCheckpoint[] = [];
 
             function enqueue(msg: { id: string; data: Uint8Array; eof: boolean }) {
               if (lastChunkId >= msg.id) {
@@ -516,20 +442,12 @@ export function createStreamer(
                 return;
               }
 
-              const fed = progress.feed(
-                msg.id,
-                Buffer.isBuffer(msg.data) ? msg.data : Buffer.from(msg.data),
-                logicalIndex,
-              );
-              logicalIndex += 1;
-              if (fed.checkpoint) checkpoints.push(fed.checkpoint);
-
               if (offset > 0) {
                 offset--;
                 return;
               }
 
-              if (fed.data.byteLength) controller.enqueue(new Uint8Array(fed.data));
+              if (msg.data.byteLength) controller.enqueue(new Uint8Array(msg.data));
             }
 
             function onData(data: StreamChunkEvent) {
@@ -576,22 +494,6 @@ export function createStreamer(
               enqueue(chunk);
             }
             buffer = null;
-
-            if (checkpoints.length > 0) {
-              await drizzle
-                .insert(Schema.streamCheckpoints)
-                .values(
-                  checkpoints.map((checkpoint) => ({
-                    tenantId,
-                    streamId: name,
-                    runId,
-                    chunkId: checkpoint.chunkId as `chnk_${string}`,
-                    nextIndex: checkpoint.nextIndex,
-                    state: checkpoint.state,
-                  })),
-                )
-                .onConflictDoNothing();
-            }
           },
           cancel() {
             cleanups.forEach((fn) => void fn());

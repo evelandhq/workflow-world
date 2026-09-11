@@ -30,8 +30,8 @@ without an explicit architecture decision:
 - Real deployment affinity instead of the constant deployment id `postgres`.
 - Embedded/external runner topology, dispatcher job names, fairness flags,
   activation leases, dead letters and per-run Graphile queues.
-- Snapshot stripping/rehydration, server checkpoints and packed physical stream
-  blocks. Public logical chunks and cursors remain compatible.
+- Write-side snapshot stripping and packed physical stream blocks. Public
+  logical chunks and cursors remain compatible.
 - Explicit retention classes and automatic expiry. Use `persistent` when the
   upstream no-automatic-expiry behavior is required.
 - Configuration names and migration history.

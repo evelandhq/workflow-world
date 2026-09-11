@@ -15,7 +15,7 @@ describe("stream storage v2 schema", () => {
     ).toContain("workflow_stream_chunks_pending_pack_index");
   });
 
-  test("rehydration checkpoints are internal database rows", () => {
+  test("the retired checkpoint table stays declared until a migration drops it", () => {
     expect(Schema.streamCheckpoints.tenantId.name).toBe("tenant_id");
     expect(Schema.streamCheckpoints.streamId.name).toBe("stream_id");
     expect(Schema.streamCheckpoints.chunkId.name).toBe("chunk_id");

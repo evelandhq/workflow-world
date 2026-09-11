@@ -1,10 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { resolveStreamCompaction } from "./config.js";
-import {
-  compactStreamChunk,
-  createStreamRehydrator,
-  type StreamRehydrationCheckpoint,
-} from "./stream-compaction.js";
+import { compactStreamChunk } from "./stream-compaction.js";
 
 function encodeEveChunk(event: unknown): Buffer {
   const inner = Buffer.from(`${JSON.stringify(event)}\n`, "utf8");
@@ -98,68 +94,30 @@ describe("compactStreamChunk", () => {
   });
 });
 
-describe("createStreamRehydrator", () => {
-  test("strip then rehydrate reproduces Eve's original wire bytes", () => {
-    const wire = [
-      encodeEveChunk(reasoningAppended("思", "思")),
-      encodeEveChunk(reasoningAppended("考", "思考")),
-      encodeEveChunk(messageAppended("你好", "你好", { sequence: 1 })),
-      encodeEveChunk(messageAppended("，世界", "你好，世界", { sequence: 1 })),
-    ];
-    const rehydrator = createStreamRehydrator();
-    for (const original of wire) {
-      expect(rehydrator.rehydrate(compactStreamChunk(original)).equals(original)).toBe(true);
-    }
-  });
-
-  test("adopts legacy snapshots in a mixed-format stream", () => {
-    const legacy = encodeEveChunk(messageAppended("Hello", "Hello"));
-    const compacted = encodeEveChunk(messageAppended(" world", "Hello world"));
-    const rehydrator = createStreamRehydrator();
-
-    expect(rehydrator.rehydrate(legacy)).toBe(legacy);
-    expect(rehydrator.rehydrate(compactStreamChunk(compacted)).equals(compacted)).toBe(true);
-  });
-
-  test("rebuilds snapshots for a stream Eve wrote delta-only (message stream v25)", () => {
-    // Eve 0.50 writes appends without `messageSoFar`, so nothing is stripped on
-    // the way in and the stored rows look exactly like compacted v24 rows. A
-    // 0.49 reader still needs the snapshot, and a 0.50 reader accepts one only
-    // when it ends with the delta, so assert both properties directly.
+describe("compactStreamChunk on message stream v25", () => {
+  test("delta-only appends pass through by identity", () => {
+    // Eve 0.50+ writes appends without `messageSoFar`; nothing is stripped and
+    // nothing is rebuilt on read, so the stored bytes are the wire bytes.
     const deltaOnly = (delta: string) => ({
       data: { messageDelta: delta, sequence: 0, stepIndex: 0, turnId: "turn_0" },
       type: "message.appended",
       meta: { at: "2026-09-03T00:00:00.000Z", id: "evt_v25" },
     });
-    const stored = ["你好", "世界", "!"].map((delta) => encodeEveChunk(deltaOnly(delta)));
-    for (const chunk of stored) {
-      expect(compactStreamChunk(chunk)).toEqual(chunk);
-    }
-
-    const rehydrator = createStreamRehydrator();
-    const snapshots = stored.map(
-      (chunk) =>
-        (decodeEveChunk(rehydrator.rehydrate(chunk))[0] as { data: { messageSoFar: string } }).data
-          .messageSoFar,
-    );
-
-    expect(snapshots).toEqual(["你好", "你好世界", "你好世界!"]);
-    for (const [index, delta] of ["你好", "世界", "!"].entries()) {
-      expect(snapshots[index]!.endsWith(delta)).toBe(true);
+    for (const chunk of ["你好", "世界", "!"].map((delta) => encodeEveChunk(deltaOnly(delta)))) {
+      expect(compactStreamChunk(chunk)).toBe(chunk);
     }
   });
 
-  test("can resume from a database-safe checkpoint without replaying the prefix", () => {
-    const first = encodeEveChunk(messageAppended("checkpoint ", "checkpoint "));
-    const second = encodeEveChunk(messageAppended("resume", "checkpoint resume"));
-    const writer = createStreamRehydrator();
-    writer.rehydrate(compactStreamChunk(first));
-
-    const checkpoint: StreamRehydrationCheckpoint = writer.checkpoint();
-    expect(JSON.parse(JSON.stringify(checkpoint))).toEqual(checkpoint);
-
-    const resumed = createStreamRehydrator(checkpoint);
-    expect(resumed.rehydrate(compactStreamChunk(second)).equals(second)).toBe(true);
+  test("a v24-shaped append is reduced to the same bytes a v25 writer produces", () => {
+    const stripped = compactStreamChunk(encodeEveChunk(messageAppended("，世界", "你好，世界")));
+    const [decoded] = decodeEveChunk(stripped) as [{ data: Record<string, unknown> }];
+    expect(decoded.data).toEqual({
+      messageDelta: "，世界",
+      sequence: 0,
+      stepIndex: 0,
+      turnId: "turn_0",
+    });
+    expect(compactStreamChunk(stripped)).toBe(stripped);
   });
 });
 

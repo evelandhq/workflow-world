@@ -273,16 +273,17 @@ the run it is recovering, never from its own environment.
 
 ### Stream storage safety boundary
 
-Eve-compatible stream bytes stay unchanged at the public boundary, while the
-database uses three internal optimizations:
+Logical chunks stay intact at the public boundary, while the database uses two
+internal optimizations:
 
-- `messageSoFar` and `reasoningSoFar` are stripped before persistence and
-  reconstructed from deltas on every read path. Unknown framing and event shapes
-  pass through unchanged; the deployment-side switch above disables only new
-  stripping, while readers always support mixed old/new streams.
-- rehydration state is checkpointed in PostgreSQL every 128 logical chunks or
-  64 KiB. Cursor resumes start from the nearest checkpoint rather than scanning
-  the stream from its beginning. Checkpoint state never enters the client cursor.
+- `messageSoFar` and `reasoningSoFar` are stripped before persistence. Every
+  supported Eve line writes delta-only appends (message stream v25), so this is
+  a no-op guard against a v24-shaped write rather than a transform in daily
+  use. Unknown framing and event shapes pass through unchanged; the
+  deployment-side switch above disables only new stripping. Readers serve the
+  stored bytes verbatim: nothing rebuilds a snapshot on read, and the
+  `workflow_stream_checkpoints` table that once held rehydration state is no
+  longer written (it stays declared until a migration drops it).
 - `writeMulti` packs up to 64 logical chunks into a physical v2 block, capped at
   256 KiB. Readers expand legacy rows and v2 blocks into the same logical stream.
   `packTerminalStreamBlocks` is the bounded, advisory-locked fallback for streams
@@ -481,12 +482,13 @@ patches still matter: Workflow pins have moved within an eve minor line before,
 so a minor is not a set.
 
 The other axis an eve release can move is the message stream, which the World
-touches through snapshot stripping and rehydration. eve 0.50.0 took it to v25,
-where appends carry a delta and no cumulative snapshot -- the same shape a
-compacted v24 row already had, so nothing here changed. Rehydration stays
-mandatory while 0.49.x is deployable, because a v24 runtime serves persisted
-appends verbatim; a v25 runtime normalizes the rebuilt snapshot away again
-before the wire.
+touches through write-side snapshot stripping. eve 0.50.0 took it to v25, where
+appends carry a delta and no cumulative snapshot -- the same shape a compacted
+v24 row already had. Read-side rehydration existed only for v24 runtimes, which
+served persisted appends verbatim and expected the snapshot to be there; it was
+removed once 0.49.x left the supported window, because a v25 runtime normalized
+the rebuilt snapshot away again before the wire and the rebuild cost O(n²) bytes
+per read.
 
 Two versions with very different cadences are easy to conflate:
 
