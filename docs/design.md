@@ -271,7 +271,7 @@ meaning and is not read here.
 | `workflow_waits`              | no          | `resume_at` is the sleeping timer; graphile's `run_at` fires it |
 | `workflow_events`             | LIST        | append-heavy, and the only write path for run state             |
 | `workflow_stream_chunks`      | LIST        | legacy logical rows plus v2 packed physical blocks              |
-| `workflow_stream_checkpoints` | no          | sparse internal rehydration state; never part of a cursor       |
+| `workflow_stream_checkpoints` | no          | retired: no longer written, kept until a migration drops it     |
 | `dispatch_dead_letters`       | no          | platform-owned; see [Dead letters](#dead-letters)               |
 
 `tenant_id` leads the primary key on every one of them, including the
@@ -319,11 +319,14 @@ graphile's own tables live in the same database, in their own schema, untouched.
 ### Stream compaction and terminal retention
 
 The stream boundary is logical, not physical. Write-side snapshot stripping turns
-Eve's accumulated `messageSoFar` / `reasoningSoFar` bytes back into deltas;
-read-side rehydration restores the exact wire bytes. Database checkpoints every
-128 chunks or 64 KiB bound cursor-resume work. Packed rows retain every logical
-chunk id, so a terminal rewrite and a rolling upgrade do not change cursors,
-`startIndex`, or `tailIndex`.
+a v24-shaped `messageSoFar` / `reasoningSoFar` append back into a delta; every
+supported Eve line already writes deltas (stream v25), so the guard is normally
+a no-op. Readers serve stored bytes verbatim. The read-side rehydrator and its
+`workflow_stream_checkpoints` rows were removed when the last v24 line left the
+window: rebuilding snapshots re-inflated every read to O(n²) bytes that a v25
+runtime normalized away again. Packed rows retain every logical chunk id, so a
+terminal rewrite and a rolling upgrade do not change cursors, `startIndex`, or
+`tailIndex`.
 
 Eligibility is joined through both `tenant_id` and `run_id`; only non-EOF chunks
 of completed, failed or cancelled runs older than the caller's window are

@@ -25,7 +25,6 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 import { Cbor, type Cborized } from "./cbor.js";
-import type { StreamRehydrationCheckpoint } from "../stream-compaction.js";
 import type { RunRetentionClass } from "../run-retention-policy.js";
 
 export const schema = pgSchema("workflow");
@@ -334,7 +333,20 @@ export const streams = schema.table(
   ],
 );
 
-/** Internal read checkpoints; never encoded into a public stream cursor. */
+/**
+ * Accumulator state the removed read-side rehydrator used to persist; kept only
+ * so existing rows can still be typed and reclaimed by retention.
+ */
+type LegacyStreamRehydrationCheckpoint = {
+  version: 1;
+  accumulators: [key: string, value: string][];
+};
+
+/**
+ * Retained but no longer written. Read-side snapshot rehydration left with the
+ * last v24 Eve line; retention still reclaims old rows here, and the table is
+ * kept until a later migration drops it.
+ */
 export const streamCheckpoints = schema.table(
   "workflow_stream_checkpoints",
   {
@@ -344,7 +356,7 @@ export const streamCheckpoints = schema.table(
     chunkId: varchar("chunk_id").$type<`chnk_${string}`>().notNull(),
     /** Logical index immediately after `chunkId`. */
     nextIndex: integer("next_index").notNull(),
-    state: jsonb("state").$type<StreamRehydrationCheckpoint>().notNull(),
+    state: jsonb("state").$type<LegacyStreamRehydrationCheckpoint>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (tb) => [

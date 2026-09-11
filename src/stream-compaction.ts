@@ -13,21 +13,6 @@ const SNAPSHOT_FIELDS: Record<string, { deltaKey: string; soFarKey: string }> = 
   "reasoning.appended": { deltaKey: "reasoningDelta", soFarKey: "reasoningSoFar" },
 };
 
-const RESET_FIELDS: Record<string, string> = {
-  "message.completed": "message.appended",
-  "reasoning.completed": "reasoning.appended",
-};
-
-export type StreamRehydrationCheckpoint = {
-  version: 1;
-  accumulators: [key: string, value: string][];
-};
-
-export type StreamRehydrator = {
-  rehydrate(chunk: Buffer): Buffer;
-  checkpoint(): StreamRehydrationCheckpoint;
-};
-
 function parseFrames(chunk: Buffer): ParsedFrame[] | null {
   const frames: ParsedFrame[] = [];
   let offset = 0;
@@ -99,32 +84,28 @@ function encodeEventLine(event: AppendedEvent): Buffer {
   return Buffer.from(`${JSON.stringify(event)}\n`, "utf8");
 }
 
-function rebuildData(
-  data: Record<string, unknown>,
-  deltaKey: string,
-  soFarKey: string,
-  soFarValue?: string,
-): Record<string, unknown> {
+function withoutSnapshot(data: Record<string, unknown>, soFarKey: string): Record<string, unknown> {
   const rebuilt: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
-    if (key === soFarKey) continue;
-    rebuilt[key] = value;
-    if (key === deltaKey && soFarValue !== undefined) rebuilt[soFarKey] = soFarValue;
+    if (key !== soFarKey) rebuilt[key] = value;
   }
   return rebuilt;
-}
-
-function accumulatorKey(family: string, data: Record<string, unknown>): string {
-  return `${family}:${String(data.turnId)}:${String(data.stepIndex)}:${String(data.sequence)}`;
 }
 
 /**
  * Strip Eve's cumulative snapshots while preserving unknown bytes exactly.
  *
- * Eve's message stream v25 (0.50.0) already writes appends as bare deltas, so
- * on a 0.50 run this is a no-op and every row lands in the same shape a
- * compacted v24 row does. That is deliberate, and it is why the rehydrator
- * below cannot -- and need not -- tell the two apart.
+ * Every supported Eve line speaks message stream v25 (0.50.0 and later), whose
+ * appends carry the delta alone, so on a current run this is a no-op: the
+ * frame is parsed, nothing is found, and the original buffer is returned. It
+ * stays on as a cheap write-side guard so that a v24-shaped append -- a stale
+ * build, a hand-written chunk -- can never reintroduce O(n²) storage.
+ *
+ * Nothing rebuilds the snapshot on read. The rehydrator that used to do so was
+ * removed once the last v24 line left the supported window: it re-inflated
+ * every read back to O(n²) bytes that a v25 runtime immediately normalized away
+ * again, and it persisted accumulator checkpoints for the same non-purpose.
+ * Stored bytes are what readers get.
  */
 export function compactStreamChunk(chunk: Buffer): Buffer {
   const frames = parseFrames(chunk);
@@ -140,76 +121,7 @@ export function compactStreamChunk(chunk: Buffer): Buffer {
       return inner;
     }
     changed = true;
-    return encodeEventLine({ ...event, data: rebuildData(event.data, deltaKey, soFarKey) });
+    return encodeEventLine({ ...event, data: withoutSnapshot(event.data, soFarKey) });
   });
   return changed ? Buffer.concat(rebuilt.map(encodeFrame)) : chunk;
-}
-
-/**
- * Rehydrate compacted rows, optionally resuming from a persisted checkpoint.
- *
- * Rehydration stays mandatory while any supported Eve line speaks stream v24:
- * a v24 runtime hands persisted append events to its clients verbatim and they
- * expect the cumulative snapshot to be there. A v25 runtime (0.50.0) instead
- * normalizes every persisted append back to a delta before it reaches the wire,
- * accepting a snapshot through its legacy path as long as the snapshot ends
- * with the delta -- which the accumulator here guarantees by construction. So
- * putting the snapshot back is required by the older line and harmless to the
- * newer one, and this stays correct until the whole window speaks v25.
- */
-export function createStreamRehydrator(checkpoint?: StreamRehydrationCheckpoint): StreamRehydrator {
-  const accumulators = new Map<string, string>();
-  if (checkpoint?.version === 1 && Array.isArray(checkpoint.accumulators)) {
-    for (const entry of checkpoint.accumulators) {
-      if (
-        Array.isArray(entry) &&
-        entry.length === 2 &&
-        typeof entry[0] === "string" &&
-        typeof entry[1] === "string"
-      ) {
-        accumulators.set(entry[0], entry[1]);
-      }
-    }
-  }
-
-  return {
-    rehydrate(chunk) {
-      const frames = parseFrames(chunk);
-      if (!frames) return chunk;
-
-      let changed = false;
-      const rebuilt = frames.map(({ inner }) => {
-        const event = parseEventLine(inner);
-        if (!event) return inner;
-        const resetFamily = RESET_FIELDS[event.type];
-        if (resetFamily) {
-          accumulators.delete(accumulatorKey(resetFamily, event.data));
-          return inner;
-        }
-        const fields = SNAPSHOT_FIELDS[event.type];
-        if (!fields) return inner;
-        const { deltaKey, soFarKey } = fields;
-        const delta = event.data[deltaKey];
-        if (typeof delta !== "string") return inner;
-        const key = accumulatorKey(event.type, event.data);
-        const existing = event.data[soFarKey];
-        if (typeof existing === "string") {
-          accumulators.set(key, existing);
-          return inner;
-        }
-        const soFar = (accumulators.get(key) ?? "") + delta;
-        accumulators.set(key, soFar);
-        changed = true;
-        return encodeEventLine({
-          ...event,
-          data: rebuildData(event.data, deltaKey, soFarKey, soFar),
-        });
-      });
-      return changed ? Buffer.concat(rebuilt.map(encodeFrame)) : chunk;
-    },
-
-    checkpoint() {
-      return { version: 1, accumulators: [...accumulators.entries()] };
-    },
-  };
 }

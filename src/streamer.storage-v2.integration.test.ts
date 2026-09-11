@@ -7,6 +7,7 @@ import {
   resolveMigrationsDir,
   runMigrations,
 } from "./migrate.js";
+import { compactStreamChunk } from "./stream-compaction.js";
 
 const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
@@ -67,7 +68,7 @@ describe.skipIf(!testUrl)("stream storage v2", () => {
     await pool?.end().catch(() => {});
   });
 
-  test("single writes strip snapshots and every read path restores them", async () => {
+  test("single writes strip snapshots and every read path serves the stored delta-only bytes", async () => {
     const streamId = `strm_snapshots_${suffix}`;
     let soFar = "";
     const wire = ["one ", "two ", "three ", "four"].map((delta) => {
@@ -87,14 +88,16 @@ describe.skipIf(!testUrl)("stream storage v2", () => {
       wire.reduce((total, chunk) => total + chunk.length, 0),
     );
 
+    const stored_bytes = stored.rows.map((row) => row.data);
+    expect(stored_bytes).toEqual(wire.map(compactStreamChunk));
     const page = await world.streams.getChunks("wrun_snapshots", streamId, { limit: 10 });
-    expect(page.data.map(({ data }) => Buffer.from(data))).toEqual(wire);
+    expect(page.data.map(({ data }) => Buffer.from(data))).toEqual(stored_bytes);
     expect(await collect(await world.streams.get("wrun_snapshots", streamId, 2))).toEqual(
-      wire.slice(2),
+      stored_bytes.slice(2),
     );
   });
 
-  test("live readers expand a notified block and rehydrate it", async () => {
+  test("live readers expand a notified block into its stored logical chunks", async () => {
     const streamId = `strm_live_${suffix}`;
     const first = encodeMessage("live ", "live ");
     const rest = [encodeMessage("block ", "live block "), encodeMessage("tail", "live block tail")];
@@ -104,10 +107,10 @@ describe.skipIf(!testUrl)("stream storage v2", () => {
     await world.streams.writeMulti!("wrun_live", streamId, rest);
     await world.streams.close("wrun_live", streamId);
 
-    expect(await reading).toEqual([first, ...rest]);
+    expect(await reading).toEqual([first, ...rest].map(compactStreamChunk));
   }, 20_000);
 
-  test("the kill switch writes snapshots unchanged while readers remain compatible", async () => {
+  test("the kill switch writes snapshots unchanged and readers serve them unchanged", async () => {
     const streamId = `strm_kill_${suffix}`;
     const wire = [encodeMessage("fat", "fat"), encodeMessage(" row", "fat row")];
     await uncompacted.streams.writeMulti!("wrun_kill", streamId, wire);
@@ -146,34 +149,33 @@ describe.skipIf(!testUrl)("stream storage v2", () => {
     });
   });
 
-  test("cursor reads persist an internal checkpoint and preserve wire bytes", async () => {
-    const streamId = `strm_checkpoint_${suffix}`;
+  test("cursor reads preserve stored bytes and write no checkpoints", async () => {
+    const streamId = `strm_cursor_${suffix}`;
     let soFar = "";
     const wire = Array.from({ length: 140 }, () => {
       soFar += "x";
       return encodeMessage("x", soFar);
     });
-    await world.streams.writeMulti!("wrun_checkpoint", streamId, wire);
-    await world.streams.close("wrun_checkpoint", streamId);
+    await world.streams.writeMulti!("wrun_cursor", streamId, wire);
+    await world.streams.close("wrun_cursor", streamId);
 
-    const first = await world.streams.getChunks("wrun_checkpoint", streamId, { limit: 64 });
-    const second = await world.streams.getChunks("wrun_checkpoint", streamId, {
+    const first = await world.streams.getChunks("wrun_cursor", streamId, { limit: 64 });
+    const second = await world.streams.getChunks("wrun_cursor", streamId, {
       limit: 64,
       cursor: first.cursor!,
     });
     expect([...first.data, ...second.data].map(({ data }) => Buffer.from(data))).toEqual(
-      wire.slice(0, 128),
+      wire.slice(0, 128).map(compactStreamChunk),
+    );
+    expect(second.data.map(({ index }) => index)).toEqual(
+      Array.from({ length: 64 }, (_, offset) => 64 + offset),
     );
 
-    const checkpoints = await pool.query<{ next_index: number; state: unknown }>(
-      `select next_index, state
-         from workflow.workflow_stream_checkpoints
-        where tenant_id = $1 and stream_id = $2
-        order by chunk_id`,
+    const checkpoints = await pool.query(
+      `select 1 from workflow.workflow_stream_checkpoints where tenant_id = $1 and stream_id = $2`,
       [TENANT, streamId],
     );
-    expect(checkpoints.rows.some((row) => row.next_index === 128)).toBe(true);
-    expect(checkpoints.rows.every((row) => JSON.stringify(row.state).length < 10_000)).toBe(true);
+    expect(checkpoints.rowCount).toBe(0);
   });
 
   test("new readers continue to read legacy one-row chunks", async () => {
