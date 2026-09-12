@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.16.0...workflow-world-v0.17.0) (2026-09-12)
+
+
+### Features
+
+* verify against the eve 0.52/0.53/0.54 window ([#81](https://github.com/evelandhq/workflow-world/issues/81)) ([90a8b07](https://github.com/evelandhq/workflow-world/commit/90a8b0730053d761b3cc8f570f72ea50963740c6))
+
 ## [0.16.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.15.2...workflow-world-v0.16.0) (2026-09-11)
 
 
