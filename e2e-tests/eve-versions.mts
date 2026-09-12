@@ -2,29 +2,31 @@
  * Exact releases from Eveland's supported eve window. The compatibility policy,
  * not npm's `latest`, is the authority on what may be deployed.
  *
- * The current window is {0.50.x, 0.51.x, 0.52.x} -- three consecutive lines,
- * verified at 0.50.0, 0.51.1, and 0.52.5. 0.49.x has slid out. eve 0.52.5
- * bundles the same Workflow packages as 0.51.1, so the window still carries two
- * distinct sets, split at the 0.51.1 patch that moved them:
+ * The current window is {0.52.x, 0.53.x, 0.54.x} -- three consecutive lines,
+ * verified at 0.52.5, 0.53.1, and 0.54.3. 0.50.x and 0.51.x slid out together
+ * on 2026-09-12. eve 0.53.0 moved the bundled Workflow packages and 0.54.x
+ * keeps that set, so the window carries two distinct sets, split at the 0.53.0
+ * minor that moved them:
  *
- * | package                 | 0.50.0-0.51.0 | 0.51.1-0.52.5 |
+ * | package                 | 0.51.1-0.52.5 | 0.53.0-0.54.3 |
  * | ----------------------- | ------------- | ------------- |
- * | `@workflow/world`       | beta.32       | beta.33       |
- * | `@workflow/world-local` | beta.41       | beta.42       |
- * | `@workflow/core`        | beta.47       | beta.48       |
- * | `@workflow/errors`      | beta.19       | beta.20       |
+ * | `@workflow/world`       | beta.33       | beta.34       |
+ * | `@workflow/world-local` | beta.42       | beta.43       |
+ * | `@workflow/core`        | beta.48       | beta.50       |
+ * | `@workflow/errors`      | beta.20       | beta.21       |
  * | `@workflow/utils`       | beta.10       | beta.10       |
  *
- * The message-stream axis is gone: 0.49.x was the last line on v24, and the
- * whole window now speaks v25, so the World's snapshot stripping and
- * rehydration see one wire. 0.50.0 is the only sample of set A and 0.51.1 the
- * first of set B. 0.52.5 shares set B with 0.51.1 and still earns its entry: it
- * is the newest line, so it is what new builds get, and eve 0.52 rewired how
- * inline turns handle workflow tools -- they now route through one ordered
- * parent inbox, and a retried dispatch may start another run -- which is
- * exactly the World traffic this suite exercises. 0.51.1 stays because it is
- * the release that introduced set B and subagent calls as durable tool runs,
- * under the pre-0.52 dispatch path.
+ * The whole window speaks message stream v25, so the World's snapshot
+ * stripping and rehydration see one wire. 0.52.5 is the only remaining sample
+ * of set A, and the line whose inline workflow tools route through one ordered
+ * parent inbox with a retried dispatch allowed to start another run. 0.53.1 is
+ * the first of set B: `ctx.agent(target, input)` delegation and the
+ * `experimental_retention` start option, which reaches this World as the
+ * reserved `$retention` run attribute it stores but does not enforce. 0.54.3
+ * shares set B and still earns its entry: it is the newest line, so it is what
+ * new builds get, and 0.54.1 removed the `task_update` progress callbacks and
+ * resettled overlapping background tasks across launch turns -- exactly the
+ * hook and run traffic this suite exercises.
  *
  * Exact patches matter because Workflow pins have moved within a minor line in
  * the past. Each enabled entry costs an npm install plus a full `eve build`.
@@ -38,9 +40,9 @@ export type EveVersion = {
 };
 
 export const EVE_VERSIONS: readonly EveVersion[] = [
-  { version: "0.50.0", enabled: true },
-  { version: "0.51.1", enabled: true },
   { version: "0.52.5", enabled: true },
+  { version: "0.53.1", enabled: true },
+  { version: "0.54.3", enabled: true },
 ];
 
 const eveVersionUnderTest = process.env.EVE_VERSION;

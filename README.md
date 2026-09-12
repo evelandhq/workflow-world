@@ -432,7 +432,7 @@ pnpm run build
 Commit dependency changes in `pnpm-lock.yaml`; use `pnpm add` or `pnpm install`
 when updating dependencies. `pnpm-workspace.yaml` allows install scripts only
 for the native dependencies listed there. Review that list when adding a package
-that needs an install script. The release-age exception for `eve@0.52.5` covers
+that needs an install script. The release-age exception for `eve@0.54.3` covers
 the existing tested pin; review any new exception when updating Eve.
 
 CI uses pnpm for repository dependencies, builds, and tests. Tarball consumer
