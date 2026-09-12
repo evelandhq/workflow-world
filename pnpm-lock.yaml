@@ -9,17 +9,17 @@ importers:
   .:
     dependencies:
       '@workflow/errors':
-        specifier: 5.0.0-beta.20
-        version: 5.0.0-beta.20
+        specifier: 5.0.0-beta.21
+        version: 5.0.0-beta.21
       '@workflow/utils':
         specifier: 5.0.0-beta.10
         version: 5.0.0-beta.10
       '@workflow/world':
-        specifier: 5.0.0-beta.33
-        version: 5.0.0-beta.33
+        specifier: 5.0.0-beta.34
+        version: 5.0.0-beta.34
       '@workflow/world-local':
-        specifier: 5.0.0-beta.42
-        version: 5.0.0-beta.42
+        specifier: 5.0.0-beta.43
+        version: 5.0.0-beta.43
       cbor-x:
         specifier: 1.6.0
         version: 1.6.0
@@ -46,14 +46,14 @@ importers:
         specifier: ^8.11.10
         version: 8.20.3
       '@workflow/core':
-        specifier: 5.0.0-beta.48
-        version: 5.0.0-beta.48(ws@8.21.3)
+        specifier: 5.0.0-beta.50
+        version: 5.0.0-beta.50(ws@8.21.3)
       '@workflow/world-testing':
         specifier: 5.0.0-beta.42
         version: 5.0.0-beta.42(@aws-sdk/credential-provider-web-identity@3.972.49)(@nestjs/common@11.2.1(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.1(@nestjs/common@11.2.1(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(react@19.2.8)(typescript@5.9.3)(vitest@4.1.10(@types/node@24.13.3)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)))(ws@8.21.3)
       eve:
-        specifier: ^0.52.5
-        version: 0.52.5(ai@7.0.87(zod@4.3.6))
+        specifier: ^0.54.3
+        version: 0.54.3(ai@7.0.87(zod@4.3.6))
       oxfmt:
         specifier: 0.58.0
         version: 0.58.0
@@ -1109,8 +1109,8 @@ packages:
       '@opentelemetry/api':
         optional: true
 
-  '@workflow/core@5.0.0-beta.48':
-    resolution: {integrity: sha512-XPgShb5N1AAtygHdnblIL50l2IsxlYNupbNbX+00qhKXDVnZI4LW00o66vRjpIDzRB6xPprhtVpRhAQ+RIQo8g==}
+  '@workflow/core@5.0.0-beta.50':
+    resolution: {integrity: sha512-l90C1teRo2rgwYMaFhYhqMK0JPQwOAkyIL5Szh3yb6lWqMVyT1ukCPyA7c8dsubFUfbKc1maLeLdcoCnPUqTmA==}
     peerDependencies:
       '@opentelemetry/api': '1'
     peerDependenciesMeta:
@@ -1120,8 +1120,8 @@ packages:
   '@workflow/errors@5.0.0-beta.17':
     resolution: {integrity: sha512-orc86yllgOKpss/o5YD4kuhRbng+4aq8i4pPJR4uZCFeNpn4I4A+ek83lelQf31EJ5tyf12ikceOjabQxp317A==}
 
-  '@workflow/errors@5.0.0-beta.20':
-    resolution: {integrity: sha512-unNjhxAgwjZB54DasFvtG3U1BXKJS+qjyR47d7y34hs1uhTVNkq9HJ4uEgNCVgmyH7NzvieOC03Fkkp8cMF/3A==}
+  '@workflow/errors@5.0.0-beta.21':
+    resolution: {integrity: sha512-urugkvfvn8x3zQwidXztHpOwP0O2Lcg9vp/ufOyYx3I6e3ncq72jGWIpj+pEODpp1w9JCX6flGyPrZv6WtX70Q==}
 
   '@workflow/nest@5.0.0-beta.42':
     resolution: {integrity: sha512-u5R3OoJ2xB0VRIHvIgBfLt531Dyv3ddZJ0pInZ53+yXroO7CMuvgM3j9KosDNyAMR6W9uvlk3VmKcOTPVJrwSA==}
@@ -1191,8 +1191,8 @@ packages:
       '@opentelemetry/api':
         optional: true
 
-  '@workflow/world-local@5.0.0-beta.42':
-    resolution: {integrity: sha512-0dSBToDQ4LVwacuaGVPHpY7x8n8pSqZySE6roWm/kWUAPxLTrXMFSErw4Z9TcstqbMogoJkH0d8h2yEUx+SNFA==}
+  '@workflow/world-local@5.0.0-beta.43':
+    resolution: {integrity: sha512-MuVQ8I+FYMPiTQjzthjKriZqVyicrueE8f0m5j237KoqIVrTnckAMQhQa86gdRCfS8qFzFph+Haz+OlRIuRFBA==}
     peerDependencies:
       '@opentelemetry/api': '1'
     peerDependenciesMeta:
@@ -1212,8 +1212,8 @@ packages:
       '@opentelemetry/api':
         optional: true
 
-  '@workflow/world-vercel@5.0.0-beta.44':
-    resolution: {integrity: sha512-kcsW0vsssSe9cTzQyg6xRZW24pL28GEX0uxbXmSK3lWRV2ztRsG6JZqtu/eVvMnaShewUrfumm+iJAodbQVDNA==}
+  '@workflow/world-vercel@5.0.0-beta.45':
+    resolution: {integrity: sha512-PCULWyINymC4+nEljspbWLtVbeUHpIEN+1dVzMMpI28Gp6XXzs4r3cq8otK0m2PyA3n1mnK10GdJV8PiMnhfnQ==}
     peerDependencies:
       '@opentelemetry/api': '1'
     peerDependenciesMeta:
@@ -1223,8 +1223,8 @@ packages:
   '@workflow/world@5.0.0-beta.27':
     resolution: {integrity: sha512-6+cpxAKgKuIO7khpTZFs9WVTTt8CVXWL8+QTz8VQJFtjg9QF1Kfc3bHPpzj1j6jjQCW6X0pF7CsQGSpLKuL9gw==}
 
-  '@workflow/world@5.0.0-beta.33':
-    resolution: {integrity: sha512-Cn57JHXlx6jhzeJn8OqtqrCDNx+Xnaqy7FtMJPl15Z/TdAsUju6ZA5ShyYY+nBWj6Ibc9LOenBwmIhCCkvawlA==}
+  '@workflow/world@5.0.0-beta.34':
+    resolution: {integrity: sha512-vVIbeQaApqOHrxUQyOg5wDU2fvMUORE5xDbnF59ILOxN1SaYRBqVWd3fNTHqZha+u+73hhXsUkgzIZEyEp9UiQ==}
 
   '@xhmikosr/archive-type@8.1.0':
     resolution: {integrity: sha512-EXOjEbnZFE5c/nFMf4FOrEURVanzHpnkPYmnmr78u02/8hAhE0FMq8p9TK1IM0/bFr5VcyBUY0gfLm8f7dKy+Q==}
@@ -1799,13 +1799,13 @@ packages:
     resolution: {integrity: sha512-aIL5Fx7mawVa300al2BnEE4iNvo1qETxLrPI/o05L7z6go7fCw1J6EQmbK4FmJ2AS7kgVF/KEZWufBfdClMcPg==}
     engines: {node: '>= 0.6'}
 
-  eve@0.52.5:
-    resolution: {integrity: sha512-MuzBnkI0c6Xbi4gIELCLr7wRSlgEQ1y8r1boSmt8NOZXOmFR8egNs0PIqaO8wwomiRoL9iLpUV/3P6ywg5MEXg==}
+  eve@0.54.3:
+    resolution: {integrity: sha512-OOKmnmcyal5N+qaQcdpNbho+SpXBCZw11q9dSnqtN5f9ccIdcps53do4h49ZyefA/2xYSR8IOVnUB6vqUFtV4w==}
     engines: {node: '>=24'}
     hasBin: true
     peerDependencies:
       '@opentelemetry/api': ^1.0.0
-      ai: ^7.0.82
+      ai: ^7.0.93
       braintrust: ^3.0.0
       dd-trace: ^6.13.0
       just-bash: ^3.1.0
@@ -4115,19 +4115,19 @@ snapshots:
       - utf-8-validate
       - ws
 
-  '@workflow/core@5.0.0-beta.48(ws@8.21.3)':
+  '@workflow/core@5.0.0-beta.50(ws@8.21.3)':
     dependencies:
       '@aws-sdk/credential-provider-web-identity': 3.972.49
       '@jridgewell/trace-mapping': 0.3.31
       '@standard-schema/spec': 1.0.0
       '@types/ms': 2.1.0
       '@vercel/functions': 3.9.1(@aws-sdk/credential-provider-web-identity@3.972.49)(ws@8.21.3)
-      '@workflow/errors': 5.0.0-beta.20
+      '@workflow/errors': 5.0.0-beta.21
       '@workflow/serde': 5.0.0-beta.2
       '@workflow/utils': 5.0.0-beta.10
-      '@workflow/world': 5.0.0-beta.33
-      '@workflow/world-local': 5.0.0-beta.42
-      '@workflow/world-vercel': 5.0.0-beta.44(@aws-sdk/credential-provider-web-identity@3.972.49)
+      '@workflow/world': 5.0.0-beta.34
+      '@workflow/world-local': 5.0.0-beta.43
+      '@workflow/world-vercel': 5.0.0-beta.45(@aws-sdk/credential-provider-web-identity@3.972.49)
       debug: 4.4.3(supports-color@8.1.1)
       devalue: 5.9.0
       ms: 2.1.3
@@ -4148,7 +4148,7 @@ snapshots:
       '@workflow/utils': 5.0.0-beta.8
       ms: 2.1.3
 
-  '@workflow/errors@5.0.0-beta.20':
+  '@workflow/errors@5.0.0-beta.21':
     dependencies:
       '@workflow/utils': 5.0.0-beta.10
       ms: 2.1.3
@@ -4307,12 +4307,12 @@ snapshots:
       undici: 7.29.0
       zod: 4.3.6
 
-  '@workflow/world-local@5.0.0-beta.42':
+  '@workflow/world-local@5.0.0-beta.43':
     dependencies:
       '@vercel/queue': 0.5.0
-      '@workflow/errors': 5.0.0-beta.20
+      '@workflow/errors': 5.0.0-beta.21
       '@workflow/utils': 5.0.0-beta.10
-      '@workflow/world': 5.0.0-beta.33
+      '@workflow/world': 5.0.0-beta.34
       async-sema: 3.1.1
       proper-lockfile: 4.1.2
       ulid: 3.0.2
@@ -4365,14 +4365,14 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@workflow/world-vercel@5.0.0-beta.44(@aws-sdk/credential-provider-web-identity@3.972.49)':
+  '@workflow/world-vercel@5.0.0-beta.45(@aws-sdk/credential-provider-web-identity@3.972.49)':
     dependencies:
       '@vercel/functions': 3.9.1(@aws-sdk/credential-provider-web-identity@3.972.49)(ws@8.21.3)
       '@vercel/oidc': 3.2.0
       '@vercel/queue': 0.5.0
-      '@workflow/errors': 5.0.0-beta.20
+      '@workflow/errors': 5.0.0-beta.21
       '@workflow/utils': 5.0.0-beta.10
-      '@workflow/world': 5.0.0-beta.33
+      '@workflow/world': 5.0.0-beta.34
       cbor-x: 1.6.0
       ulid: 3.0.2
       undici: 7.29.0
@@ -4388,7 +4388,7 @@ snapshots:
       ulid: 3.0.2
       zod: 4.3.6
 
-  '@workflow/world@5.0.0-beta.33':
+  '@workflow/world@5.0.0-beta.34':
     dependencies:
       ulid: 3.0.2
       zod: 4.3.6
@@ -4899,7 +4899,7 @@ snapshots:
 
   etag@1.8.1: {}
 
-  eve@0.52.5(ai@7.0.87(zod@4.3.6)):
+  eve@0.54.3(ai@7.0.87(zod@4.3.6)):
     dependencies:
       ai: 7.0.87(zod@4.3.6)
       nitro: 3.0.260903-beta

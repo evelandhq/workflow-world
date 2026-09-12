@@ -11,4 +11,4 @@ allowBuilds:
 
 # Already pinned and verified by the existing Eve compatibility matrix.
 minimumReleaseAgeExclude:
-  - eve@0.52.5
+  - eve@0.54.3

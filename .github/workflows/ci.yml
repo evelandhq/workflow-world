@@ -130,14 +130,14 @@ jobs:
       matrix:
         # Mirrors the enabled entries in e2e-tests/eve-versions.mts. Keep them in
         # step — the file is what the suite reads; this list is only what CI
-        # pays for. The window is {0.50.x, 0.51.x, 0.52.x}; the whole window
+        # pays for. The window is {0.52.x, 0.53.x, 0.54.x}; the whole window
         # speaks message stream v25, so the only axis left is the bundled
-        # Workflow set (0.51.1 moved core to beta.48 and world-local to beta.42
-        # at a patch; 0.52.5 keeps that set). 0.50.0 is the only sample of the
-        # older set; 0.52.5 is the newest line and rewired inline workflow-tool
-        # dispatch through the parent's ordered inbox; 0.51.1 covers the newer
-        # set under the pre-0.52 dispatch path.
-        eve: ["0.50.0", "0.51.1", "0.52.5"]
+        # Workflow set (0.53.0 moved core to beta.50 and world-local to beta.43;
+        # 0.54.x keeps that set). 0.52.5 is the only remaining sample of the
+        # older set; 0.53.1 is the first of the newer set and adds the
+        # `$retention` run attribute; 0.54.3 is the newest line and resettled
+        # overlapping background tasks across launch turns.
+        eve: ["0.52.5", "0.53.1", "0.54.3"]
     services:
       postgres:
         image: postgres:17-alpine
