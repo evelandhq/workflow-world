@@ -1,5 +1,6 @@
 import { EntityConflictError } from "@workflow/errors";
 import {
+  mintedSpecVersion,
   slotToEventId,
   SPEC_VERSION_CURRENT,
   SPEC_VERSION_MAX_SUPPORTED,
@@ -160,16 +161,41 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
     expect(await beta.streams.list(alphaRunId)).toEqual([]);
   });
 
-  test("specVersion matches what the eve runtime enforces", () => {
+  test("specVersion is the sealed log, as upstream tells a World to declare", () => {
     // @workflow/world beta.32 (eve 0.49) minted spec 7 while the runtime floor
-    // stayed at slot identity (6). The World declares the floor on purpose so
-    // every eve line in Eveland's window can read the runs it stamps; see the
-    // note on `specVersion` in src/index.ts. The package still writes and
-    // reads 7, which the run created above at SPEC_VERSION_CURRENT exercises.
+    // stayed at slot identity (6). The World declares `mintedSpecVersion()`,
+    // which is 7 unless WORKFLOW_SEALED_LOG opts the process out; see the note
+    // on `specVersion` in src/index.ts. The run created above is stamped with
+    // it, so the suite exercises writing and reading 7.
     expect(SPEC_VERSION_SUPPORTS_SLOT_IDENTITY).toBe(6);
     expect(SPEC_VERSION_CURRENT).toBe(7);
-    expect(alpha.specVersion).toBe(SPEC_VERSION_SUPPORTS_SLOT_IDENTITY);
+    expect(process.env.WORKFLOW_SEALED_LOG).toBeUndefined();
+    expect(alpha.specVersion).toBe(SPEC_VERSION_CURRENT);
+    expect(alpha.specVersion).toBe(mintedSpecVersion());
     expect(alpha.specVersion).toBeLessThanOrEqual(SPEC_VERSION_MAX_SUPPORTED);
+  });
+
+  test("WORKFLOW_SEALED_LOG=0 puts a deployment back on slot identity", async () => {
+    // The kill switch is read per createWorld(), not at module load, so one
+    // process can hold worlds in both modes. Declaring 6 is still inside the
+    // runtime's accepted range, which is what makes it a usable fallback.
+    process.env.WORKFLOW_SEALED_LOG = "0";
+    try {
+      const optedOut = createWorld({
+        connectionString: testUrl!,
+        tenantId: ALPHA,
+        deploymentId: "dep_alpha_sealed_off",
+        runner: "external",
+      });
+      try {
+        expect(optedOut.specVersion).toBe(SPEC_VERSION_SUPPORTS_SLOT_IDENTITY);
+      } finally {
+        await optedOut.close?.();
+      }
+    } finally {
+      delete process.env.WORKFLOW_SEALED_LOG;
+    }
+    expect(alpha.specVersion).toBe(SPEC_VERSION_CURRENT);
   });
 
   test("writing for an unprovisioned tenant fails loudly", async () => {

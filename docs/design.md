@@ -129,23 +129,30 @@ Ranked by how expensive they are to violate.
 the reference implementation with a tenant predicate added. The remaining
 optional members carry decisions worth stating.
 
-**`specVersion` is the slot-identity version, `6`, declared on purpose rather
-than the package's `SPEC_VERSION_CURRENT`.** eve compiles the runtime protocol
-check into every release. Through core beta.40 that was literal equality;
-beta.41 uses an inclusive range. In beta.42 both the floor and ceiling are 6 and
-slot identity is mandatory rather than a capability. `@workflow/world` beta.32
-(eve 0.49) minted spec 7, the "sealed log": the runtime's floor stays at 6 while
-`SPEC_VERSION_CURRENT` and the ceiling move to 7, and the runtime stamps each new
-run with whatever the World declares. Both lines in the {0.49.x, 0.50.x} window
-read 6 or 7, so the window no longer forces the choice -- but a v6-only reader
-(eve 0.47.x and older) rejects a spec-7 run outright, and such a Release can
-still be serving after the window slid past it, so this World declares 6 until
-no v6-only eve can still be running. Declaring 6
-gives nothing up: spec 7's reader contract exists for backends that pre-assign
-event positions and must seal abandoned ones with `noop` events, and this World
-allocates each position inside the INSERT that occupies it, so it never has a
-hole to seal. A conformance test verifies that the installed runtime and this
-World agree.
+**`specVersion` is `mintedSpecVersion()`: the sealed log, `7`, unless
+`WORKFLOW_SEALED_LOG=0` opts the deployment back to slot identity, `6`.** eve
+compiles the runtime protocol check into every release. Through core beta.40
+that was literal equality; beta.41 uses an inclusive range. In beta.42 both the
+floor and ceiling are 6 and slot identity is mandatory rather than a capability.
+`@workflow/world` beta.32 (eve 0.49) minted spec 7, the "sealed log": the
+runtime's floor stays at 6 while `SPEC_VERSION_CURRENT` and the ceiling move to
+7, and the runtime stamps each new run with whatever the World declares.
+Declaring 7 gives nothing up and changes nothing in storage: spec 7's reader
+contract exists for backends that pre-assign event positions and must seal
+abandoned ones with `noop` events, and this World allocates each position
+inside the INSERT that occupies it, so it never has a hole to seal. It buys not
+being left behind, since upstream intends v5 stable to ship on 7 and a runtime
+whose floor moves to 7 rejects a World declaring 6 at startup.
+
+Through 0.17.0 this World pinned 6 so a Release built against a v6-only eve
+(0.47.x and older) could never meet a run it cannot read. Every line in the
+supported window has read 7 since eve 0.49, and an in-flight run is pinned to
+the deployment that created it, so a 7 stamped by a new Release is never
+replayed by an older one. The env var is the fallback if a v6-only executor
+ever has to be served again. The declared value is read once per
+`createWorld()` and handed to storage, so the run-creation fallback and legacy
+event stamps agree with what the runtime was told. A conformance test verifies
+that the installed runtime and this World agree.
 The package must also declare `@workflow/world` (or `@workflow/core`) on a
 matching version line, because eve checks the manifest's major and prerelease
 tag before it ever loads the world.
@@ -733,9 +740,9 @@ Properties of these choices worth watching, as distinct from defects.
   attack-level: every storage method must carry the predicate, and a new query is
   a new place to forget it. This is why every read is tested for cross-tenant
   reach, and why HTTP storage is the real fix.
-- **`@workflow/*` is a moving beta target.** The `specVersion` literal is
-  compiled into eve per release, so every eve bump has to re-verify the contract
-  rather than assume it.
+- **`@workflow/*` is a moving beta target.** The `specVersion` range the
+  runtime accepts is compiled into eve per release, so every eve bump has to
+  re-verify the contract rather than assume it.
 - **Migration 0006 replaces the event primary key.** PostgreSQL takes an
   `ACCESS EXCLUSIVE` lock for that catalog change. The migration bounds the wait
   at ten seconds; large installations should apply it in a maintenance window
