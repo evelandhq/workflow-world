@@ -83,18 +83,21 @@ describe("@workflow/* pins track the installed eve", () => {
   const EXEMPT_FROM_EVE_PINS: Record<string, string> = {
     // The conformance harness, and deliberately not part of the runtime pairing:
     // it ships its *own* runtime bundle and tracks a separate release line. That
-    // line currently trails ours (beta.42 pins @workflow/world beta.27 while
-    // eve 0.45.0 installs beta.28), which is fine for the same reason agreeing
-    // was: the pairing is a coincidence of timing, not a constraint — the
-    // harness releases on its own cadence and has sat on either side of eve's
-    // pin before.
+    // line has sat on either side of eve's pin before (beta.42 pinned
+    // @workflow/world beta.27 while eve 0.45.0 installed beta.28; beta.51 pins
+    // beta.35 while eve 0.54.3 installs beta.34), which is fine for the same
+    // reason agreeing was: the pairing is a coincidence of timing, not a
+    // constraint — the harness releases on its own cadence.
     // Forcing it onto eve's set would mean testing against a runtime eve does not
     // ship; picking up its own next release, which is what an eve bump here does,
     // is not the same thing and nothing enforces the outcome either way.
     // The agreement is verified rather than assumed: conformance/spec.test.mts
-    // asserts our specVersion equals the one the harness runtime demands, which is
-    // the property that actually matters and the one that survives the harness
-    // drifting ahead again and re-nesting its own @workflow/world in the tree.
+    // asserts our specVersion lies in the range the harness runtime accepts,
+    // resolved from the harness's own @workflow/world, which is the property that
+    // actually matters and the one that survives the harness drifting again and
+    // re-nesting its own @workflow/world in the tree. Bumping the harness is the
+    // move when it stops accepting what we declare (beta.42 read only through
+    // spec 6; beta.51 reads 7, which is what this World now stamps).
     "@workflow/world-testing": "test-only harness; ships its own runtime bundle",
   };
 

@@ -432,8 +432,9 @@ pnpm run build
 Commit dependency changes in `pnpm-lock.yaml`; use `pnpm add` or `pnpm install`
 when updating dependencies. `pnpm-workspace.yaml` allows install scripts only
 for the native dependencies listed there. Review that list when adding a package
-that needs an install script. The release-age exception for `eve@0.54.3` covers
-the existing tested pin; review any new exception when updating Eve.
+that needs an install script. The release-age exceptions cover the tested
+`eve@0.54.3` pin and the `@workflow/*` set `@workflow/world-testing@beta.51`
+pulls in; review any new exception when updating Eve or the harness.
 
 CI uses pnpm for repository dependencies, builds, and tests. Tarball consumer
 checks and the E2E agent fixtures keep npm to match the production installation
@@ -474,12 +475,12 @@ World, which conformance never loads an eve to check.
 
 An eve release is almost never a reason to do anything here. What matters is not
 that eve shipped, but whether the `@workflow/*` set it installs moved. The
-current supported window, {0.49.x, 0.50.x}, contains a single set: both lines
-use world beta.32, world-local beta.41 and core beta.47. (0.48 was superseded
-within hours and never deployed; 0.47.x, whose set was world beta.28,
-world-local beta.37 and core beta.43, left the window with eve 0.50.0.) Exact
-patches still matter: Workflow pins have moved within an eve minor line before,
-so a minor is not a set.
+current supported window, {0.52.x, 0.53.x, 0.54.x}, carries two sets: 0.52.x
+uses world beta.33, world-local beta.42 and core beta.48; 0.53.0 moved to world
+beta.34, world-local beta.43 and core beta.50, and 0.54.x keeps that set. The
+pins here follow the newest line; `e2e-tests/eve-versions.mts` is the table of
+record. Exact patches still matter: Workflow pins have moved within an eve minor
+line before, so a minor is not a set.
 
 The other axis an eve release can move is the message stream, which the World
 touches through write-side snapshot stripping. eve 0.50.0 took it to v25, where
@@ -533,15 +534,21 @@ pinned by a per-run scheme marker rather than by rewriting their event ids.
 `@workflow/world` beta.32 (eve 0.49) split the two ends of that range: the
 runtime floor stays at slot identity (v6) while `SPEC_VERSION_CURRENT` moves to
 v7, the "sealed log", and the runtime stamps each new run with whatever the
-World declares. This World declares v6 deliberately (`src/index.ts`). Every line
-in the {0.49.x, 0.50.x} window reads v6 or v7, so the declaration is no longer
-what keeps the window readable -- but a Release built against a v6-only eve can
-still be running when the window slides past it, and a v6-only reader rejects a
-v7 run outright. Declaring v6 costs nothing either way: v7's reader contract is
+World declares. This World declares `mintedSpecVersion()` (`src/index.ts`), as
+upstream recommends: v7 by default, or v6 when `WORKFLOW_SEALED_LOG=0` opts a
+deployment out. Declaring v7 changes nothing in storage. Its reader contract is
 the `noop` filler a backend emits when it pre-assigns event positions, and this
 World allocates each position inside the INSERT that occupies it, so it never
-has a hole to seal. Move the declaration to `SPEC_VERSION_CURRENT` only once no
-v6-only eve can still be serving.
+has a hole to seal and never writes one. What the declaration buys is not being
+left behind: upstream intends v5 stable to ship on v7, and a runtime that
+raises its floor to v7 rejects a World still declaring v6 at startup.
+
+Through 0.17.0 this World pinned v6 so a Release built against a v6-only eve
+(0.47.x and older) could never meet a run it cannot read. Every line in the
+window has read v7 since eve 0.49, and an in-flight run is pinned to the
+deployment that created it, so a v7 run stamped by a new Release is never
+replayed by an older one. The env var is the fallback if a v6-only executor
+ever has to be served again; it needs no release.
 
 ## Releasing
 

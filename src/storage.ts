@@ -60,8 +60,9 @@ import {
   isTerminalRunEventType,
   isTerminalStepStatus,
   isTerminalWorkflowRunStatus,
+  mintedSpecVersion,
   requiresNewerWorld,
-  SPEC_VERSION_CURRENT,
+  SPEC_VERSION_MAX_SUPPORTED,
   StepSchema,
   slotToEventId,
   stripEventDataRefs,
@@ -545,6 +546,8 @@ async function handleLegacyEventPostgres(
   eventId: string,
   data: any,
   currentRun: { status: string; specVersion: number | null },
+  /** The World's declared version; stamped on the event rows a legacy run still records. */
+  specVersion: number,
   params?: { resolveData?: ResolveData },
 ): Promise<EventResult> {
   const resolveData = params?.resolveData ?? "all";
@@ -614,7 +617,7 @@ async function handleLegacyEventPostgres(
             correlationId: data.correlationId,
             eventType: data.eventType,
             eventData: "eventData" in data ? data.eventData : undefined,
-            specVersion: SPEC_VERSION_CURRENT,
+            specVersion,
           })
           .returning({ createdAt: Schema.events.createdAt });
 
@@ -661,6 +664,15 @@ export function createEventsStorage(
   drizzle: Drizzle,
   tenantId: string,
   queueNamespace?: string,
+  /**
+   * The version the World declares to the runtime (`src/index.ts`). It is what
+   * the runtime sends on `run_created`, so it is also the only honest fallback
+   * when a caller omits `specVersion`, and what a legacy-run event is stamped
+   * with. Taking it as a parameter rather than re-reading `mintedSpecVersion()`
+   * keeps storage and the declaration from disagreeing when
+   * `WORKFLOW_SEALED_LOG` changes between the two reads.
+   */
+  specVersion: number = mintedSpecVersion(),
 ): Storage["events"] {
   /**
    * Stamped on the run at creation and never rewritten, because the run rows are
@@ -835,8 +847,9 @@ export function createEventsStorage(
         }
       }
 
-      // specVersion is always sent by the runtime, but we provide a fallback for safety
-      const effectiveSpecVersion = data.specVersion ?? SPEC_VERSION_CURRENT;
+      // The runtime always sends specVersion (it is the World's own declaration);
+      // the fallback exists so an out-of-band caller lands on the same version.
+      const effectiveSpecVersion = data.specVersion ?? specVersion;
 
       // Track entity created/updated for EventResult
       let run: WorkflowRun | undefined;
@@ -980,9 +993,10 @@ export function createEventsStorage(
       // For events that have fetched the run, check version compatibility.
       // Skip for run_created (no existing run) and runtime events (step_completed, step_retrying).
       if (currentRun) {
-        // Check if run requires a newer world version
+        // Check if run requires a newer world version. The ceiling is what this
+        // World can READ, which may sit above what it declares and stamps.
         if (requiresNewerWorld(currentRun.specVersion)) {
-          throw new RunNotSupportedError(currentRun.specVersion!, SPEC_VERSION_CURRENT);
+          throw new RunNotSupportedError(currentRun.specVersion!, SPEC_VERSION_MAX_SUPPORTED);
         }
 
         // Route to legacy handler for pre-event-sourcing runs
@@ -994,6 +1008,7 @@ export function createEventsStorage(
             `wevt_${legacyEventUlid()}`,
             data,
             currentRun,
+            specVersion,
             params,
           );
         }

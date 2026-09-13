@@ -1,5 +1,5 @@
 import type { Storage, World } from "@workflow/world";
-import { resolveQueueNamespace, SPEC_VERSION_SUPPORTS_SLOT_IDENTITY } from "@workflow/world";
+import { mintedSpecVersion, resolveQueueNamespace } from "@workflow/world";
 import { Pool } from "pg";
 import {
   type EvelandWorldConfig,
@@ -78,10 +78,15 @@ export * from "./drizzle/schema.js";
  * this deployment's environment — so a namespace not recorded here is a
  * namespace that boot recovery cannot honour.
  */
-function createStorage(drizzle: Drizzle, tenantId: string, queueNamespace?: string): Storage {
+function createStorage(
+  drizzle: Drizzle,
+  tenantId: string,
+  queueNamespace: string | undefined,
+  specVersion: number,
+): Storage {
   return {
     runs: createRunsStorage(drizzle, tenantId),
-    events: createEventsStorage(drizzle, tenantId, queueNamespace),
+    events: createEventsStorage(drizzle, tenantId, queueNamespace, specVersion),
     hooks: createHooksStorage(drizzle, tenantId),
     steps: createStepsStorage(drizzle, tenantId),
   };
@@ -166,39 +171,44 @@ export function createWorld(
   let closed = false;
   const drizzle = createClient(pool);
   const queue = createQueue(resolved, pool);
-  const storage = createStorage(drizzle, resolved.tenantId, resolved.queueNamespace);
+  const specVersion = mintedSpecVersion();
+  const storage = createStorage(drizzle, resolved.tenantId, resolved.queueNamespace, specVersion);
   const streamer = createStreamer(pool, drizzle, resolved.tenantId, {
     compactSnapshots: resolved.compactStreamSnapshots,
   });
 
   return {
     /**
-     * eve compiles a `world.specVersion` check into every release, so this must
-     * track the `@workflow/world` line the package depends on. Through eve
-     * 0.33.1 (`@workflow/core` beta.40) that check is literal equality against
-     * the runtime's own `SPEC_VERSION_CURRENT`; beta.41 widened it to the range
-     * `[SPEC_VERSION_CURRENT, SPEC_VERSION_MAX_SUPPORTED]`. Beta.42 then raised
-     * both the current version and the required floor to v6.
+     * What upstream tells a World to declare: `mintedSpecVersion()` is the
+     * sealed-log version (7) by default, or slot identity (6) when
+     * `WORKFLOW_SEALED_LOG=0` opts a deployment out. The runtime stamps every
+     * run it creates with whatever is declared here (`run_created` carries
+     * `world.specVersion`) and admits any value in
+     * `[SPEC_VERSION_SUPPORTS_SLOT_IDENTITY, SPEC_VERSION_MAX_SUPPORTED]`.
      *
-     * Beta.32 of `@workflow/world` (eve 0.49) minted spec v7, the "sealed log",
-     * and split the check in two: the runtime floor stays at slot identity (v6)
-     * while `SPEC_VERSION_CURRENT` moves to v7, so a World may declare either.
-     * What it declares is what the runtime stamps on every run it creates
-     * (`run_created` carries `world.specVersion`), and the stamped version is
-     * what every OTHER runtime in Eveland's window must be able to read. Eve
-     * 0.47.x reads v6 only, so this World keeps declaring v6 for as long as a
-     * v6-only line is deployable; it costs nothing, because v7's only reader
-     * obligation is the `noop` filler a backend emits when it pre-assigns
-     * event positions, and this World allocates each position inside the
-     * INSERT that occupies it (`insertEventRow`), so there is never a hole to
-     * seal. Move to `SPEC_VERSION_CURRENT` only once every eve line Eveland
-     * hosts reads v7 (`requiresNewerWorld(7)` is false on all of them).
+     * Declaring 7 changes nothing in storage. Its only reader obligation is the
+     * `noop` filler a backend emits when it pre-assigns event positions and a
+     * writer dies before committing; this World allocates each position inside
+     * the INSERT that occupies it (`insertEventRow`), so there is never a hole
+     * to seal and it never writes one. It is spec-7 compliant by construction.
+     * What the declaration buys is not being left behind: upstream intends v5
+     * stable to ship on 7, and a runtime that raises its floor to 7 rejects a
+     * World still declaring 6 at startup.
      *
-     * New runs therefore use dense slot event ids. The per-run marker still
-     * keeps pre-upgrade v5 runs on ULIDs for older Eve releases in the supported
-     * rolling window. The contract test asserts the installed Eve agrees.
+     * Through 0.17.0 this World pinned 6 so a Release built against a v6-only
+     * eve (0.47.x and older) could never meet a run it cannot read. Every line
+     * in the supported window has read 7 since eve 0.49, and an in-flight run
+     * is pinned to the deployment that created it, so a 7 stamped by a new
+     * Release is never replayed by an older one. If a v6-only executor ever has
+     * to be served again, `WORKFLOW_SEALED_LOG=0` puts that deployment back on
+     * 6 without a release.
+     *
+     * Read once per `createWorld()`, and the same value is handed to storage so
+     * its run-creation fallback and legacy event stamps agree with what the
+     * runtime was told. Pre-upgrade v5 runs stay on ULIDs through the per-run
+     * scheme marker. The conformance suite asserts the installed runtime agrees.
      */
-    specVersion: SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
+    specVersion,
     /**
      * Declared so the runtime knows hook token retention is honoured here. A
      * World that stays silent is treated as not supporting it, which was the
