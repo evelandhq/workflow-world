@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.17.0...workflow-world-v0.18.0) (2026-09-13)
+
+
+### Features
+
+* declare the sealed-log spec version (7) via mintedSpecVersion() ([#83](https://github.com/evelandhq/workflow-world/issues/83)) ([408d42f](https://github.com/evelandhq/workflow-world/commit/408d42fe260857f14bde862532eddddf80eca242))
+
 ## [0.17.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.16.0...workflow-world-v0.17.0) (2026-09-12)
 
 
