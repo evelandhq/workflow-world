@@ -46,10 +46,14 @@ describe("@workflow/* pins track the installed eve", () => {
   const evePath = require.resolve("eve/package.json", { paths: [repoRoot] });
   const eve = readJson(evePath);
   const eveWorkflowPins = versionsFrom(eve);
-  const ours = versionsFrom(readJson(path.join(repoRoot, "package.json")));
+  const manifest = readJson(path.join(repoRoot, "package.json"));
+  const ours = versionsFrom(manifest);
 
   test("the installed eve is the one this package claims to target", () => {
-    expect(typeof eve.version).toBe("string");
+    const evePin = (manifest.devDependencies as Record<string, unknown>).eve;
+    // The registry drift check needs an exact stable version as its baseline.
+    expect(evePin).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(eve.version).toBe(evePin);
     // Sanity: if eve stopped declaring @workflow/* at all, every assertion below
     // would vacuously pass.
     expect(Object.keys(eveWorkflowPins).length).toBeGreaterThan(3);

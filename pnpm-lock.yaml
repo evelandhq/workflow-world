@@ -52,7 +52,7 @@ importers:
         specifier: 5.0.0-beta.51
         version: 5.0.0-beta.51(@aws-sdk/credential-provider-web-identity@3.972.49)(@nestjs/common@11.2.1(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.1(@nestjs/common@11.2.1(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(react@19.2.8)(typescript@5.9.3)(vitest@4.1.10(@types/node@24.13.3)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)))(ws@8.21.3)
       eve:
-        specifier: ^0.54.3
+        specifier: 0.54.3
         version: 0.54.3(ai@7.0.87(zod@4.3.6))
       oxfmt:
         specifier: 0.58.0
