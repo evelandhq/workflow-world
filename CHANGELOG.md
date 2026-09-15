@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.19.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.18.0...workflow-world-v0.19.0) (2026-09-15)
+
+
+### Features
+
+* verify against the eve 0.54/0.55 window ([#87](https://github.com/evelandhq/workflow-world/issues/87)) ([f61cd8e](https://github.com/evelandhq/workflow-world/commit/f61cd8e5e3299bb55adc43e5cb817bb41f56f8cf))
+
+
+### Fixes
+
+* pin eve exactly for the drift check ([#85](https://github.com/evelandhq/workflow-world/issues/85)) ([31733db](https://github.com/evelandhq/workflow-world/commit/31733dbaa33e1796bfab87ec5dc684ff29853afe))
+
 ## [0.18.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.17.0...workflow-world-v0.18.0) (2026-09-13)
 
 
