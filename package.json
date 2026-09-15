@@ -65,21 +65,21 @@
   "dependencies": {
     "@workflow/errors": "5.0.0-beta.21",
     "@workflow/utils": "5.0.0-beta.10",
-    "@workflow/world": "5.0.0-beta.34",
-    "@workflow/world-local": "5.0.0-beta.43",
+    "@workflow/world": "5.0.0-beta.35",
+    "@workflow/world-local": "5.0.0-beta.44",
     "cbor-x": "1.6.0",
     "drizzle-orm": "0.45.2",
     "graphile-worker": "0.16.6",
     "pg": "8.20.0",
     "ulid": "~3.0.1",
-    "zod": "~4.3.6"
+    "zod": "~4.5.4"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.10",
-    "@workflow/core": "5.0.0-beta.50",
+    "@workflow/core": "5.0.0-beta.51",
     "@workflow/world-testing": "5.0.0-beta.51",
-    "eve": "0.54.3",
+    "eve": "0.55.0",
     "oxfmt": "0.58.0",
     "oxlint": "1.73.0",
     "typescript": "~5.9.0",
