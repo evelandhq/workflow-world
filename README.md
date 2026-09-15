@@ -433,7 +433,7 @@ Commit dependency changes in `pnpm-lock.yaml`; use `pnpm add` or `pnpm install`
 when updating dependencies. `pnpm-workspace.yaml` allows install scripts only
 for the native dependencies listed there. Review that list when adding a package
 that needs an install script. The release-age exceptions cover the tested
-`eve@0.54.3` pin and the `@workflow/*` set `@workflow/world-testing@beta.51`
+`eve@0.55.0` pin and the `@workflow/*` set `@workflow/world-testing@beta.51`
 pulls in; review any new exception when updating Eve or the harness.
 
 CI uses pnpm for repository dependencies, builds, and tests. Tarball consumer
@@ -475,12 +475,13 @@ World, which conformance never loads an eve to check.
 
 An eve release is almost never a reason to do anything here. What matters is not
 that eve shipped, but whether the `@workflow/*` set it installs moved. The
-current supported window, {0.52.x, 0.53.x, 0.54.x}, carries two sets: 0.52.x
-uses world beta.33, world-local beta.42 and core beta.48; 0.53.0 moved to world
-beta.34, world-local beta.43 and core beta.50, and 0.54.x keeps that set. The
-pins here follow the newest line; `e2e-tests/eve-versions.mts` is the table of
-record. Exact patches still matter: Workflow pins have moved within an eve minor
-line before, so a minor is not a set.
+current supported window, {0.54.x, 0.55.x}, carries two sets: 0.54.0 through
+0.54.3 use world beta.34, world-local beta.43 and core beta.50; the 0.54.4
+patch moved to world beta.35, world-local beta.44 and core beta.51, and 0.55.x
+keeps that set. The pins here follow the newest line;
+`e2e-tests/eve-versions.mts` is the table of record. Exact patches still matter:
+Workflow pins have moved within an eve minor line before, so a minor is not a
+set.
 
 The other axis an eve release can move is the message stream, which the World
 touches through write-side snapshot stripping. eve 0.50.0 took it to v25, where

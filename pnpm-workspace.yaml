@@ -11,7 +11,7 @@ allowBuilds:
 
 # Already pinned and verified by the existing Eve compatibility matrix.
 minimumReleaseAgeExclude:
-  - eve@0.54.3
+  - eve@0.55.0
   # The conformance harness and the @workflow/* set it pins. The harness is
   # exempt from eve's pins (src/eve-pin-contract.test.ts) and was bumped to the
   # first release whose bundled runtime reads spec 7, which this World now
