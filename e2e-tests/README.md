@@ -47,7 +47,7 @@ assertion about _this_ package.
 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
 
 # Run one enabled version, as each CI matrix job does.
-EVE_VERSION=0.55.0 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
+EVE_VERSION=0.57.0 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
 ```
 
 The URL is used both to create the per-version database and, rewritten, to connect
@@ -58,13 +58,13 @@ release. An unknown or disabled value fails instead of silently running nothing.
 Each enabled eve version costs an `npm install` plus a full `eve build`, so
 `eve-versions.mts` enables them deliberately rather than all at once. The supported
 window comes from Eveland's `packages/core/src/eve-compatibility.ts`, and this
-package pins the newest line's verified release (0.55.0). A minor does not reliably
+package pins the newest line's verified release (0.57.0). A minor does not reliably
 identify a `@workflow/*` set, so the entries name exact patches. The current
-window, {0.54.x, 0.55.x}, has two distinct sets, split at the 0.54.4 patch: 0.54.0
-through 0.54.3 carry world beta.34, world-local beta.43 and core beta.50; 0.54.4
-onward, 0.55.x included, carries world beta.35, world-local beta.44 and core
-beta.51. The enabled entries cover the older set once (0.54.3) and the newer set
-under both lines (0.54.5, the release Eveland verified for 0.54, and 0.55.0);
+window, {0.55.x, 0.56.x, 0.57.x}, carries one set throughout: world beta.35,
+world-local beta.44 and core beta.51, unchanged since the 0.54.4 patch. What
+differs is the execution model -- 0.55/0.56 dispatch a child run per turn, 0.57
+executes turns inside the session's own run -- so the enabled entries cover each
+model once (0.55.0 and 0.57.0) and 0.56.0 stays documented but disabled;
 `eve-versions.mts` records why each one earns its install. This is especially
 worth proving for `@workflow/world-local`, because this package wraps its
 `createQueueHandler`.
