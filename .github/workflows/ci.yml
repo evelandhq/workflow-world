@@ -130,13 +130,12 @@ jobs:
       matrix:
         # Mirrors the enabled entries in e2e-tests/eve-versions.mts. Keep them in
         # step — the file is what the suite reads; this list is only what CI
-        # pays for. The window is {0.55.x, 0.56.x, 0.57.x}; the whole window
-        # speaks message stream v25 and bundles one Workflow set (core beta.51,
-        # world beta.35, world-local beta.44), so the axis left is the execution
-        # model: 0.55.0 samples the per-turn child run that 0.55/0.56 dispatch,
-        # 0.57.0 the session-owned run that executes turns itself. 0.56.0 adds
-        # nothing the World can see and stays disabled in eve-versions.mts.
-        eve: ["0.55.0", "0.57.0"]
+        # pays for. The window is {0.55.x, 0.58.x} (0.56/0.57 skipped); the
+        # whole window speaks message stream v25 and bundles one Workflow set
+        # (core beta.51, world beta.35, world-local beta.44), so the axis left
+        # is the execution model: 0.55.0 samples the per-turn child run,
+        # 0.58.0 the session-owned run that executes turns itself.
+        eve: ["0.55.0", "0.58.0"]
     services:
       postgres:
         image: postgres:17-alpine
