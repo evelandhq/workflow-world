@@ -130,14 +130,12 @@ jobs:
       matrix:
         # Mirrors the enabled entries in e2e-tests/eve-versions.mts. Keep them in
         # step — the file is what the suite reads; this list is only what CI
-        # pays for. The window is {0.54.x, 0.55.x}; the whole window speaks
-        # message stream v25, so the only axis left is the bundled Workflow set
-        # (0.54.4 moved core to beta.51, world to beta.35 and world-local to
-        # beta.44; 0.55.x keeps that set). 0.54.3 is the only remaining sample of
-        # the older set, which Releases built before 0.54.4 still run; 0.54.5 is
-        # the verified 0.54 patch on the newer set; 0.55.0 is the newest line and
-        # moves the session inbox wire to v7.
-        eve: ["0.54.3", "0.54.5", "0.55.0"]
+        # pays for. The window is {0.55.x, 0.58.x} (0.56/0.57 skipped); the
+        # whole window speaks message stream v25 and bundles one Workflow set
+        # (core beta.51, world beta.35, world-local beta.44), so the axis left
+        # is the execution model: 0.55.0 samples the per-turn child run,
+        # 0.58.0 the session-owned run that executes turns itself.
+        eve: ["0.55.0", "0.58.0"]
     services:
       postgres:
         image: postgres:17-alpine

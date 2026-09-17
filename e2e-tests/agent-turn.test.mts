@@ -39,7 +39,10 @@ import {
  * compiled from eve's own execution module — and user-authored `"use workflow"`
  * functions are not part of eve's compile surface in this version. So driving a
  * turn is not a convenience, it is the way a real agent uses a World. One turn
- * produces three runs, steps, hooks, a wait, and a cancellation.
+ * produces the run graph in `expectedRunGraph` -- three runs through eve 0.56,
+ * two from 0.57, which executes the turn as steps inside the session's own run
+ * instead of a child run per message -- plus steps, hooks, a wait, and a
+ * cancellation.
  *
  * ## Why no model credentials
  *
@@ -53,6 +56,26 @@ const thisPackageVersion = (
     version: string;
   }
 ).version;
+
+/**
+ * The runs one first turn leaves in the World, by eve line. Through 0.56 the
+ * session's own `workflowEntry` run dispatches a child `turnWorkflow` run per
+ * message; from 0.57 it executes the turn itself, so the per-turn run is gone
+ * (`turnWorkflow` survives only to import sessions from the older driver model
+ * and is never started for a fresh session). Asserting names rather than a
+ * count keeps a change in eve's turn shape visible rather than absorbed.
+ */
+function expectedRunGraph(eveVersion: string): readonly string[] {
+  const minor = Number(/^0\.(\d+)\./.exec(eveVersion)?.[1]);
+  if (!Number.isInteger(minor)) throw new Error(`unrecognized eve version ${eveVersion}`);
+  return minor >= 57
+    ? ["workflow//eve//workflowEntry", "workflow//eve//sessionTimeoutWorkflow"]
+    : [
+        "workflow//eve//workflowEntry",
+        "workflow//eve//turnWorkflow",
+        "workflow//eve//sessionTimeoutWorkflow",
+      ];
+}
 
 const baseUrl = process.env.WORKFLOW_WORLD_E2E_URL;
 const adminUrl = process.env.WORKFLOW_WORLD_E2E_ADMIN_URL ?? baseUrl;
@@ -69,6 +92,7 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
       const tenantId = tenantFor(entry.version);
       const deploymentId = deploymentFor(entry.version);
       const database = databaseFor(entry.version);
+      const runGraph = expectedRunGraph(entry.version);
       const port = 41900 + index;
 
       let pool: Pool;
@@ -122,15 +146,12 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
             [tenantId],
           );
           names = rows.map((row) => row.name);
-          if (names.length >= 3) break;
+          if (names.length >= runGraph.length) break;
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
 
-        // eve's own workflows, by name. Asserting the names rather than a count
-        // means a change in eve's turn shape is visible rather than silently
-        // absorbed.
-        expect(names).toContain("workflow//eve//workflowEntry");
-        expect(names).toContain("workflow//eve//turnWorkflow");
+        // eve's own workflows, by name (see expectedRunGraph).
+        expect(names).toEqual(expect.arrayContaining([...runGraph]));
 
         const graph = await pool.query<{ retention_class: string }>(
           `select retention_class
@@ -158,17 +179,11 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
             [tenantId, sessionId],
           );
           rows = result.rows;
-          if (rows.length >= 3) break;
+          if (rows.length >= runGraph.length) break;
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
 
-        expect(rows.map((row) => row.name)).toEqual(
-          expect.arrayContaining([
-            "workflow//eve//workflowEntry",
-            "workflow//eve//turnWorkflow",
-            "workflow//eve//sessionTimeoutWorkflow",
-          ]),
-        );
+        expect(rows.map((row) => row.name)).toEqual(expect.arrayContaining([...runGraph]));
         expect(new Set(rows.map((row) => row.retention_class))).toEqual(new Set(["scheduled"]));
       });
 
@@ -176,7 +191,7 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
         const { sessionId } = await startPersistentSession(port);
         expect(sessionId).toMatch(/^wrun_/);
 
-        const rows = await waitForRetentionGraph(pool, tenantId, sessionId);
+        const rows = await waitForRetentionGraph(pool, tenantId, sessionId, runGraph.length);
         expect(new Set(rows.map((row) => row.retention_class))).toEqual(new Set(["persistent"]));
       });
 
@@ -195,7 +210,7 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
         const { sessionId: scheduledSessionId } = await deliverScheduledTurn(port);
         expect(scheduledSessionId).toBe(sessionId);
 
-        const rows = await waitForRetentionGraph(pool, tenantId, sessionId);
+        const rows = await waitForRetentionGraph(pool, tenantId, sessionId, runGraph.length);
         expect(new Set(rows.map((row) => row.retention_class))).toEqual(new Set(["interactive"]));
       });
 
@@ -268,7 +283,12 @@ async function waitForContinuationHook(pool: Pool, tenantId: string, sessionId: 
   );
 }
 
-async function waitForRetentionGraph(pool: Pool, tenantId: string, rootRunId: string) {
+async function waitForRetentionGraph(
+  pool: Pool,
+  tenantId: string,
+  rootRunId: string,
+  expectedRuns: number,
+) {
   let rows: { name: string; retention_class: string }[] = [];
   for (let attempt = 0; attempt < 60; attempt += 1) {
     const result = await pool.query<{ name: string; retention_class: string }>(
@@ -279,9 +299,9 @@ async function waitForRetentionGraph(pool: Pool, tenantId: string, rootRunId: st
       [tenantId, rootRunId],
     );
     rows = result.rows;
-    if (rows.length >= 3) break;
+    if (rows.length >= expectedRuns) break;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  expect(rows.length).toBeGreaterThanOrEqual(3);
+  expect(rows.length).toBeGreaterThanOrEqual(expectedRuns);
   return rows;
 }
