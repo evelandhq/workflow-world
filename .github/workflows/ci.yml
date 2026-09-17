@@ -134,8 +134,8 @@ jobs:
         # whole window speaks message stream v25 and bundles one Workflow set
         # (core beta.51, world beta.35, world-local beta.44), so the axis left
         # is the execution model: 0.55.0 samples the per-turn child run,
-        # 0.58.0 the session-owned run that executes turns itself.
-        eve: ["0.55.0", "0.58.0"]
+        # 0.58.1 the session-owned run that executes turns itself.
+        eve: ["0.55.0", "0.58.1"]
     services:
       postgres:
         image: postgres:17-alpine
