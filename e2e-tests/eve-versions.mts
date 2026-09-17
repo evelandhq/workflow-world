@@ -3,13 +3,14 @@
  * not npm's `latest`, is the authority on what may be deployed.
  *
  * The current window is {0.55.x, 0.58.x} -- a gapped window, verified at
- * 0.55.0 and 0.58.0: 0.56 and 0.57 were superseded on 2026-09-17 before any
+ * 0.55.0 and 0.58.1 (0.58.1 followed 0.58.0 within the hour: restamped workflow
+ * ids and an autoModel dev fix, same dependencies and bundled versions): 0.56 and 0.57 were superseded on 2026-09-17 before any
  * Eveland release carried them and are rejected. 0.54.x slid out on
  * 2026-09-16 and took the older bundled set with it, so the whole window
  * carries ONE `@workflow/*` set (0.57.0 and 0.58.0 re-bundled it, moving only
  * the vendor stamp's script hash and, in 0.58.0, @ai-sdk/code-mode):
  *
- * | package                 | 0.54.4-0.58.0 |
+ * | package                 | 0.54.4-0.58.1 |
  * | ----------------------- | ------------- |
  * | `@workflow/world`       | beta.35       |
  * | `@workflow/world-local` | beta.44       |
@@ -24,7 +25,7 @@
  * - 0.55.0 dispatches a child `turnWorkflow` run for every message, owned by
  *   a long-lived `workflowEntry` session driver -- one run and one hook
  *   exchange per turn.
- * - 0.58.0 (the model 0.57 introduced) executes every turn as steps inside
+ * - 0.58.1 (the model 0.57 introduced) executes every turn as steps inside
  *   the session's own `workflowEntry` run: no per-turn run, a session inbox
  *   rebuilt on hook tokens (`<sessionId>:anchor`, `<runId>:handoff`),
  *   deployment handoff that starts a successor run targeted at another
@@ -44,7 +45,7 @@ export type EveVersion = {
 
 export const EVE_VERSIONS: readonly EveVersion[] = [
   { version: "0.55.0", enabled: true },
-  { version: "0.58.0", enabled: true },
+  { version: "0.58.1", enabled: true },
 ];
 
 const eveVersionUnderTest = process.env.EVE_VERSION;
