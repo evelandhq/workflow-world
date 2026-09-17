@@ -35,17 +35,25 @@ import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
  * few hundred active runs across a few dozen deployments, every dispatcher
  * restart became a cold-start storm.
  *
- * A run that holds a hook is not a candidate either. A hook is the run's other
- * wake-up: the party that resolves it enqueues the delivery, through the
- * World's own `queue()`, whenever that happens — an agent session parked on
- * its inbox, a subagent parked on its continuation. Nothing about a dispatcher
- * restart changes that, and the replay a recovery job bought was the same
- * cold start the live-job case paid for nothing: on the incident host every
- * one of the sixty-odd remaining candidates was a session waiting on its
- * inbox, and skipping them left zero deployments to wake. The trade-off is a
- * run that created a hook, moved on, and then lost the only job that would
- * have driven it — it now waits for that hook to resume instead of the next
- * boot. That is the rare shape; parked sessions are the common one.
+ * A run that holds a hook is not a candidate either, unless it is also parked
+ * on a timer. A hook is the run's other wake-up: the party that resolves it
+ * enqueues the delivery, through the World's own `queue()`, whenever that
+ * happens — an agent session parked on its inbox, a subagent parked on its
+ * continuation. Nothing about a dispatcher restart changes that, and the
+ * replay a recovery job bought was the same cold start the live-job case paid
+ * for nothing: on the incident host every one of the sixty-odd remaining
+ * candidates was a session waiting on its inbox, and skipping them left zero
+ * deployments to wake.
+ *
+ * The exception is a run whose wake-up is a `sleep()`: a `waiting` wait with a
+ * `resume_at`. Its only driver is the delayed job, and the hooks it holds are
+ * its own (from eve 0.57 the durable sleep tool is a child run that carries
+ * an abort hook and its callback hook while it sleeps — evelandhq/workflow-world#89).
+ * Nobody else resolves those, so losing the job strands the run for good
+ * unless boot recovery replays it; the replay re-arms the timer from the
+ * wait's own deadline. A run that created a hook, moved on without a timer,
+ * and then lost its job still waits for that hook instead of the next boot —
+ * the rare shape; parked sessions are the common one.
  */
 /** One candidate the sweep found: an active run minus its resolved payloads. */
 export type BootRecoveryRun = {
@@ -123,6 +131,7 @@ async function recoverActiveRunsForAllTenants(
     locked_by: string | null;
     has_live_job: boolean;
     has_hook: boolean;
+    has_timer: boolean;
   }>(
     `select runs.tenant_id, runs.id, runs.name, runs.deployment_id, runs.queue_namespace,
             queues.locked_by,
@@ -143,7 +152,19 @@ async function recoverActiveRunsForAllTenants(
                 from workflow.workflow_hooks as hooks
                where hooks.tenant_id = runs.tenant_id
                  and hooks.run_id = runs.id
-            ) as has_hook
+            ) as has_hook,
+            -- A sleep the run is still inside: its wake-up is the delayed job
+            -- alone, whatever hooks the run holds meanwhile. The World deletes
+            -- a run's waits when it terminates, so a row here belongs to a
+            -- live run.
+            exists (
+              select 1
+                from workflow.workflow_waits as waits
+               where waits.tenant_id = runs.tenant_id
+                 and waits.run_id = runs.id
+                 and waits.status = 'waiting'
+                 and waits.resume_at is not null
+            ) as has_timer
        from workflow.workflow_runs as runs
        left join graphile_worker._private_job_queues as queues
          on queues.queue_name = concat('wfrun:', runs.tenant_id, ':', runs.id)
@@ -174,10 +195,20 @@ async function recoverActiveRunsForAllTenants(
   }
 
   const liveJobs = rows.filter((row) => row.has_live_job).length;
-  const parkedOnHook = rows.filter((row) => !row.has_live_job && row.has_hook).length;
-  let candidates = rows.filter((row) => !row.has_live_job && !row.has_hook);
+  const parkedOnHook = rows.filter(
+    (row) => !row.has_live_job && row.has_hook && !row.has_timer,
+  ).length;
+  const sleepingWithHook = rows.filter(
+    (row) => !row.has_live_job && row.has_hook && row.has_timer,
+  ).length;
+  let candidates = rows.filter((row) => !row.has_live_job && (!row.has_hook || row.has_timer));
   if (parkedOnHook > 0) {
     input.log?.("skipped runs parked on a hook", { runs: parkedOnHook });
+  }
+  if (sleepingWithHook > 0) {
+    input.log?.("recovering hook-holding runs whose sleep timer was lost", {
+      runs: sleepingWithHook,
+    });
   }
   if (liveJobs > 0) {
     input.log?.("skipped runs whose own job is still queued", {
