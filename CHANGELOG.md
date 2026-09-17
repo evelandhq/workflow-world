@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.19.0...workflow-world-v0.19.1) (2026-09-17)
+
+
+### Fixes
+
+* **dispatcher:** recover a hook-holding run that is parked on a sleep timer ([#90](https://github.com/evelandhq/workflow-world/issues/90)) ([8044dc0](https://github.com/evelandhq/workflow-world/commit/8044dc08046c8db4d66958fc6fa49b1d73cb8c47))
+
 ## [0.19.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.18.0...workflow-world-v0.19.0) (2026-09-15)
 
 
