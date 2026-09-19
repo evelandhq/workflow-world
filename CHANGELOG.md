@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.20.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.19.1...workflow-world-v0.20.0) (2026-09-19)
+
+
+### Features
+
+* verify against the eve 0.58/0.62 window and accept a status array in runs.list ([#94](https://github.com/evelandhq/workflow-world/issues/94)) ([5ad79e4](https://github.com/evelandhq/workflow-world/commit/5ad79e4ea418219b597ced94ad35dca0a47d6997))
+
+
+### Fixes
+
+* deliver over Node's core HTTP client so the dispatch timeout is the only deadline ([#93](https://github.com/evelandhq/workflow-world/issues/93)) ([24b9bcf](https://github.com/evelandhq/workflow-world/commit/24b9bcf1bbbd043c2b15896bb94ceb917c1a5cfb))
+
 ## [0.19.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.19.0...workflow-world-v0.19.1) (2026-09-17)
 
 
