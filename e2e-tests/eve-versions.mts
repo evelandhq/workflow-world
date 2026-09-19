@@ -2,35 +2,36 @@
  * Exact releases from Eveland's supported eve window. The compatibility policy,
  * not npm's `latest`, is the authority on what may be deployed.
  *
- * The current window is {0.55.x, 0.58.x} -- a gapped window, verified at
- * 0.55.0 and 0.58.1 (0.58.1 followed 0.58.0 within the hour: restamped workflow
- * ids and an autoModel dev fix, same dependencies and bundled versions): 0.56 and 0.57 were superseded on 2026-09-17 before any
- * Eveland release carried them and are rejected. 0.54.x slid out on
- * 2026-09-16 and took the older bundled set with it, so the whole window
- * carries ONE `@workflow/*` set (0.57.0 and 0.58.0 re-bundled it, moving only
- * the vendor stamp's script hash and, in 0.58.0, @ai-sdk/code-mode):
+ * The current window is {0.58.x, 0.62.x} -- a gapped window, verified at
+ * 0.58.1 and 0.62.0: 0.59, 0.60 and 0.61 were each superseded within a day
+ * (0.62.0 shipped on 2026-09-18, a day and a half after 0.58.1) before any
+ * Eveland release carried them and are rejected. 0.55.x slid out on
+ * 2026-09-19. The window carries TWO `@workflow/*` sets again -- 0.61.0 moved
+ * the bundled set, and 0.62.0 re-bundled it unchanged:
  *
- * | package                 | 0.54.4-0.58.1 |
- * | ----------------------- | ------------- |
- * | `@workflow/world`       | beta.35       |
- * | `@workflow/world-local` | beta.44       |
- * | `@workflow/core`        | beta.51       |
- * | `@workflow/errors`      | beta.21       |
- * | `@workflow/utils`       | beta.10       |
+ * | package                 | 0.54.4-0.60.1 | 0.61.0-0.62.0 |
+ * | ----------------------- | ------------- | ------------- |
+ * | `@workflow/world`       | beta.35       | beta.36       |
+ * | `@workflow/world-local` | beta.44       | beta.45       |
+ * | `@workflow/core`        | beta.51       | beta.53       |
+ * | `@workflow/errors`      | beta.21       | beta.21       |
+ * | `@workflow/utils`       | beta.10       | beta.10       |
  *
- * The whole window speaks message stream v25, so the World's snapshot
- * stripping and rehydration see one wire. With the set and the wire uniform,
- * the axis that remains is how eve drives runs through this World:
+ * World beta.36 widens `runs.list({ status })` to accept an array (this World
+ * now implements it); world-local beta.45 and core beta.53 change nothing this
+ * World calls. The pins here follow the newer set, so the older entry is what
+ * proves a Release built on the previous set still runs against this package.
  *
- * - 0.55.0 dispatches a child `turnWorkflow` run for every message, owned by
- *   a long-lived `workflowEntry` session driver -- one run and one hook
- *   exchange per turn.
- * - 0.58.1 (the model 0.57 introduced) executes every turn as steps inside
- *   the session's own `workflowEntry` run: no per-turn run, a session inbox
- *   rebuilt on hook tokens (`<sessionId>:anchor`, `<runId>:handoff`),
- *   deployment handoff that starts a successor run targeted at another
- *   deployment id, and renewable stream leases. That is new run, hook and
- *   stream traffic, so it earns its own entry and is what new builds get.
+ * The whole window speaks message stream v25 and one execution model: every
+ * turn runs as steps inside the session's own `workflowEntry` run (the model
+ * 0.57 introduced), with a session inbox rebuilt on hook tokens
+ * (`<sessionId>:anchor`, `<runId>:handoff`), deployment handoff and renewable
+ * stream leases. The per-turn child `turnWorkflow` run left with 0.55.
+ *
+ * - 0.58.1 samples the older bundled set, which existing Releases run.
+ * - 0.62.0 samples the newer set and is what new builds get. It also creates
+ *   sessions before their first message (0.59) and stamps a third workflow,
+ *   `executeAgentRouterTool` (0.60.1), neither of which adds a World call.
  *
  * Exact patches matter because Workflow pins move within a minor line: 0.51.1
  * did it, and 0.54.4 did it again. Each enabled entry costs an npm install plus
@@ -44,8 +45,8 @@ export type EveVersion = {
 };
 
 export const EVE_VERSIONS: readonly EveVersion[] = [
-  { version: "0.55.0", enabled: true },
   { version: "0.58.1", enabled: true },
+  { version: "0.62.0", enabled: true },
 ];
 
 const eveVersionUnderTest = process.env.EVE_VERSION;

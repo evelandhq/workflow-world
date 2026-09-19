@@ -420,6 +420,41 @@ describe.skipIf(!testUrl)("runs storage (postgres)", () => {
       expect(result.data[0]?.runId).toBe(run2.runId);
     });
 
+    it("filters by a set of statuses, and an empty set matches nothing", async () => {
+      // `@workflow/world` 5.0.0-beta.36 widened `status` to an array so callers
+      // can ask for e.g. every non-terminal run in one paginated call.
+      const pending = await createRun(events, {
+        deploymentId: "deployment-1",
+        workflowName: "workflow-1",
+        input: new Uint8Array(),
+      });
+      const running = await createRun(events, {
+        deploymentId: "deployment-1",
+        workflowName: "workflow-1",
+        input: new Uint8Array(),
+      });
+      await events.create(running.runId, { eventType: "run_started" });
+      const completed = await createRun(events, {
+        deploymentId: "deployment-1",
+        workflowName: "workflow-1",
+        input: new Uint8Array(),
+      });
+      await events.create(completed.runId, { eventType: "run_started" });
+      await events.create(completed.runId, {
+        eventType: "run_completed",
+        eventData: { output: new Uint8Array() },
+      });
+
+      const active = await runs.list({ status: ["pending", "running"] });
+      expect(active.data.map((run) => run.runId).sort()).toEqual(
+        [pending.runId, running.runId].sort(),
+      );
+      expect((await runs.list({ status: "completed" })).data.map((run) => run.runId)).toEqual([
+        completed.runId,
+      ]);
+      expect((await runs.list({ status: [] })).data).toEqual([]);
+    });
+
     it("should support pagination", async () => {
       // Create multiple runs
       for (let i = 0; i < 5; i++) {
