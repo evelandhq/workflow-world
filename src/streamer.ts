@@ -12,7 +12,7 @@ import type {
   Streamer,
   StreamInfoResponse,
 } from "@workflow/world";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, lt, sql } from "drizzle-orm";
 import { Client, type Pool } from "pg";
 import { monotonicFactory } from "ulid";
 import * as z from "zod";
@@ -193,6 +193,22 @@ export function createStreamer(
   const toBuffer = (chunk: string | Uint8Array): Buffer =>
     !Buffer.isBuffer(chunk) ? Buffer.from(chunk) : chunk;
 
+  /**
+   * The chunk id of the first EOF row, if one has been written. A producer that
+   * retries a terminal write (lost ACK, overlapping attempts) can append data
+   * and EOF rows after it; every read path stops at the first EOF so those rows
+   * never surface as live data or inflate a count.
+   */
+  const findFirstEofChunkId = async (name: string): Promise<`chnk_${string}` | null> => {
+    const [row] = await drizzle
+      .select({ chunkId: streams.chunkId })
+      .from(streams)
+      .where(and(eq(streams.tenantId, tenantId), eq(streams.streamId, name), eq(streams.eof, true)))
+      .orderBy(asc(streams.chunkId))
+      .limit(1);
+    return row?.chunkId ?? null;
+  };
+
   return {
     streams: {
       async write(_runId: string | Promise<string>, name: string, chunk: string | Uint8Array) {
@@ -322,6 +338,8 @@ export function createStreamer(
           eof: streams.eof,
         };
 
+        const firstEofChunkId = await findFirstEofChunkId(name);
+
         // One physical row yields at least one logical chunk, so `limit + 1`
         // rows are sufficient even when the cursor starts inside a block.
         const rows = await drizzle
@@ -332,6 +350,7 @@ export function createStreamer(
               eq(streams.tenantId, tenantId),
               eq(streams.streamId, name),
               eq(streams.eof, false),
+              ...(firstEofChunkId ? [lt(streams.chunkId, firstEofChunkId)] : []),
               ...(cursorChunkId
                 ? [sql`coalesce(${streams.lastChunkId}, ${streams.chunkId}) > ${cursorChunkId}`]
                 : []),
@@ -353,17 +372,6 @@ export function createStreamer(
           data: new Uint8Array(row.data),
         }));
 
-        const [eofRow] = await drizzle
-          .select({ eof: streams.eof })
-          .from(streams)
-          .where(
-            and(
-              eq(Schema.streams.tenantId, tenantId),
-              and(eq(streams.streamId, name), eq(streams.eof, true)),
-            ),
-          )
-          .limit(1);
-
         const nextCursor =
           hasMore && pageRows.length > 0
             ? Buffer.from(
@@ -378,11 +386,12 @@ export function createStreamer(
           data: chunks,
           cursor: nextCursor,
           hasMore,
-          done: !!eofRow,
+          done: firstEofChunkId !== null,
         };
       },
 
       async getInfo(_runId: string, name: string): Promise<StreamInfoResponse> {
+        const firstEofChunkId = await findFirstEofChunkId(name);
         const [countResult] = await drizzle
           .select({
             count: sql<number>`coalesce(sum(coalesce(${streams.chunkCount}, 1)), 0)`,
@@ -392,26 +401,15 @@ export function createStreamer(
             and(
               eq(Schema.streams.tenantId, tenantId),
               and(eq(streams.streamId, name), eq(streams.eof, false)),
+              ...(firstEofChunkId ? [lt(streams.chunkId, firstEofChunkId)] : []),
             ),
           );
 
         const dataCount = Number(countResult?.count ?? 0);
 
-        // Check for EOF
-        const [eofRow] = await drizzle
-          .select({ eof: streams.eof })
-          .from(streams)
-          .where(
-            and(
-              eq(Schema.streams.tenantId, tenantId),
-              and(eq(streams.streamId, name), eq(streams.eof, true)),
-            ),
-          )
-          .limit(1);
-
         return {
           tailIndex: dataCount - 1,
-          done: !!eofRow,
+          done: firstEofChunkId !== null,
         };
       },
 
@@ -430,14 +428,21 @@ export function createStreamer(
             let offset = startIndex ?? 0;
             let buffer = [] as StreamChunkEvent[] | null;
 
+            let closed = false;
+
             function enqueue(msg: { id: string; data: Uint8Array; eof: boolean }) {
-              if (lastChunkId >= msg.id) {
+              // Once the first EOF has closed the stream nothing else is
+              // delivered: a retried terminal write can append data and EOF rows
+              // after it, and touching the closed controller would throw out of
+              // `start()`.
+              if (closed || lastChunkId >= msg.id) {
                 // already sent or out of order
                 return;
               }
 
               lastChunkId = msg.id;
               if (msg.eof) {
+                closed = true;
                 controller.close();
                 return;
               }
@@ -486,7 +491,9 @@ export function createStreamer(
             );
 
             if (typeof offset === "number" && offset < 0) {
-              const dataCount = chunks.filter((chunk) => !chunk.eof).length;
+              // Counted up to the first EOF only, matching `getInfo`.
+              const firstEof = chunks.findIndex((chunk) => chunk.eof);
+              const dataCount = (firstEof === -1 ? chunks : chunks.slice(0, firstEof)).length;
               offset = Math.max(0, dataCount + offset);
             }
 

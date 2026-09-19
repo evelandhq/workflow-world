@@ -36,6 +36,11 @@ import {
   type ValidQueueName,
   WorkflowInvokePayloadSchema,
 } from "@workflow/world";
+import {
+  createNodeHttpAgents,
+  destroyNodeHttpAgents,
+  nodeHttpFetch,
+} from "@workflow/world/node-http.js";
 import { createWorld } from "@workflow/world-local";
 import { Logger, makeWorkerUtils, type Runner, run, type WorkerUtils } from "graphile-worker";
 import type { Pool } from "pg";
@@ -423,6 +428,13 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     runnerStart = { controller, promise };
   }
 
+  // Deliveries go over Node's core HTTP client rather than the global `fetch`:
+  // undici's default 300s headers/body deadlines cannot be lifted without a
+  // custom dispatcher, and a queue-owned pool keeps these sockets out of the
+  // process-global agent. Concurrency is bounded by the graphile runner, so the
+  // pool itself needs no socket cap.
+  const httpAgents = createNodeHttpAgents({ maxSockets: Infinity, keepAliveMs: 30_000 });
+
   async function executeMessageOverHttp({
     queueName,
     messageId,
@@ -450,13 +462,17 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       throw new Error("Unable to resolve base URL for workflow queue.");
     }
     // One route: `WorkflowUrlRoute` no longer has a `'step'` member.
-    const response = await fetch(createWorkflowUrl(baseUrl, { type: "flow" }), {
+    // No headers or body deadline, deliberately: a delivery executes the
+    // workflow body inline, so a bound here declares a slow-but-healthy delivery
+    // crashed and redelivers it while the original is still running. Graphile's
+    // signal aborts it on shutdown.
+    const response = await nodeHttpFetch(createWorkflowUrl(baseUrl, { type: "flow" }), {
       method: "POST",
-      duplex: "half",
-      headers,
+      headers: new Headers(headers),
       body,
-      signal: abortSignal,
-    } as any);
+      ...(abortSignal ? { signal: abortSignal } : {}),
+      agents: httpAgents,
+    });
     const text = await response.text();
 
     if (!response.ok) {
@@ -722,6 +738,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
         workerUtils = null;
       }
       startPromise = null;
+      destroyNodeHttpAgents(httpAgents);
       await localWorld.close?.();
     },
   };

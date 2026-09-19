@@ -1,3 +1,4 @@
+import { nodeHttpFetch } from "@workflow/world/node-http.js";
 import { makeWorkerUtils, run, type Runner, type WorkerUtils } from "graphile-worker";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FLOW_JOB_NAME } from "../dispatch-contract.js";
@@ -7,6 +8,9 @@ import {
   reenqueueActiveRunsForAllTenants,
 } from "./boot-recovery.js";
 import { startDispatcher } from "./runner.js";
+
+// The dispatcher delivers over `nodeHttpFetch`, not the global `fetch`.
+vi.mock("@workflow/world/node-http.js", () => ({ nodeHttpFetch: vi.fn() }));
 
 vi.mock("graphile-worker", () => ({
   makeWorkerUtils: vi.fn(),
@@ -36,10 +40,7 @@ describe("dispatcher queue retry policy", () => {
   });
 
   it("uses 49 attempts when the dispatcher re-enqueues a timed-out delivery", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => Response.json({ timeoutSeconds: 30 })),
-    );
+    vi.mocked(nodeHttpFetch).mockResolvedValue(Response.json({ timeoutSeconds: 30 }));
     const pool = { query: vi.fn(async () => ({ rows: [] })) } as any;
     const runtime = await startDispatcher({
       pool,

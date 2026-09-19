@@ -119,33 +119,33 @@ honoured by only one end is a silent failure rather than a loud one.
 
 ### Host side (read by the dispatcher)
 
-| variable                                                 | default            | meaning                                                                                                  |
-| -------------------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------- |
-| `WORKFLOW_WORLD_URL`                                     | —                  | same database as above                                                                                   |
-| `WORKFLOW_WORLD_BOOTSTRAP_URL`                           | —                  | override when the host and the containers reach one database by different hostnames                      |
-| `WORKFLOW_DISPATCHER_ACTIVATION_API_URL`                 | —                  | the host's activation API. Required                                                                      |
-| `WORKFLOW_DISPATCHER_ACTIVATION_TOKEN`                   | —                  | bearer token for it. Required unless `NODE_ENV=development`                                              |
-| `WORKFLOW_DISPATCHER_POOL_SIZE`                          | `10`               | claim/complete throughput, plus one connection held for Graphile LISTEN and one for dispatcher ownership |
-| `WORKFLOW_DISPATCHER_CONCURRENCY`                        | `poolSize - 2`     | held dispatches in flight across all tenants. Independent of the pool — see below                        |
-| `WORKFLOW_DISPATCHER_POLL_INTERVAL_MS`                   | `500`              |                                                                                                          |
-| `WORKFLOW_DISPATCHER_MAX_INFLIGHT_PER_TENANT`            | derived from cores | fairness ceiling, not a throttle                                                                         |
-| `WORKFLOW_DISPATCHER_DISPATCH_TIMEOUT_MS`                | `900000`           | a backstop against a wedged executor. Liveness is the lease renewal's job                                |
-| `WORKFLOW_DISPATCHER_ACTIVATION_LEASE_TTL_MS`            | `180000`           | must match what the host's control API issues                                                            |
-| `WORKFLOW_DISPATCHER_LEASE_RENEW_INTERVAL_MS`            | `TTL / 3`          | must be well below the TTL, and is checked. Transient failures are absorbed while the lease has headroom |
-| `WORKFLOW_DISPATCHER_QUEUE_GC_INTERVAL_MS`               | `300000`           | reclaims the per-run graphile queue rows; graphile does not free them on its own                         |
-| `WORKFLOW_DISPATCHER_BOOT_RECOVERY_DEPLOYMENTS_PER_WAVE` | `4`                | deployments whose recovered runs are released together at boot                                           |
-| `WORKFLOW_DISPATCHER_BOOT_RECOVERY_WAVE_INTERVAL_MS`     | `30000`            | delay between those waves; `0` releases every recovered run at once                                      |
-| `WORKFLOW_DISPATCHER_EXECUTOR_FAILURE_LIMIT`             | `5`                | consecutive executor `5xx` on one run before it is dead-lettered instead of retried to exhaustion        |
-| `WORKFLOW_DISPATCHER_EXECUTOR_FAILURE_MIN_SPAN_MS`       | `60000`            | the streak must also last this long, so a short database outage does not quarantine healthy runs         |
-| `WORKFLOW_DISPATCHER_MAINTENANCE_INTERVAL_MS`            | `60000`            | storage maintenance cadence; `0` disables the automatic loop                                             |
-| `WORKFLOW_DISPATCHER_MAINTENANCE_STREAM_BATCH_SIZE`      | `50000`            | maximum physical stream rows deleted by one statement                                                    |
-| `WORKFLOW_DISPATCHER_MAINTENANCE_MAX_BATCHES`            | `20`               | maximum stream/run deletion batches per pass                                                             |
-| `WORKFLOW_DISPATCHER_MAINTENANCE_MAX_STREAMS_TO_PACK`    | `100`              | maximum terminal streams rewritten into blocks per pass                                                  |
-| `WORKFLOW_DISPATCHER_MAINTENANCE_RUN_BATCH_SIZE`         | `1000`             | maximum expired workflow graphs deleted by one statement                                                 |
-| `WORKFLOW_WORLD_STREAM_COMPACTION`                       | `on`               | also controls snapshot stripping during terminal block rewrites                                          |
-| `WORKFLOW_DISPATCHER_OWNERSHIP_LIVENESS_MS`              | `90000`            | how long a dead dispatcher may keep the ownership lock before the server reclaims it — see below         |
-| `WORKFLOW_DISPATCHER_OWNERSHIP_RETRY_INTERVAL_MS`        | `5000`             | retry cadence while another dispatcher holds the lock                                                    |
-| `WORKFLOW_DISPATCHER_OWNERSHIP_WAIT_MS`                  | unbounded          | give up on the lock after this long; `0` fails on the first miss, as versions before 0.16 always did     |
+| variable                                                 | default            | meaning                                                                                                                                                                                  |
+| -------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORKFLOW_WORLD_URL`                                     | —                  | same database as above                                                                                                                                                                   |
+| `WORKFLOW_WORLD_BOOTSTRAP_URL`                           | —                  | override when the host and the containers reach one database by different hostnames                                                                                                      |
+| `WORKFLOW_DISPATCHER_ACTIVATION_API_URL`                 | —                  | the host's activation API. Required                                                                                                                                                      |
+| `WORKFLOW_DISPATCHER_ACTIVATION_TOKEN`                   | —                  | bearer token for it. Required unless `NODE_ENV=development`                                                                                                                              |
+| `WORKFLOW_DISPATCHER_POOL_SIZE`                          | `10`               | claim/complete throughput, plus one connection held for Graphile LISTEN and one for dispatcher ownership                                                                                 |
+| `WORKFLOW_DISPATCHER_CONCURRENCY`                        | `poolSize - 2`     | held dispatches in flight across all tenants. Independent of the pool — see below                                                                                                        |
+| `WORKFLOW_DISPATCHER_POLL_INTERVAL_MS`                   | `500`              |                                                                                                                                                                                          |
+| `WORKFLOW_DISPATCHER_MAX_INFLIGHT_PER_TENANT`            | derived from cores | fairness ceiling, not a throttle                                                                                                                                                         |
+| `WORKFLOW_DISPATCHER_DISPATCH_TIMEOUT_MS`                | `900000`           | the only deadline on a held dispatch (the delivery does not use `fetch`, so undici's 300s cap does not apply). A backstop against a wedged executor; liveness is the lease renewal's job |
+| `WORKFLOW_DISPATCHER_ACTIVATION_LEASE_TTL_MS`            | `180000`           | must match what the host's control API issues                                                                                                                                            |
+| `WORKFLOW_DISPATCHER_LEASE_RENEW_INTERVAL_MS`            | `TTL / 3`          | must be well below the TTL, and is checked. Transient failures are absorbed while the lease has headroom                                                                                 |
+| `WORKFLOW_DISPATCHER_QUEUE_GC_INTERVAL_MS`               | `300000`           | reclaims the per-run graphile queue rows; graphile does not free them on its own                                                                                                         |
+| `WORKFLOW_DISPATCHER_BOOT_RECOVERY_DEPLOYMENTS_PER_WAVE` | `4`                | deployments whose recovered runs are released together at boot                                                                                                                           |
+| `WORKFLOW_DISPATCHER_BOOT_RECOVERY_WAVE_INTERVAL_MS`     | `30000`            | delay between those waves; `0` releases every recovered run at once                                                                                                                      |
+| `WORKFLOW_DISPATCHER_EXECUTOR_FAILURE_LIMIT`             | `5`                | consecutive executor `5xx` on one run before it is dead-lettered instead of retried to exhaustion                                                                                        |
+| `WORKFLOW_DISPATCHER_EXECUTOR_FAILURE_MIN_SPAN_MS`       | `60000`            | the streak must also last this long, so a short database outage does not quarantine healthy runs                                                                                         |
+| `WORKFLOW_DISPATCHER_MAINTENANCE_INTERVAL_MS`            | `60000`            | storage maintenance cadence; `0` disables the automatic loop                                                                                                                             |
+| `WORKFLOW_DISPATCHER_MAINTENANCE_STREAM_BATCH_SIZE`      | `50000`            | maximum physical stream rows deleted by one statement                                                                                                                                    |
+| `WORKFLOW_DISPATCHER_MAINTENANCE_MAX_BATCHES`            | `20`               | maximum stream/run deletion batches per pass                                                                                                                                             |
+| `WORKFLOW_DISPATCHER_MAINTENANCE_MAX_STREAMS_TO_PACK`    | `100`              | maximum terminal streams rewritten into blocks per pass                                                                                                                                  |
+| `WORKFLOW_DISPATCHER_MAINTENANCE_RUN_BATCH_SIZE`         | `1000`             | maximum expired workflow graphs deleted by one statement                                                                                                                                 |
+| `WORKFLOW_WORLD_STREAM_COMPACTION`                       | `on`               | also controls snapshot stripping during terminal block rewrites                                                                                                                          |
+| `WORKFLOW_DISPATCHER_OWNERSHIP_LIVENESS_MS`              | `90000`            | how long a dead dispatcher may keep the ownership lock before the server reclaims it — see below                                                                                         |
+| `WORKFLOW_DISPATCHER_OWNERSHIP_RETRY_INTERVAL_MS`        | `5000`             | retry cadence while another dispatcher holds the lock                                                                                                                                    |
+| `WORKFLOW_DISPATCHER_OWNERSHIP_WAIT_MS`                  | unbounded          | give up on the lock after this long; `0` fails on the first miss, as versions before 0.16 always did                                                                                     |
 
 #### Sizing the dispatcher pool
 
@@ -457,7 +457,7 @@ WORKFLOW_WORLD_E2E_URL=postgres://…/postgres pnpm run test:e2e
 ```
 
 ```bash
-# by hand, not in CI: one dispatch held open for 200s against the production
+# by hand, not in CI: one dispatch held open for 330s (past undici's 300s fetch deadline) against the production
 # lease settings, plus the control that proves the renewals are what kept it
 # alive. Minutes per run, which is why it is not in the matrix.
 WORKFLOW_WORLD_LEASE_CHECK_URL=postgres://…/wfw_lease pnpm run check:long-step
