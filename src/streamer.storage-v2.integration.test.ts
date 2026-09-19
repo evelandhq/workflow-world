@@ -193,6 +193,44 @@ describe.skipIf(!testUrl)("stream storage v2", () => {
     expect(read.data.map(({ data }) => Buffer.from(data).toString())).toEqual(["one", "two"]);
     expect(read.done).toBe(true);
   });
+  test("rows a retried terminal write appends after the first EOF never surface", async () => {
+    // A producer that loses the ACK of its terminal write retries it, which
+    // appends data and a second EOF after the first one. `get()` closes at the
+    // first EOF; the paged reads have to stop at the same place, and the live
+    // read must not try to enqueue on the controller it already closed.
+    const streamId = `strm_retried_eof_${suffix}`;
+    const text = (value: string) => new TextEncoder().encode(value);
+    await uncompacted.streams.write("wrun_retried_eof", streamId, text("one"));
+    await uncompacted.streams.write("wrun_retried_eof", streamId, text("two"));
+    await uncompacted.streams.close("wrun_retried_eof", streamId);
+    await uncompacted.streams.write("wrun_retried_eof", streamId, text("two"));
+    await uncompacted.streams.close("wrun_retried_eof", streamId);
+
+    const page = await uncompacted.streams.getChunks("wrun_retried_eof", streamId, { limit: 10 });
+    expect(page.data.map((chunk) => new TextDecoder().decode(chunk.data))).toEqual(["one", "two"]);
+    expect(page).toMatchObject({ done: true, hasMore: false });
+    expect(await uncompacted.streams.getInfo("wrun_retried_eof", streamId)).toEqual({
+      tailIndex: 1,
+      done: true,
+    });
+
+    const readAll = async (startIndex?: number) => {
+      const reader = (
+        await uncompacted.streams.get("wrun_retried_eof", streamId, startIndex)
+      ).getReader();
+      const seen: string[] = [];
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return seen;
+        seen.push(new TextDecoder().decode(value));
+      }
+    };
+    expect(await readAll()).toEqual(["one", "two"]);
+    // A negative start index counts back from the data before the first EOF.
+    expect(await readAll(-1)).toEqual(["two"]);
+    // At or past the data count the stream still closes instead of hanging.
+    expect(await readAll(2)).toEqual([]);
+  });
 });
 
 async function collect(stream: ReadableStream<Uint8Array>): Promise<Buffer[]> {

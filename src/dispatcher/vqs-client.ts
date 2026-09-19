@@ -1,3 +1,4 @@
+import { nodeHttpFetch } from "@workflow/world/node-http.js";
 import {
   DEPLOYMENT_HEADER,
   DISPATCH_VERSION,
@@ -74,16 +75,20 @@ export async function postVqsMessage(request: VqsRequest): Promise<VqsResult> {
   const timeout = AbortSignal.timeout(request.timeoutMs);
   const signal = request.signal ? AbortSignal.any([timeout, request.signal]) : timeout;
 
+  // Node's core HTTP client, not the global `fetch`. A delivery executes the
+  // workflow body inline, so response headers arrive only once that work is
+  // done, and undici gives up on them after a fixed 300 seconds that a caller of
+  // the global `fetch` cannot lift. That is well inside `timeoutMs`, so a
+  // slow-but-healthy step was declared dead and redelivered while the original
+  // was still running. No headers or body deadline is set here: `timeoutMs` is
+  // the only one, and liveness is the lease renewal's job.
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await nodeHttpFetch(url, {
       method: "POST",
-      headers,
-      body: request.body as BodyInit,
+      headers: new Headers(headers),
+      body: request.body,
       signal,
-      // @ts-expect-error -- Node accepts `duplex` for streaming bodies; it is
-      // not in the DOM lib types.
-      duplex: "half",
     });
   } catch (error) {
     const name = error instanceof Error ? error.name : "";
@@ -91,7 +96,9 @@ export async function postVqsMessage(request: VqsRequest): Promise<VqsResult> {
     return {
       type: "error",
       status: 0,
-      text: timedOut ? `Dispatch timed out after ${String(request.timeoutMs)}ms.` : String(error),
+      text: timedOut
+        ? `Dispatch timed out after ${String(request.timeoutMs)}ms.`
+        : describeTransportError(error),
       // A dead or restarting executor is exactly what retries exist for.
       retryable: true,
     };
@@ -120,4 +127,27 @@ export async function postVqsMessage(request: VqsRequest): Promise<VqsResult> {
     // A non-JSON 2xx body means "done"; upstream treats it the same way.
   }
   return { type: "completed" };
+}
+
+/**
+ * A transport failure with its cause chain spelled out. `String(error)` alone
+ * loses the `code` (`ECONNREFUSED`, `ECONNRESET`, ...) that tells a dead
+ * executor apart from a delivery that was cut off mid-flight.
+ */
+function describeTransportError(error: unknown): string {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  for (let current = error; current !== undefined && current !== null;) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    if (!(current instanceof Error)) {
+      parts.push(String(current));
+      break;
+    }
+    const code = (current as NodeJS.ErrnoException).code;
+    const text = String(current);
+    parts.push(code !== undefined && !text.includes(code) ? `${text} [${code}]` : text);
+    current = current.cause;
+  }
+  return parts.join(" <- ");
 }

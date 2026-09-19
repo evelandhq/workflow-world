@@ -8,9 +8,12 @@
  * exercises the mechanism but says nothing about duration. This closes that.
  *
  * Run by hand, not by CI. The whole point is real durations: the default
- * configuration holds one dispatch open for 200 seconds against the production
+ * configuration holds one dispatch open for 330 seconds against the production
  * lease settings (180s TTL, 60s renewal interval), which is minutes of wall
- * clock per invocation. Putting that in the matrix would tax every push for a
+ * clock per invocation. 330 and not less: the hold has to outlast the 300s
+ * headers deadline undici puts on the global `fetch` as well as the lease TTL.
+ * At 200s this check passed for months while every delivery longer than five
+ * minutes was being cut off and redelivered. Putting that in the matrix would tax every push for a
  * property that changes about once a year.
  *
  *   pnpm run check:long-step
@@ -71,7 +74,7 @@ const ACTIVATION_TOKEN = "lease-check-activation-token";
 const LEASE_TTL_MS = Number(process.env.LEASE_CHECK_TTL_MS ?? 180_000);
 const RENEW_INTERVAL_MS = Number(process.env.LEASE_CHECK_RENEW_INTERVAL_MS ?? 60_000);
 /** Long enough for three renewals, and comfortably past one whole TTL. */
-const HOLD_MS = Number(process.env.LEASE_CHECK_HOLD_MS ?? 200_000);
+const HOLD_MS = Number(process.env.LEASE_CHECK_HOLD_MS ?? 330_000);
 
 const DATABASE_URL =
   process.env.WORKFLOW_WORLD_LEASE_CHECK_URL ?? process.env.WORKFLOW_WORLD_CONFORMANCE_URL;
@@ -214,10 +217,19 @@ async function runScenario({ label, refuseRenewals }) {
   // truncating the table, because the URL may well be a database something else
   // is also using.
   await pool.query("delete from workflow.dispatch_dead_letters where tenant_id = $1", [TENANT_ID]);
-  const { rowCount: leftover } = await pool.query(
-    "delete from graphile_worker._private_jobs where payload->>'tenantId' = $1",
-    [TENANT_ID],
+  // On a fresh database graphile has not installed its schema yet (the
+  // dispatcher does that on boot), and then there is nothing to clear.
+  const { rows: graphile } = await pool.query(
+    "select to_regclass('graphile_worker._private_jobs') is not null as installed",
   );
+  const leftover = graphile[0]?.installed
+    ? (
+        await pool.query(
+          "delete from graphile_worker._private_jobs where payload->>'tenantId' = $1",
+          [TENANT_ID],
+        )
+      ).rowCount
+    : 0;
   if (leftover > 0) console.log(`[check] cleared ${leftover} leftover job(s) from a previous run`);
 
   const executor = await startSlowExecutor();

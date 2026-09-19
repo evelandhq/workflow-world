@@ -19,6 +19,7 @@ import { createServer, type Server } from "node:http";
 import { setWorkflowBasePath } from "@workflow/utils";
 import { getWorkflowPort } from "@workflow/utils/get-port";
 import { getQueueTopicPrefix, MessageId, parseQueueName, type QueuePayload } from "@workflow/world";
+import { nodeHttpFetch } from "@workflow/world/node-http.js";
 import { createWorld } from "@workflow/world-local";
 import { makeWorkerUtils, type Runner, run, type WorkerUtils } from "graphile-worker";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,6 +50,13 @@ type RecordedRequest = {
 
 const createdQueues: Array<ReturnType<typeof createQueue>> = [];
 const createdServers: Server[] = [];
+
+// Deliveries go over `nodeHttpFetch`, not the global `fetch` (see queue.ts).
+// The pool helpers stay real; only the request itself is replaced per test.
+vi.mock("@workflow/world/node-http.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@workflow/world/node-http.js")>()),
+  nodeHttpFetch: vi.fn(),
+}));
 
 vi.mock("graphile-worker", () => ({
   Logger: class Logger {
@@ -96,8 +104,14 @@ describe("postgres queue http execution", () => {
     })),
   } as any;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    // Real transport unless a test replaces it: several tests deliver to a
+    // local server.
+    const actual = await vi.importActual<typeof import("@workflow/world/node-http.js")>(
+      "@workflow/world/node-http.js",
+    );
+    vi.mocked(nodeHttpFetch).mockImplementation(actual.nodeHttpFetch);
 
     vi.mocked(makeWorkerUtils).mockResolvedValue(workerUtilsMock);
     vi.mocked(getWorkflowPort).mockResolvedValue(undefined);
@@ -209,7 +223,7 @@ describe("postgres queue http execution", () => {
       activeRequests -= 1;
       return Response.json({ ok: true });
     });
-    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(nodeHttpFetch).mockImplementation(fetchMock as any);
     process.env.WORKFLOW_LOCAL_BASE_URL = "https://workflow.example.test";
 
     const queue = buildQueue(buildConfig(), pool);
@@ -251,7 +265,7 @@ describe("postgres queue http execution", () => {
 
   it("does not require a runId for workflow health-check payloads", async () => {
     const fetchMock = vi.fn(async () => Response.json({ ok: true }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(nodeHttpFetch).mockImplementation(fetchMock as any);
     process.env.WORKFLOW_LOCAL_BASE_URL = "https://workflow.example.test";
 
     const queue = buildQueue(buildConfig(), pool);
@@ -268,13 +282,10 @@ describe("postgres queue http execution", () => {
 
       expect(fetchMock).toHaveBeenCalledWith(
         "https://workflow.example.test/.well-known/workflow/v1/flow",
-        expect.objectContaining({
-          method: "POST",
-          headers: expect.objectContaining({
-            "x-vqs-queue-name": "__wkf_workflow_health_check",
-          }),
-        }),
+        expect.objectContaining({ method: "POST" }),
       );
+      const [, init] = fetchMock.mock.calls[0] as unknown as [string, { headers: Headers }];
+      expect(init.headers.get("x-vqs-queue-name")).toBe("__wkf_workflow_health_check");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -282,7 +293,7 @@ describe("postgres queue http execution", () => {
 
   it("uses basePath for local postgres queue HTTP delivery", async () => {
     const fetchMock = vi.fn(async () => Response.json({ ok: true }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(nodeHttpFetch).mockImplementation(fetchMock as any);
     const port = await getUnusedLoopbackPort();
     await startWorkflowHttpServer([], port);
     process.env.PORT = String(port);
@@ -360,9 +371,48 @@ describe("postgres queue http execution", () => {
     }
   });
 
+  it("does not deliver through the global fetch, whose undici deadlines cannot be lifted", async () => {
+    // A delivery runs the workflow body inline, so headers arrive only when the
+    // work is done; undici's fixed 300s headers deadline would redeliver a
+    // slow-but-healthy step while the original is still running.
+    vi.stubGlobal("fetch", () => Promise.reject(new TypeError("fetch failed")));
+    const requests: RecordedRequest[] = [];
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        requests.push({
+          method: req.method,
+          url: req.url,
+          headers: req.headers,
+          body: Buffer.concat(chunks).toString("utf8"),
+        });
+        res.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
+      });
+    });
+    createdServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as { port: number };
+    process.env.WORKFLOW_LOCAL_BASE_URL = `http://127.0.0.1:${String(port)}`;
+
+    const queue = buildQueue(buildConfig(), pool);
+    try {
+      await queue.start();
+      const task = getTaskHandler(EMBEDDED_JOB_NAME);
+      await task(buildMessageData("__wkf_workflow_test-workflow", { runId: "wrun_01ABC" }), {
+        job: { attempts: 1 },
+      });
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({ method: "POST", url: "/.well-known/workflow/v1/flow" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("passes graphile's abortSignal to the HTTP delivery", async () => {
     const fetchMock = vi.fn(async () => Response.json({ ok: true }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(nodeHttpFetch).mockImplementation(fetchMock as any);
     process.env.WORKFLOW_LOCAL_BASE_URL = "https://workflow.example.test";
     const controller = new AbortController();
 
@@ -390,7 +440,7 @@ describe("postgres queue http execution", () => {
     // later". The follow-up job must be enqueued before the handler returns, or
     // a crash between the two loses the wake-up entirely.
     const fetchMock = vi.fn(async () => Response.json({ timeoutSeconds: 30 }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(nodeHttpFetch).mockImplementation(fetchMock as any);
     process.env.WORKFLOW_LOCAL_BASE_URL = "https://workflow.example.test";
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2024-01-01T00:00:00.000Z"));
@@ -429,7 +479,7 @@ describe("postgres queue http execution", () => {
     // graphile redelivers on its own schedule; the idempotency-key cache is what
     // keeps a completed workflow message from being POSTed to the executor twice.
     const fetchMock = vi.fn(async () => Response.json({ ok: true }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(nodeHttpFetch).mockImplementation(fetchMock as any);
     process.env.WORKFLOW_LOCAL_BASE_URL = "https://workflow.example.test";
 
     const queue = buildQueue(buildConfig(), pool);
