@@ -418,7 +418,11 @@ export function createRunsStorage(drizzle: Drizzle, tenantId: string): Storage["
             eq(Schema.runs.tenantId, tenantId),
             map(fromCursor, (c) => lt(runs.runId, c)),
             map(params?.workflowName, (wf) => eq(runs.workflowName, wf)),
-            map(params?.status, (wf) => eq(runs.status, wf)),
+            // A status array matches any listed status; `[]` matches none,
+            // which is what `inArray` renders for an empty list.
+            map(params?.status, (status) =>
+              Array.isArray(status) ? inArray(runs.status, status) : eq(runs.status, status),
+            ),
           ),
         )
         .orderBy(desc(runs.runId))
