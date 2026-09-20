@@ -1,8 +1,9 @@
 import type { Hook, HookCreatedEventRequest, Step, WorkflowRun } from "@workflow/world";
-import { SPEC_VERSION_CURRENT } from "@workflow/world";
+import { FIRST_EVENT_SLOT, SPEC_VERSION_CURRENT, slotToEventId } from "@workflow/world";
 import { encode } from "cbor-x";
-import { Pool } from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Pool, type PoolClient } from "pg";
+import { ulid } from "ulid";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import * as DrizzleSchema from "./drizzle/schema.js";
 import { createClient } from "./drizzle/index.js";
 import {
@@ -46,6 +47,8 @@ const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
  * file repeatable against a database it has already used.
  */
 const TENANT = "prj_port_races";
+/** Tenant of the cross-replica start race group at the end of the file. */
+const TENANT_START = "prj_port_races_start";
 
 type EventsStorage = ReturnType<typeof createEventsStorage>;
 
@@ -596,5 +599,174 @@ describe.skipIf(!testUrl)("concurrent entity-creation races", () => {
     const conflicts = evts.data.filter((e) => e.eventType === "hook_conflict");
     expect(created).toHaveLength(attempts);
     expect(conflicts).toHaveLength(0);
+  });
+});
+
+/**
+ * Resolves once, the first time `pool` is about to send a statement matching
+ * `pattern`, and holds that statement until `release()` is called. Drizzle
+ * sends plain statements through `pool.query` and transactional ones through a
+ * checked-out client, so both are intercepted.
+ */
+function holdFirstStatement(pool: Pool, pattern: RegExp) {
+  let reached!: () => void;
+  let release!: () => void;
+  const atGate = new Promise<void>((resolve) => (reached = resolve));
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let armed = true;
+
+  const textOf = (query: unknown) =>
+    typeof query === "string" ? query : ((query as { text?: string } | undefined)?.text ?? "");
+  const gate = <T extends (...args: any[]) => any>(original: T, self: unknown): T =>
+    (async (...args: any[]) => {
+      if (armed && pattern.test(textOf(args[0]))) {
+        armed = false;
+        reached();
+        await released;
+      }
+      return original.apply(self, args);
+    }) as unknown as T;
+
+  pool.query = gate(pool.query, pool);
+  // `pool.query` checks a client out through the callback form of `connect`;
+  // only the promise form (drizzle's transactions) hands a client to the caller.
+  const connect = pool.connect.bind(pool) as (...args: unknown[]) => Promise<PoolClient>;
+  (pool as { connect: unknown }).connect = (...args: unknown[]) => {
+    if (args.length > 0) return connect(...args);
+    return connect().then((client) => {
+      const patched = client as { query: unknown; __gated?: true };
+      if (!patched.__gated) {
+        patched.query = gate(client.query, client);
+        patched.__gated = true;
+      }
+      return client;
+    });
+  };
+
+  return { atGate, release };
+}
+
+/**
+ * Multi-replica start race. In external runner mode the dispatcher may deliver
+ * a run's first message to a DIFFERENT replica while the creating replica is
+ * still inside `events.create(run_created)`. Each replica is modelled here by
+ * its own pool, and the creator is held immediately before its `run_created`
+ * event INSERT — the exact window a burst of concurrent session starts hits.
+ *
+ * The log must still open with `run_created` in the first slot: a run whose
+ * log starts at `run_started` fails replay with `has no "run_created" event`.
+ */
+describe.skipIf(!testUrl)("run_created vs. cross-replica run_started", () => {
+  let admin: Pool;
+  let creatorPool: Pool;
+  let deliveryPool: Pool;
+
+  async function clearTenantRows() {
+    for (const table of ["workflow_events", "workflow_event_slots", "workflow_runs"]) {
+      await admin.query(`delete from workflow.${table} where tenant_id = $1`, [TENANT_START]);
+    }
+  }
+
+  beforeAll(async () => {
+    admin = new Pool({ connectionString: testUrl, max: 2 });
+    await runMigrations(admin, { migrationsDir: resolveMigrationsDir() });
+    await ensureTenantPartitions(admin, TENANT_START);
+  }, 60_000);
+
+  beforeEach(async () => {
+    await clearTenantRows();
+    creatorPool = new Pool({ connectionString: testUrl, max: 2 });
+    deliveryPool = new Pool({ connectionString: testUrl, max: 2 });
+  });
+
+  afterEach(async () => {
+    await creatorPool?.end().catch(() => {});
+    await deliveryPool?.end().catch(() => {});
+  });
+
+  afterAll(async () => {
+    await clearTenantRows().catch(() => {});
+    await dropTenantPartitions(admin, TENANT_START).catch(() => {});
+    await admin?.end().catch(() => {});
+  });
+
+  it("keeps run_created in the first slot when another replica starts the run mid-create", async () => {
+    const creator = createEventsStorage(createClient(creatorPool), TENANT_START);
+    const delivery = createEventsStorage(createClient(deliveryPool), TENANT_START);
+    const runId = `wrun_${ulid()}`;
+    const runInput = {
+      deploymentId: "deployment-123",
+      workflowName: "test-workflow",
+      input: new Uint8Array(),
+    };
+
+    const gate = holdFirstStatement(creatorPool, /insert into "workflow"\."workflow_events"/i);
+    const created = creator.create(runId, { eventType: "run_created", eventData: runInput });
+    await gate.atGate;
+
+    // The other replica receives the run's first message and starts it, with
+    // the run input attached exactly as the runtime's resilient start sends it.
+    const started = delivery.create(runId, { eventType: "run_started", eventData: runInput });
+    // Either it finishes while the creator is held (it could see the run), or
+    // it is blocked behind the creator's uncommitted work. Both are observed
+    // before the creator is allowed to continue.
+    const settledEarly = await Promise.race([
+      started.then(
+        () => true,
+        () => true,
+      ),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 500)),
+    ]);
+    gate.release();
+
+    const [createdResult, startedResult] = await Promise.allSettled([created, started]);
+
+    const log = await creator.list({ runId, pagination: { limit: 100 } });
+    const types = log.data.map((e) => e.eventType);
+    expect(types, `run_started settled while creator was held: ${String(settledEarly)}`).toEqual([
+      "run_created",
+      "run_started",
+    ]);
+    expect(log.data[0]?.eventId).toBe(slotToEventId(FIRST_EVENT_SLOT));
+    expect(createdResult.status).toBe("fulfilled");
+    expect(startedResult.status).toBe("fulfilled");
+    const [row] = (
+      await admin.query(
+        `select status from workflow.workflow_runs where tenant_id = $1 and id = $2`,
+        [TENANT_START, runId],
+      )
+    ).rows;
+    expect(row?.status).toBe("running");
+  });
+
+  it("rejects run_created with EntityConflictError when a resilient start is mid-create", async () => {
+    const creator = createEventsStorage(createClient(creatorPool), TENANT_START);
+    const delivery = createEventsStorage(createClient(deliveryPool), TENANT_START);
+    const runId = `wrun_${ulid()}`;
+    const runInput = {
+      deploymentId: "deployment-123",
+      workflowName: "test-workflow",
+      input: new Uint8Array(),
+    };
+
+    // Mirror image: the resilient start owns the creation and is held before
+    // its run_created event INSERT when the original run_created arrives.
+    const gate = holdFirstStatement(deliveryPool, /insert into "workflow"\."workflow_events"/i);
+    const started = delivery.create(runId, { eventType: "run_started", eventData: runInput });
+    await gate.atGate;
+
+    const created = creator.create(runId, { eventType: "run_created", eventData: runInput });
+    await Promise.race([
+      created.catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 500)),
+    ]);
+    gate.release();
+
+    await expect(created).rejects.toMatchObject({ name: "EntityConflictError" });
+    await expect(started).resolves.toMatchObject({ run: { status: "running" } });
+
+    const log = await creator.list({ runId, pagination: { limit: 100 } });
+    expect(log.data.map((e) => e.eventType)).toEqual(["run_created", "run_started"]);
+    expect(log.data[0]?.eventId).toBe(slotToEventId(FIRST_EVENT_SLOT));
   });
 });
