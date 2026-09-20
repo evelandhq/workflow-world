@@ -3,8 +3,9 @@
 > Historical rollout plan. The original 24-hour host primitive shipped first;
 > storage v2 now adds write-side snapshot stripping, physical blocks, and
 > deadline-driven retention classes (read-side rehydration and its database
-> checkpoints were later removed once every supported Eve line wrote deltas). See the README and
-> `docs/design.md` for the current contract.
+> checkpoints were later removed once every supported Eve line wrote deltas). See
+> [storage and retention](./operations/storage.md) and [design](./design.md) for
+> the current contract.
 
 ## Status and decisions
 
