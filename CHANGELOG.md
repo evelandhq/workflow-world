@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.21.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.20.1...workflow-world-v0.21.0) (2026-09-20)
+
+
+### Features
+
+* dispatch to executors that are always running, behind a URL ([#102](https://github.com/evelandhq/workflow-world/issues/102)) ([4b7d57b](https://github.com/evelandhq/workflow-world/commit/4b7d57bfa943e3bf2152c22065c36dfccfe8e6d8))
+
+
+### Fixes
+
+* commit a run and its run_created event in one transaction ([#100](https://github.com/evelandhq/workflow-world/issues/100)) ([0b1fd00](https://github.com/evelandhq/workflow-world/commit/0b1fd00a80fa1db56b7e65c14c2944ca3b515bac))
+
 ## [0.20.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.20.0...workflow-world-v0.20.1) (2026-09-20)
 
 
