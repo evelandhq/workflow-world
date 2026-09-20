@@ -5,11 +5,11 @@ afterEach(() => {
 });
 
 test("a matrix job runs only its selected Eve version", async () => {
-  vi.stubEnv("EVE_VERSION", "0.58.1");
+  vi.stubEnv("EVE_VERSION", "0.62.0");
 
   const { ENABLED_EVE_VERSIONS } = await import("./eve-versions.mts?matrix-selected");
 
-  expect(ENABLED_EVE_VERSIONS.map(({ version }) => version)).toEqual(["0.58.1"]);
+  expect(ENABLED_EVE_VERSIONS.map(({ version }) => version)).toEqual(["0.62.0"]);
 });
 
 test("an unknown matrix version fails instead of silently running no tests", async () => {
