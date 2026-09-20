@@ -124,6 +124,15 @@ export type PostgresQueue = Queue & {
   close(): Promise<void>;
 };
 
+/**
+ * `'latest'` is upstream's "whatever is current" alias, which this World
+ * resolves to itself (`resolveLatestDeploymentId`), and an empty id addresses
+ * nothing; neither names a deployment the dispatcher could route to.
+ */
+function isExactDeploymentId(deploymentId: string | undefined): deploymentId is string {
+  return deploymentId !== undefined && deploymentId.length > 0 && deploymentId !== "latest";
+}
+
 export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQueue {
   const port = config.port ?? (process.env.PORT ? Number(process.env.PORT) : undefined);
   const tenantId = config.tenantId;
@@ -265,6 +274,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     delaySeconds,
     jobKey,
     runId,
+    deploymentId,
   }: {
     queueId: string;
     body: Buffer | Uint8Array;
@@ -276,6 +286,8 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     jobKey?: string;
     /** Present for a workflow invoke; absent for anything the schema rejects. */
     runId?: string;
+    /** The deployment this message is addressed to; this one when omitted. */
+    deploymentId?: string;
   }) {
     const utils = workerUtils;
     if (!utils) {
@@ -297,7 +309,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
         idempotencyKey,
         headers,
         tenantId,
-        deploymentId: config.deploymentId,
+        deploymentId: deploymentId ?? config.deploymentId,
         // Recorded so the delivery side can rebuild the exact prefix; the
         // dispatcher must not re-resolve it from its own environment.
         ...(queueNamespace !== undefined ? { queueNamespace } : {}),
@@ -588,6 +600,14 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       delaySeconds: opts?.delaySeconds,
       jobKey: opts?.idempotencyKey ?? messageId,
       ...(invoke.success ? { runId: invoke.data.runId } : {}),
+      // A producer that names a deployment means it: `start()` with an explicit
+      // `deploymentId` (eve's deployment handoff) and the capability probe
+      // before it address ANOTHER deployment. `start()` writes `run_created`
+      // and this message in parallel, and until that row exists the dispatcher
+      // routes on this hint, so stamping the enqueuer here would hand the new
+      // run's first invocation to the deployment it is moving away from. Once
+      // the row exists it is authoritative and the hint is not consulted.
+      ...(isExactDeploymentId(opts?.deploymentId) ? { deploymentId: opts.deploymentId } : {}),
     });
     return { messageId };
   };
@@ -637,6 +657,8 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
             delaySeconds: result.timeoutSeconds,
             jobKey: messageData.idempotencyKey ?? messageData.messageId,
             ...(serializedRunId ? { runId: serializedRunId } : {}),
+            // A reschedule is the same message: it keeps its address.
+            deploymentId: messageData.deploymentId,
           });
           return "rescheduled";
         }

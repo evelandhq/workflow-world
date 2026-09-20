@@ -371,6 +371,43 @@ describe("postgres queue http execution", () => {
     }
   });
 
+  it("addresses a cross-deployment start to the target, not to the deployment that enqueued it", async () => {
+    // `start(workflow, args, { deploymentId })` -- what eve's deployment
+    // handoff does -- writes `run_created` and this queue message in parallel.
+    // Until the run row exists the dispatcher routes on the message's hint, so
+    // a hint naming the enqueuer would deliver the new run's first invocation
+    // to the very deployment it is leaving.
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+
+    await queue.queue(
+      "__wkf_workflow_test-workflow",
+      { runId: "wrun_01TARGET" },
+      { deploymentId: "dep_handoff_target" },
+    );
+
+    expect(workerUtilsMock.addJob).toHaveBeenCalledWith(
+      EMBEDDED_JOB_NAME,
+      expect.objectContaining({ tenantId: TENANT, deploymentId: "dep_handoff_target" }),
+      expect.anything(),
+    );
+  });
+
+  it("keeps its own deployment as the hint when the producer names none", async () => {
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+
+    for (const opts of [undefined, {}, { deploymentId: "" }, { deploymentId: "latest" }]) {
+      vi.mocked(workerUtilsMock.addJob).mockClear();
+      await queue.queue("__wkf_workflow_test-workflow", { runId: "wrun_01OWN" }, opts);
+      expect(workerUtilsMock.addJob).toHaveBeenCalledWith(
+        EMBEDDED_JOB_NAME,
+        expect.objectContaining({ deploymentId: DEPLOYMENT }),
+        expect.anything(),
+      );
+    }
+  });
+
   it("does not deliver through the global fetch, whose undici deadlines cannot be lifted", async () => {
     // A delivery runs the workflow body inline, so headers arrive only when the
     // work is done; undici's fixed 300s headers deadline would redeliver a
