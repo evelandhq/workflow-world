@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.20.0...workflow-world-v0.20.1) (2026-09-20)
+
+
+### Fixes
+
+* address a cross-deployment start to its target deployment ([#98](https://github.com/evelandhq/workflow-world/issues/98)) ([859766e](https://github.com/evelandhq/workflow-world/commit/859766eba91b8e8527914d19bf7be2c2c9572570))
+
 ## [0.20.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.19.1...workflow-world-v0.20.0) (2026-09-19)
 
 
