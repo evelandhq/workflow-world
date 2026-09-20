@@ -32,6 +32,7 @@ import {
   RUNTIME_SECRET_HEADER,
   runQueueName,
 } from "./dispatch-contract.js";
+import { inflightDeliveries } from "./inflight.js";
 import { MessageData } from "./message.js";
 import { createQueue } from "./queue.js";
 import { derivePartitionName } from "./tenant.js";
@@ -610,6 +611,36 @@ describe("postgres queue http execution", () => {
 
     expect(response.status).toBe(200);
     expect(wrappedHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts a delivery as in flight until the step it carries is done", async () => {
+    // A host drains an executor by waiting for this to reach zero before it
+    // sends the signal; a delivery cut off mid-step is run again, side effects
+    // included. A refused request is not a step and must not hold a drain up.
+    const queue = buildQueue(buildConfig(), pool);
+    const handler = queue.createQueueHandler(getQueueTopicPrefix("workflow"), async () => {});
+    let finish: (response: Response) => void = () => {};
+    wrappedHandler.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (finish = resolve)),
+    );
+
+    expect(inflightDeliveries()).toBe(0);
+    const delivery = handler(dispatchRequest({}));
+    await vi.waitFor(() => expect(inflightDeliveries()).toBe(1));
+
+    const refused = await handler(
+      dispatchRequest({ [DISPATCH_VERSION_HEADER]: String(DISPATCH_VERSION + 1) }),
+    );
+    expect(refused.status).toBe(400);
+    expect(inflightDeliveries()).toBe(1);
+
+    finish(Response.json({ ok: true }));
+    await delivery;
+    expect(inflightDeliveries()).toBe(0);
+
+    wrappedHandler.mockImplementationOnce(() => Promise.reject(new Error("step threw")));
+    await expect(handler(dispatchRequest({}))).rejects.toThrow("step threw");
+    expect(inflightDeliveries()).toBe(0);
   });
 });
 

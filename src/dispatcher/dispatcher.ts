@@ -191,7 +191,12 @@ export async function dispatchMessage(
     },
     (signal) =>
       postVqsMessage({
-        endpointPort: activation.activation.endpointPort,
+        ...(activation.activation.endpointPort === undefined
+          ? {}
+          : { endpointPort: activation.activation.endpointPort }),
+        ...(activation.activation.endpointUrl === undefined
+          ? {}
+          : { endpointUrl: activation.activation.endpointUrl }),
         queueName: input.queueName,
         messageId: message.messageId,
         attempt: input.attempt,
@@ -229,7 +234,11 @@ export async function dispatchMessage(
   if (!result.retryable) {
     return {
       type: "dead-letter",
-      reason: `Executor rejected the dispatch with HTTP ${String(result.status)}: ${result.text}`,
+      // Status 0 is a dispatch that was never sent: its address could not be used.
+      reason:
+        result.status === 0
+          ? result.text
+          : `Executor rejected the dispatch with HTTP ${String(result.status)}: ${result.text}`,
     };
   }
   // A 5xx means the executor ran the message and threw. Once is a blip; the

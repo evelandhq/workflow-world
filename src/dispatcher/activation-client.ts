@@ -11,9 +11,15 @@
  */
 import { DISPATCH_VERSION } from "../dispatch-contract.js";
 
+/**
+ * Where the activated executor can be reached. `endpointPort` is loopback, for
+ * a host that runs executors beside the dispatcher; `endpointUrl` is an origin
+ * anywhere else and takes precedence. At least one is set.
+ */
 export type Activation = {
   leaseId: string;
-  endpointPort: number;
+  endpointPort?: number;
+  endpointUrl?: string;
 };
 
 export type ActivationOutcome =
@@ -104,13 +110,15 @@ export function createActivationClient(input: {
 
       const value = (await response.json().catch(() => null)) as {
         lease?: { id?: unknown };
-        runtimeInstance?: { endpointPort?: unknown };
+        runtimeInstance?: { endpointPort?: unknown; endpointUrl?: unknown };
         workflow?: { selectedProtocol?: unknown };
       } | null;
+      const endpointPort = value?.runtimeInstance?.endpointPort;
+      const endpointUrl = value?.runtimeInstance?.endpointUrl;
       if (
         !value ||
         typeof value.lease?.id !== "string" ||
-        typeof value.runtimeInstance?.endpointPort !== "number"
+        (typeof endpointPort !== "number" && typeof endpointUrl !== "string")
       ) {
         return {
           type: "unavailable",
@@ -141,7 +149,8 @@ export function createActivationClient(input: {
         type: "activated",
         activation: {
           leaseId: value.lease.id,
-          endpointPort: value.runtimeInstance.endpointPort,
+          ...(typeof endpointPort === "number" ? { endpointPort } : {}),
+          ...(typeof endpointUrl === "string" ? { endpointUrl } : {}),
         },
       };
     },

@@ -17,6 +17,7 @@
  * suffixed jobs through the old deployment's runner, which is the same run-out
  * shape the world migration itself uses.
  */
+import { trackDelivery } from "./inflight.js";
 import { connect } from "node:net";
 import * as Stream from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -231,7 +232,9 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
           );
         }
       }
-      return inner(req);
+      // Counted only past the checks above: a rejected request is not a step
+      // this process is running, and must not hold up a drain.
+      return trackDelivery(() => inner(req));
     };
   };
 

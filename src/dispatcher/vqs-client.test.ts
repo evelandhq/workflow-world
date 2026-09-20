@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { postVqsMessage, type VqsRequest } from "./vqs-client.js";
+import { parseEndpointUrl, postVqsMessage, type VqsRequest } from "./vqs-client.js";
 
 const servers: Server[] = [];
 
@@ -59,6 +59,50 @@ describe("postVqsMessage", () => {
     expect(received).toEqual({
       url: "/.well-known/workflow/v1/flow",
       body: '{"runId":"wrun_01"}',
+    });
+  });
+
+  it("delivers to an executor named by URL, and prefers it over the loopback port", async () => {
+    // An executor behind a service is not on loopback. The port is what a
+    // control plane already sends; the URL wins so it can be added beside it.
+    let path: string | undefined;
+    const port = await listen((req, res) => {
+      path = req.url;
+      req.resume();
+      res.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
+    });
+
+    await expect(
+      postVqsMessage(request(1, { endpointUrl: `http://127.0.0.1:${String(port)}` })),
+    ).resolves.toEqual({ type: "completed" });
+    expect(path).toBe("/.well-known/workflow/v1/flow");
+  });
+
+  it("refuses an executor URL it cannot use, without retrying", async () => {
+    // The address comes from configuration or the control plane, so the next
+    // attempt would resolve to the same one. And the dispatch carries the
+    // runtime secret: only the route this package chose may receive it.
+    for (const endpointUrl of [
+      "not a url",
+      "ftp://executor.internal",
+      "http://user:pass@executor.internal",
+      "http://executor.internal/somewhere/else",
+      "http://executor.internal/?next=1",
+    ]) {
+      const result = await postVqsMessage(request(1, { endpointUrl }));
+      expect(result).toMatchObject({ type: "error", status: 0, retryable: false });
+    }
+    await expect(postVqsMessage({ ...request(1), endpointPort: undefined })).resolves.toMatchObject(
+      { type: "error", retryable: false },
+    );
+  });
+
+  it("keeps only the origin of an executor URL", () => {
+    expect(parseEndpointUrl("https://jiri.internal:8443/")).toEqual({
+      origin: "https://jiri.internal:8443",
+    });
+    expect(parseEndpointUrl("http://jiri.svc.cluster.local")).toEqual({
+      origin: "http://jiri.svc.cluster.local",
     });
   });
 

@@ -42,6 +42,35 @@ leave the pool alone. Earlier versions rejected a concurrency above
 `poolSize - 2`, on the belief that a running job holds a connection; that bound
 is gone, and only a floor of 4 on the pool itself remains.
 
+## Executors that are always running
+
+Set `WORKFLOW_DISPATCHER_STATIC_ENDPOINTS` instead of the activation API when
+the executors do not scale to zero — a service running its own replicas:
+
+```bash
+WORKFLOW_DISPATCHER_STATIC_ENDPOINTS=jiri-v4=http://jiri-v4.internal:3000
+```
+
+Each entry is a deployment id and the origin its executors are reached at; put a
+load balancer or a Kubernetes Service there and let it pick the replica. Things
+that differ from a platform host:
+
+- **Raise `WORKFLOW_DISPATCHER_MAX_INFLIGHT_PER_TENANT`.** Its default is a
+  fairness ceiling derived from the dispatcher's cores (2–16). With one tenant
+  it is the cap on the whole service; set it to the concurrency.
+- **Keep the flow route private.** `/.well-known/workflow/` receives dispatches
+  carrying the runtime secret. Only the dispatcher should reach it; do not
+  publish it through the ingress.
+- **Drain before stopping a replica.** Fail its readiness check, wait until
+  `inflightDeliveries()` (root export) is zero, then send the signal. In
+  Kubernetes that is a `preStop` hook polling a route the application serves,
+  with `terminationGracePeriodSeconds` at least `WORKFLOW_DISPATCHER_DISPATCH_TIMEOUT_MS`.
+  A replica stopped mid-step loses nothing, but the step runs again.
+- **A build that cannot replay the previous one's runs is a new deployment id.**
+  List both while the old one still has runs, each at its own origin, and remove
+  the old entry once they are over. Messages for a deployment that is no longer
+  listed are dead-lettered.
+
 ## Readiness and boot recovery
 
 The dispatcher binds no port. Readiness is the literal line

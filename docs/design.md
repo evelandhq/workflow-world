@@ -58,7 +58,7 @@ sequenceDiagram
     participant D as workflow dispatcher
     A->>PG: world.queue → add_job(flags=[project:X], queueName=wfrun:…, run_at)
     D->>PG: graphile claim (LISTEN/NOTIFY + poll, forbiddenFlags skips capped tenants)
-    D->>D: affinity: run.deploymentId → activation lease → endpointPort
+    D->>D: affinity: run.deploymentId → activation lease → executor endpoint
     D->>A: held POST /.well-known/workflow/v1/flow (for the step's whole duration)
     A->>PG: executor runs the step; storage/events/chunks written direct
     A-->>D: 200 → job complete (failure → maxAttempts 49 + backoff)
@@ -433,9 +433,19 @@ test behind it rather than a silent "null means default".
 
 ## The dispatch contract
 
-One held `POST http://127.0.0.1:<endpointPort>/.well-known/workflow/v1/flow` per
-in-flight step, open for the step's whole duration. The POST returning is what
-marks the job complete.
+One held `POST <executor>/.well-known/workflow/v1/flow` per in-flight step, open
+for the step's whole duration. The POST returning is what marks the job complete.
+
+`<executor>` comes from the activation. `endpointPort` means loopback,
+`http://127.0.0.1:<endpointPort>`, which is every host that runs its executors
+beside the dispatcher. `endpointUrl` is an origin anywhere else — typically a
+service in front of several replicas of one deployment — and wins when both are
+present, so a control plane can add it without taking away the port an older
+dispatcher still reads. Only the origin is used: the route is this package's to
+choose, because the dispatch carries the runtime secret and whoever supplies the
+address must not be able to aim it at another path. A URL with a path, a query
+or credentials is refused, and the message is dead-lettered rather than retried
+against an address that will not change.
 
 ### Request
 
@@ -502,6 +512,31 @@ a blip into a burned graphile attempt — three of which end the run. The dispat
 is aborted only once sustained failure means the lease is about to lapse, and a
 success resets the tolerance so alternating pass/fail cannot keep a dying lease
 alive indefinitely.
+
+### Executors that are always running
+
+A host whose executors do not scale to zero has nothing to wake and nothing that
+reaps, so it needs no activation API. `WORKFLOW_DISPATCHER_STATIC_ENDPOINTS`
+(`createStaticActivationClient` for an embedding host) is a fixed table from
+deployment id to executor origin; its lease renews unconditionally and releasing
+it does nothing.
+
+The table is keyed by deployment id because pinning still applies. Replicas of
+one deployment share an id and sit behind one origin, and which of them takes a
+dispatch is decided there. A new build that cannot replay the old one's event
+log is a new deployment id at its own origin, and the old entry stays in the
+table until its runs are over. A deployment missing from the table is
+not-activatable: its messages are dead-lettered, which is the alarm for having
+removed an entry too early.
+
+Replacing a replica without running a step twice is the host's job, with one
+number from this package. A delivery cut off by a stopping process is delivered
+again — correct, but the step and its side effects run a second time. So the
+host first stops routing to the replica (its readiness check fails), waits for
+`inflightDeliveries()` to reach zero, and only then sends the signal. The count
+is process-wide and lives on `globalThis`, because the runtime loads the World
+from its package name while the host route that reports the number is usually
+bundled separately.
 
 Note what the lease does **not** cover. A _sleeping_ run holds no lease and no
 connection, by design — that is the whole point of moving the claimant out. Such
