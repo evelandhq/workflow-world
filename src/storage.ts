@@ -236,6 +236,46 @@ async function openEventSlots(db: EventInsertDb, tenantId: string, runId: string
   return slotToEventId(FIRST_EVENT_SLOT);
 }
 
+/**
+ * Creates a run together with its `run_created` event, or returns `undefined`
+ * when the run already exists.
+ *
+ * One transaction, because the run row is what every other writer keys off: a
+ * `run_started` that can see the row skips the resilient-start path and
+ * allocates the next free slot. Committing the row before the event let another
+ * replica's `run_started` take the first slot in between, after which the
+ * fixed-slot `run_created` insert lost the collision and never landed — a run
+ * whose log replay rejects with `has no "run_created" event`. Inside the
+ * transaction the row, the slot marker and the first slot become visible
+ * together, and a concurrent creator blocks on the row's primary key until they
+ * do.
+ */
+async function insertRunWithCreatedEvent(
+  drizzle: Drizzle,
+  runValues: typeof Schema.runs.$inferInsert,
+  event: Pick<EventInsert, "eventData" | "specVersion">,
+): Promise<{ run: typeof Schema.runs.$inferSelect; eventId: string; createdAt: Date } | undefined> {
+  return drizzle.transaction(async (tx) => {
+    const [run] = await tx.insert(Schema.runs).values(runValues).onConflictDoNothing().returning();
+    if (!run) return undefined;
+    // The marker pins this run to v6 slot identity. Its absence remains the
+    // durable signal that an older run must keep using ULIDs.
+    const eventId = await openEventSlots(tx, run.tenantId, run.runId);
+    const [created] = await tx
+      .insert(Schema.events)
+      .values({
+        tenantId: run.tenantId,
+        runId: run.runId,
+        eventId,
+        eventType: "run_created",
+        eventData: event.eventData,
+        specVersion: event.specVersion,
+      })
+      .returning({ createdAt: Schema.events.createdAt });
+    return { run, eventId, createdAt: created!.createdAt };
+  }, SLOT_INSERT_TRANSACTION);
+}
+
 /** Returns the events occupying slots a stale writer skipped over. */
 async function reportSkippedSlots(
   drizzle: Drizzle,
@@ -830,6 +870,8 @@ export function createEventsStorage(
       // A slot-numbered id is chosen by the INSERT that commits it, so callers
       // await this immediately before writing. Legacy runs receive a ULID.
       let eventId: string | undefined;
+      // Set only by run_created, whose event commits together with its run row.
+      let runCreatedAt: Date | undefined;
       const getEventId = async (db: EventAllocateDb = drizzle) =>
         eventId ?? (await allocateEventId(db, tenantId, effectiveRunId));
 
@@ -928,9 +970,9 @@ export function createEventsStorage(
             // Create run + run_created event atomically. The
             // transaction ensures we never have an orphaned run
             // without its run_created event.
-            const [inserted] = await drizzle
-              .insert(Schema.runs)
-              .values({
+            const inserted = await insertRunWithCreatedEvent(
+              drizzle,
+              {
                 tenantId,
                 runId: effectiveRunId,
                 deploymentId: runInputData.deploymentId,
@@ -948,17 +990,8 @@ export function createEventsStorage(
                 queueNamespace: runQueueNamespace,
                 retentionClass,
                 retentionRootRunId,
-              })
-              .onConflictDoNothing()
-              .returning();
-
-            if (inserted) {
-              const runCreatedEventId = await openEventSlots(drizzle, tenantId, effectiveRunId);
-              await drizzle.insert(events).values({
-                tenantId,
-                runId: effectiveRunId,
-                eventId: runCreatedEventId,
-                eventType: "run_created",
+              },
+              {
                 eventData: {
                   deploymentId: runInputData.deploymentId,
                   workflowName: runInputData.workflowName,
@@ -970,8 +1003,8 @@ export function createEventsStorage(
                   retentionClass: runInputData.retentionClass,
                 },
                 specVersion: effectiveSpecVersion,
-              });
-            }
+              },
+            );
             const createdRun = inserted;
 
             if (createdRun) {
@@ -1209,9 +1242,9 @@ export function createEventsStorage(
           eventData.retentionClass,
           eventData.attributes,
         );
-        const [runValue] = await drizzle
-          .insert(Schema.runs)
-          .values({
+        const createdRun = await insertRunWithCreatedEvent(
+          drizzle,
+          {
             tenantId,
             runId: effectiveRunId,
             deploymentId: eventData.deploymentId,
@@ -1228,9 +1261,9 @@ export function createEventsStorage(
             queueNamespace: runQueueNamespace,
             retentionClass,
             retentionRootRunId,
-          })
-          .onConflictDoNothing()
-          .returning();
+          },
+          { eventData, specVersion: effectiveSpecVersion },
+        );
         // No row back means the run already exists — typically because the
         // resilient start path (a `run_started` for a run that did not exist yet)
         // won a TOCTOU race and created it.
@@ -1243,13 +1276,14 @@ export function createEventsStorage(
         // `run_created` is outside the dedup partial index (its predicate covers
         // only step/hook/wait/attr events), so nothing stopped it, and replay
         // would then see two.
-        if (!runValue) {
+        if (!createdRun) {
           throw new EntityConflictError(`Workflow run "${effectiveRunId}" already exists`);
         }
-        // The marker pins this run to v6 slot identity. Its absence remains the
-        // durable signal that an older run must keep using ULIDs.
-        eventId = await openEventSlots(drizzle, tenantId, effectiveRunId);
-        run = deserializeRunError(compact(runValue));
+        // The event is already in the log: it committed with the run row, so the
+        // generic event INSERT below is skipped.
+        eventId = createdRun.eventId;
+        runCreatedAt = createdRun.createdAt;
+        run = deserializeRunError(compact(createdRun.run));
       }
 
       // Handle run_started event: update run status
@@ -1604,7 +1638,9 @@ export function createEventsStorage(
         }
       }
 
-      let value: { createdAt: Date } | undefined;
+      let value: { createdAt: Date } | undefined = runCreatedAt
+        ? { createdAt: runCreatedAt }
+        : undefined;
 
       // Handle step_started event: increment attempt and set the step to
       // running, then write the matching event log entry in the same
