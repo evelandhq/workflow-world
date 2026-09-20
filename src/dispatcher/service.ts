@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import { runMigrations } from "../migrate.js";
 import { startStorageMaintenanceLoop } from "../storage-maintenance.js";
 import { createActivationClient, type ActivationClient } from "./activation-client.js";
+import { createStaticActivationClient } from "./static-activation.js";
 import {
   reclaimAndReenqueueActiveRunsForAllTenants,
   type BootRecoveryRun,
@@ -98,12 +99,7 @@ export async function startDispatcherService(
     );
   }
 
-  const activation =
-    options.activation ??
-    createActivationClient({
-      apiUrl: config.apiUrl,
-      serviceToken: requiredServiceToken(env),
-    });
+  const activation = options.activation ?? resolveActivation(config, env);
 
   const pool = new Pool({
     connectionString: config.worldUrl,
@@ -373,6 +369,25 @@ function numericAndBooleanAttributes(value: unknown): Record<string, number | bo
         typeof entry[1] === "number" || typeof entry[1] === "boolean",
     ),
   );
+}
+
+function resolveActivation(
+  config: DispatcherConfiguration,
+  env: NodeJS.ProcessEnv,
+): ActivationClient {
+  // No token is read on the static path: there is no control API to present it to.
+  if (config.staticEndpoints) {
+    return createStaticActivationClient({ endpoints: config.staticEndpoints });
+  }
+  if (!config.apiUrl) {
+    throw new Error(
+      "The dispatcher has neither an activation API nor static endpoints to dispatch to.",
+    );
+  }
+  return createActivationClient({
+    apiUrl: config.apiUrl,
+    serviceToken: requiredServiceToken(env),
+  });
 }
 
 function requiredServiceToken(env: NodeJS.ProcessEnv): string {

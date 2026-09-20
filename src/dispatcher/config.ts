@@ -1,6 +1,7 @@
 import os from "node:os";
 import { resolveStreamCompaction } from "../config.js";
 import { MIN_OWNERSHIP_LIVENESS_MS } from "./ownership.js";
+import { parseStaticEndpoints } from "./static-activation.js";
 import {
   DEFAULT_EXECUTOR_FAILURE_LIMIT,
   DEFAULT_EXECUTOR_FAILURE_MIN_SPAN_MS,
@@ -8,7 +9,13 @@ import {
 
 export type DispatcherConfiguration = {
   worldUrl: string;
-  apiUrl: string;
+  /** The host's activation API. Absent exactly when `staticEndpoints` is set. */
+  apiUrl?: string;
+  /**
+   * Deployment id → executor origin, for executors that are always running and
+   * need no activation API. See `static-activation.ts`.
+   */
+  staticEndpoints?: Record<string, string>;
   poolSize: number;
   concurrency: number;
   pollIntervalMs: number;
@@ -125,10 +132,21 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
     );
   }
 
-  const apiUrl = env.WORKFLOW_DISPATCHER_ACTIVATION_API_URL;
-  if (!apiUrl) {
+  const apiUrl = env.WORKFLOW_DISPATCHER_ACTIVATION_API_URL || undefined;
+  const staticEndpoints = env.WORKFLOW_DISPATCHER_STATIC_ENDPOINTS
+    ? parseStaticEndpoints(env.WORKFLOW_DISPATCHER_STATIC_ENDPOINTS)
+    : undefined;
+  if (apiUrl && staticEndpoints) {
+    // Two answers to "where does this deployment run" is a misconfiguration,
+    // and picking one silently would send dispatches where nobody expects them.
     throw new Error(
-      "WORKFLOW_DISPATCHER_ACTIVATION_API_URL is required: the dispatcher wakes a deployment through the host's activation API.",
+      "WORKFLOW_DISPATCHER_ACTIVATION_API_URL and WORKFLOW_DISPATCHER_STATIC_ENDPOINTS are both set; configure one.",
+    );
+  }
+  if (!apiUrl && !staticEndpoints) {
+    throw new Error(
+      "WORKFLOW_DISPATCHER_ACTIVATION_API_URL is required: the dispatcher wakes a deployment through the host's activation API. " +
+        "For executors that are always running, set WORKFLOW_DISPATCHER_STATIC_ENDPOINTS instead.",
     );
   }
 
@@ -177,7 +195,8 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
 
   return {
     worldUrl,
-    apiUrl,
+    ...(apiUrl ? { apiUrl } : {}),
+    ...(staticEndpoints ? { staticEndpoints } : {}),
     poolSize,
     concurrency,
     ownershipLivenessMs,

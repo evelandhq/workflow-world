@@ -1,4 +1,5 @@
 export { createActivationClient } from "./activation-client.js";
+export { createStaticActivationClient, parseStaticEndpoints } from "./static-activation.js";
 export type { Activation, ActivationClient, ActivationOutcome } from "./activation-client.js";
 export { reenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
 export type { BootRecoveryPacing, BootRecoveryRun } from "./boot-recovery.js";

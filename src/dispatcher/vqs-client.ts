@@ -29,7 +29,15 @@ export type VqsResult =
   | { type: "error"; status: number; text: string; retryable: boolean };
 
 export type VqsRequest = {
-  endpointPort: number;
+  /**
+   * Where the executor listens. A port means loopback, which is every host that
+   * runs its executors beside the dispatcher; a URL is an executor somewhere
+   * else — a service in front of several replicas of one deployment. When both
+   * are given the URL wins, so a control plane can add it without removing the
+   * port older dispatchers still read.
+   */
+  endpointPort?: number;
+  endpointUrl?: string;
   queueName: string;
   messageId: string;
   attempt: number;
@@ -45,10 +53,53 @@ export type VqsRequest = {
 
 export const WORKFLOW_ROUTE_BASE = "/.well-known/workflow/v1";
 
-export async function postVqsMessage(request: VqsRequest): Promise<VqsResult> {
+/**
+ * The origin of an executor named by URL, or why it cannot be one.
+ *
+ * Only the origin is kept. The route is this package's to choose — a dispatch
+ * carries the runtime secret, and the place it is sent must not be steerable to
+ * another path on the host by whoever filled in the URL. Credentials in a URL
+ * would end up in logs and error text, so they are refused rather than dropped.
+ */
+export function parseEndpointUrl(value: string): { origin: string } | { error: string } {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return { error: `Executor endpoint ${JSON.stringify(value)} is not a URL.` };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return { error: `Executor endpoint ${url.origin} must be http or https.` };
+  }
+  if (url.username !== "" || url.password !== "") {
+    return { error: `Executor endpoint ${url.host} must not carry credentials.` };
+  }
+  if ((url.pathname !== "/" && url.pathname !== "") || url.search !== "" || url.hash !== "") {
+    return { error: `Executor endpoint ${url.origin} must be an origin, with no path or query.` };
+  }
+  return { origin: url.origin };
+}
+
+function flowUrl(request: VqsRequest): string | { error: string } {
   // One route only: `WorkflowUrlRoute` lost its `'step'` member in
   // `@workflow/world` 5.0.0-beta.23, alongside the queue kind.
-  const url = `http://127.0.0.1:${String(request.endpointPort)}${WORKFLOW_ROUTE_BASE}/flow`;
+  if (request.endpointUrl !== undefined) {
+    const endpoint = parseEndpointUrl(request.endpointUrl);
+    return "error" in endpoint ? endpoint : `${endpoint.origin}${WORKFLOW_ROUTE_BASE}/flow`;
+  }
+  if (request.endpointPort === undefined) {
+    return { error: "Dispatch has neither an executor URL nor a loopback port." };
+  }
+  return `http://127.0.0.1:${String(request.endpointPort)}${WORKFLOW_ROUTE_BASE}/flow`;
+}
+
+export async function postVqsMessage(request: VqsRequest): Promise<VqsResult> {
+  const url = flowUrl(request);
+  if (typeof url !== "string") {
+    // Not retryable: the address came from configuration or the control plane,
+    // and sending the same message again resolves to the same address.
+    return { type: "error", status: 0, text: url.error, retryable: false };
+  }
   const headers: Record<string, string> = {
     ...request.headers,
     "content-type": "application/json",

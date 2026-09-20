@@ -31,6 +31,7 @@ export {
   tenantPartitionsExist,
 } from "./migrate.js";
 export { reenqueueTenantRuns } from "./recovery.js";
+export { inflightDeliveries } from "./inflight.js";
 export {
   reconcileWorkflowRuns,
   type ReconcileWorkflowRunsOptions,
