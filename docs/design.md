@@ -1,8 +1,10 @@
 # Design
 
 Why this package is shaped the way it is, what it guarantees, and where it is
-deliberately incomplete. [README.md](../README.md) is the operator's view —
-install, configure, run. This is the reasoning underneath it.
+deliberately incomplete. Start with [getting started](./guides/getting-started.md),
+the [configuration reference](./reference/configuration.md), and
+[dispatcher operations](./operations/dispatcher.md) for installation and operation.
+This document explains the reasoning behind them.
 
 ## The problem the shape solves
 
@@ -71,10 +73,10 @@ runtime runs steps inline inside the flow handler.
 
 ## Runner modes
 
-| mode       | who runs the queue             | for                                                    |
-| ---------- | ------------------------------ | ------------------------------------------------------ |
-| `embedded` | an in-process graphile runner  | local development, and upstream's conformance topology |
-| `external` | the dispatcher in this package | production; the reason this package exists             |
+| mode       | who runs the queue                                      | for                                                    |
+| ---------- | ------------------------------------------------------- | ------------------------------------------------------ |
+| `embedded` | an in-process graphile runner, delivering over loopback | local development, and upstream's conformance topology |
+| `external` | the dispatcher in this package                          | production; the reason this package exists             |
 
 `embedded` is not a transitional mode — it is the local-development story
 permanently, and it is the mode upstream's suite assumes.
@@ -687,8 +689,8 @@ settle-or-readmit is not held behind graphile's stale-lock threshold.
 ## Configuration
 
 Every variable has one canonical `WORKFLOW_*` name, with `EVELAND_*` accepted as
-aliases. The full table is in [README.md](../README.md#configuration) and is not
-duplicated here — a second copy would drift.
+aliases. The full table is in the [configuration reference](./reference/configuration.md)
+and is not duplicated here — a second copy would drift.
 
 Two properties of the surface are design rather than documentation. The database
 URL has **no fallback chain**: falling back onto a plausible-looking single-tenant

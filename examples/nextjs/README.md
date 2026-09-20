@@ -75,7 +75,7 @@ Workflow 4.x release or every newer beta.
 
 Embedded mode needs the app to stay running to deliver jobs. For executors that
 scale to zero, use external mode with a separate dispatcher and a host-provided
-activation API; see the [root README](../../README.md#quick-start-workflow-sdk-without-eve)
+activation API; see the [external runner setup](../../docs/guides/getting-started.md#external-runner)
 and [dispatch contract](../../docs/design.md).
 
 Stop Next.js with Ctrl-C. If you started the disposable container above,
