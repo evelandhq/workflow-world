@@ -28,7 +28,9 @@ export const MessageData = z.object({
   tenantId: z.string().describe("Eveland project id that owns this message"),
   deploymentId: z
     .string()
-    .describe("Deployment that enqueued the message; the dispatcher's affinity hint"),
+    .describe(
+      "Deployment the message is addressed to -- the producer's own unless it named another; the dispatcher's affinity hint",
+    ),
   /**
    * eve's queue namespace, as resolved by the *enqueuing* deployment.
    *

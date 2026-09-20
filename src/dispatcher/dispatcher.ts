@@ -94,7 +94,8 @@ export async function resolveAffinity(
   const run = await runLookup({ tenantId: message.tenantId, runId });
   if (!run) {
     // First delivery: the run row is created by the executor when it handles
-    // this very message, so the enqueuing deployment is the right target.
+    // this very message, so the deployment the producer addressed is the right
+    // target: its own, or the one a cross-deployment `start()` named.
     return { type: "deployment", deploymentId: message.deploymentId, runId };
   }
   if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
