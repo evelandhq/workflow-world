@@ -2,9 +2,11 @@
 
 An eve release is almost never a reason to do anything here. What matters is not
 that eve shipped, but whether the `@workflow/*` set it installs moved. The
-current supported window, {0.62.x, 0.63.x}, carries one set: world beta.36,
-world-local beta.45 and core beta.53, which eve moved to at 0.61.0 and 0.62.0
-and 0.63.0 re-bundled without moving a version. The pins here follow it;
+current supported window, {0.62.x, 0.64.x} (0.63 skipped), carries two sets:
+world beta.36, world-local beta.45 and core beta.53 on 0.62.0 (unchanged since
+0.61.0), and world beta.37, world-local beta.46 and core beta.55 from 0.64.0 on
+(0.64.1 re-bundled it without moving a version). The pins here follow the
+newest line;
 `e2e-tests/eve-versions.mts` is the table of record. Exact patches still matter:
 Workflow pins have moved within an eve minor line before, so a minor is not a
 set.
