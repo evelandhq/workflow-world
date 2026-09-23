@@ -11,26 +11,26 @@ allowBuilds:
 
 # Already pinned and verified by the existing Eve compatibility matrix.
 minimumReleaseAgeExclude:
-  - eve@0.63.0
+  - eve@0.64.1
   # The conformance harness and the @workflow/* set it pins. The harness is
   # exempt from eve's pins (src/eve-pin-contract.test.ts) and was bumped to the
   # first release whose bundled runtime reads spec 7, which this World now
   # stamps; conformance/spec.test.mts asserts the two agree.
-  - "@workflow/astro@5.0.0-beta.53"
-  - "@workflow/builders@5.0.0-beta.53"
-  - "@workflow/cli@5.0.0-beta.53"
-  - "@workflow/core@5.0.0-beta.53"
-  - "@workflow/nest@5.0.0-beta.53"
-  - "@workflow/next@5.0.0-beta.53"
-  - "@workflow/nitro@5.0.0-beta.53"
-  - "@workflow/nuxt@5.0.0-beta.53"
-  - "@workflow/rollup@5.0.0-beta.53"
-  - "@workflow/sveltekit@5.0.0-beta.53"
+  - "@workflow/astro@5.0.0-beta.55"
+  - "@workflow/builders@5.0.0-beta.55"
+  - "@workflow/cli@5.0.0-beta.55"
+  - "@workflow/core@5.0.0-beta.55"
+  - "@workflow/nest@5.0.0-beta.55"
+  - "@workflow/next@5.0.0-beta.55"
+  - "@workflow/nitro@5.0.0-beta.55"
+  - "@workflow/nuxt@5.0.0-beta.55"
+  - "@workflow/rollup@5.0.0-beta.55"
+  - "@workflow/sveltekit@5.0.0-beta.55"
   - "@workflow/swc-plugin@5.0.0-beta.7"
-  - "@workflow/vite@5.0.0-beta.53"
-  - "@workflow/web@5.0.0-beta.53"
-  - "@workflow/world-local@5.0.0-beta.45"
-  - "@workflow/world-testing@5.0.0-beta.53"
-  - "@workflow/world-vercel@5.0.0-beta.48"
-  - "@workflow/world@5.0.0-beta.36"
-  - workflow@5.0.0-beta.53
+  - "@workflow/vite@5.0.0-beta.55"
+  - "@workflow/web@5.0.0-beta.55"
+  - "@workflow/world-local@5.0.0-beta.46"
+  - "@workflow/world-testing@5.0.0-beta.55"
+  - "@workflow/world-vercel@5.0.0-beta.50"
+  - "@workflow/world@5.0.0-beta.37"
+  - workflow@5.0.0-beta.55
