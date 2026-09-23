@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.21.0...workflow-world-v0.22.0) (2026-09-23)
+
+
+### Features
+
+* follow eve 0.64's [@workflow](https://github.com/workflow) set in the gapped {0.62.x, 0.64.x} window ([#103](https://github.com/evelandhq/workflow-world/issues/103)) ([ed59e23](https://github.com/evelandhq/workflow-world/commit/ed59e2373bee3db7b69bae00e04333b9979de52c))
+
 ## [0.21.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.20.1...workflow-world-v0.21.0) (2026-09-20)
 
 
