@@ -130,13 +130,14 @@ jobs:
       matrix:
         # Mirrors the enabled entries in e2e-tests/eve-versions.mts. Keep them in
         # step — the file is what the suite reads; this list is only what CI
-        # pays for. The window is {0.62.x, 0.64.x} (0.63 skipped); the whole
-        # window speaks message stream v25 and one execution model, so the axis
-        # left is the bundled Workflow set: 0.62.0 samples the older one (core
-        # beta.53, world beta.36, world-local beta.45), which existing Releases
-        # run; 0.64.1 the one 0.64.0 moved to (core beta.55, world beta.37,
-        # world-local beta.46), which the pins here follow and new builds get.
-        eve: ["0.62.0", "0.64.1"]
+        # pays for. Every entry speaks message stream v25 and one execution
+        # model, so the axis left is the bundled Workflow set: 0.62.0 samples
+        # the oldest one (core beta.53, world beta.36, world-local beta.45),
+        # which existing Eveland Releases run; 0.66.1, Eveland's verified
+        # release, the one 0.64.0 moved to (core beta.55, world beta.37,
+        # world-local beta.46); 0.67.0 the one 0.66.3 moved to (core beta.56,
+        # world beta.38, world-local beta.47), which the pins here follow.
+        eve: ["0.62.0", "0.66.1", "0.67.0"]
     services:
       postgres:
         image: postgres:17-alpine

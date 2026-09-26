@@ -1,5 +1,9 @@
 import type { Storage, World } from "@workflow/world";
-import { mintedSpecVersion, resolveQueueNamespace } from "@workflow/world";
+import {
+  mintedSpecVersion,
+  resolveQueueNamespace,
+  SPEC_VERSION_SUPPORTS_SEALED_LOG,
+} from "@workflow/world";
 import { Pool } from "pg";
 import {
   type EvelandWorldConfig,
@@ -172,7 +176,8 @@ export function createWorld(
   let closed = false;
   const drizzle = createClient(pool);
   const queue = createQueue(resolved, pool);
-  const specVersion = mintedSpecVersion();
+  // Capped at the sealed log: see the note on `specVersion` below.
+  const specVersion = Math.min(mintedSpecVersion(), SPEC_VERSION_SUPPORTS_SEALED_LOG);
   const storage = createStorage(drizzle, resolved.tenantId, resolved.queueNamespace, specVersion);
   const streamer = createStreamer(pool, drizzle, resolved.tenantId, {
     compactSnapshots: resolved.compactStreamSnapshots,
@@ -180,21 +185,33 @@ export function createWorld(
 
   return {
     /**
-     * What upstream tells a World to declare: `mintedSpecVersion()` is the
-     * sealed-log version (7) by default, or slot identity (6) when
+     * The sealed-log version (7), or slot identity (6) when
      * `WORKFLOW_SEALED_LOG=0` opts a deployment out. The runtime stamps every
      * run it creates with whatever is declared here (`run_created` carries
      * `world.specVersion`) and admits any value in
      * `[SPEC_VERSION_SUPPORTS_SLOT_IDENTITY, SPEC_VERSION_MAX_SUPPORTED]`.
+     *
+     * Upstream tells a World to declare `mintedSpecVersion()`, and through
+     * @workflow/world beta.37 that was 7. beta.38 (eve 0.66.3) moved it to 8,
+     * the hook force-claim reader contract, and this World deliberately stays
+     * one below. Declaring 8 would shut out every runtime before core beta.56
+     * -- eve 0.62 through 0.66.2, the whole window Eveland deploys -- since a
+     * runtime refuses a World above its ceiling at startup, and it would buy
+     * nothing: 8 is a reader contract for the `hook_disposed{forceClaimedBy}`
+     * row another run's `createHook({ experimental_force: true })` writes into
+     * a victim's log, and this World never takes a token over. A forced
+     * creation meets the same claim check as any other and is answered with an
+     * ordinary `hook_conflict`, so no run it stamps is ever stranded by one.
+     * The cap comes off when the runtime's floor reaches 8, exactly as 6 gave
+     * way to 7 -- and the conformance harness moves with it: world-testing
+     * beta.56 asserts the World stamps what its runtime mints, so it stays on
+     * beta.55 until then (docs/maintainers/eve-compatibility.md).
      *
      * Declaring 7 changes nothing in storage. Its only reader obligation is the
      * `noop` filler a backend emits when it pre-assigns event positions and a
      * writer dies before committing; this World allocates each position inside
      * the INSERT that occupies it (`insertEventRow`), so there is never a hole
      * to seal and it never writes one. It is spec-7 compliant by construction.
-     * What the declaration buys is not being left behind: upstream intends v5
-     * stable to ship on 7, and a runtime that raises its floor to 7 rejects a
-     * World still declaring 6 at startup.
      *
      * Through 0.17.0 this World pinned 6 so a Release built against a v6-only
      * eve (0.47.x and older) could never meet a run it cannot read. Every line

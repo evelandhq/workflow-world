@@ -17,7 +17,7 @@ Commit dependency changes in `pnpm-lock.yaml`; use `pnpm add` or `pnpm install`
 when updating dependencies. `pnpm-workspace.yaml` allows install scripts only
 for the native dependencies listed there. Review that list when adding a package
 that needs an install script. The release-age exceptions cover the tested
-`eve@0.64.1` pin and the `@workflow/*` set `@workflow/world-testing@beta.55`
+`eve@0.67.0` pin and the `@workflow/*` set `@workflow/world-testing@beta.55`
 pulls in; review any new exception when updating Eve or the harness.
 
 CI uses pnpm for repository dependencies, builds, and tests. Tarball consumer

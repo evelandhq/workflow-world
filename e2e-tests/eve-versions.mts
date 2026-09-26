@@ -1,31 +1,28 @@
 /**
- * Exact releases from Eveland's supported eve window. The compatibility policy,
- * not npm's `latest`, is the authority on what may be deployed.
+ * Exact releases this World is verified against. The `@workflow/*` set an eve
+ * release installs, not npm's `latest`, is what decides whether an entry earns
+ * its install.
  *
- * The current window is {0.62.x, 0.64.x} -- gapped, verified at 0.62.0 and
- * 0.64.1. 0.63 is skipped: 0.63.0 shipped a hook regression (vercel/eve#3552)
- * that 0.64.0 fixed, so it is rejected. 0.58.x slid out on 2026-09-20. The
- * window carries TWO `@workflow/*` sets again -- 0.64.0 moved the bundled set,
- * and 0.64.1 re-bundled it unchanged:
+ * The pins here follow eve 0.67.0, the set 0.66.3 moved to. Eveland's supported
+ * window is {0.62.x, 0.66.x}, verified at 0.62.0 and 0.66.1, and stays on the
+ * previous set; workflow-world 0.22.0 is its match, and this release exists for
+ * the consumer that runs eve 0.67 in External mode outside Eveland. The window
+ * plus the pin carry THREE `@workflow/*` sets:
  *
- * | package                 | 0.61.0-0.63.0 | 0.64.0-0.64.1 |
- * | ----------------------- | ------------- | ------------- |
- * | `@workflow/world`       | beta.36       | beta.37       |
- * | `@workflow/world-local` | beta.45       | beta.46       |
- * | `@workflow/core`        | beta.53       | beta.55       |
- * | `@workflow/errors`      | beta.21       | beta.22       |
- * | `@workflow/utils`       | beta.10       | beta.10       |
+ * | package                 | 0.61.0-0.63.0 | 0.64.0-0.66.2 | 0.66.3-0.67.0 |
+ * | ----------------------- | ------------- | ------------- | ------------- |
+ * | `@workflow/world`       | beta.36       | beta.37       | beta.38       |
+ * | `@workflow/world-local` | beta.45       | beta.46       | beta.47       |
+ * | `@workflow/core`        | beta.53       | beta.55       | beta.56       |
+ * | `@workflow/errors`      | beta.21       | beta.22       | beta.23       |
+ * | `@workflow/utils`       | beta.10       | beta.10       | beta.10       |
  *
- * World beta.37 adds an opt-in request/response path: `capabilities.invoke`,
- * `World.invoke()`, optional `invoke`/`requestId`/`input` on queue messages,
- * and a `createQueueHandler` handler typed `Promise<unknown>`. Core beta.55
- * takes it only when a World declares the capability, and this World does not,
- * so every delivery stays an ordinary wake: world-local beta.46 answers an
- * `invoke: true` body with the handler's result and otherwise reads
- * `{ timeoutSeconds }` as before. Core beta.55 also checks the new 8 KiB
- * `attr_set` eventData limit itself before writing. The pins here follow the
- * newer set, so the older entry is what proves a Release built on the previous
- * set still runs against this package.
+ * World beta.37 added an opt-in request/response path (`capabilities.invoke`,
+ * `World.invoke()`, optional `invoke`/`requestId`/`input` on queue messages)
+ * that this World does not declare, so every delivery stays an ordinary wake.
+ * World beta.38, world-local beta.47 and core beta.56 change nothing this World
+ * calls: the pins move so a consumer's single `@workflow/world` resolution is
+ * the one its eve was built against.
  *
  * The whole window speaks message stream v25 and one execution model: every
  * turn runs as steps inside the session's own `workflowEntry` run (the model
@@ -33,18 +30,22 @@
  * (`<sessionId>:anchor`, `<runId>:handoff`), deployment handoff and renewable
  * stream leases. The per-turn child `turnWorkflow` run left with 0.55.
  *
- * - 0.62.0 is the floor, which existing Releases run, and samples the older
- *   set. It still has the unstamped `taskRunWorkflow` run behind background
- *   `defineTool`.
- * - 0.64.1 is what new builds get, and samples the newer set. It keeps what
- *   0.63.0 changed -- background work is a workflow-tool run, and a background
- *   subagent's admission is no longer announced as `subagent.completed` -- and
- *   stamps the same workflows 0.63.0 did. Neither line adds a World call.
+ * - 0.62.0 is the floor, which existing Eveland Releases run, and samples the
+ *   oldest set. It still has the unstamped `taskRunWorkflow` run behind
+ *   background `defineTool`.
+ * - 0.66.1 is Eveland's verified release on the newer line and samples the
+ *   middle set. Background work is a workflow-tool run, and a background
+ *   subagent's admission is no longer announced as `subagent.completed`.
+ * - 0.67.0 is what the pins follow and samples the newest set. It also removed
+ *   the `conversation` / `task` run mode: every session parks after its turn,
+ *   so a first turn no longer completes a run or disposes a hook
+ *   (`event-types.mts`).
  *
  * Exact patches matter because Workflow pins move within a minor line: 0.51.1
- * did it, and 0.54.4 did it again. Each enabled entry costs an npm install plus
- * a full `eve build`. Local runs cover all enabled entries; CI supplies
- * EVE_VERSION so each matrix job covers only the release named in its label.
+ * did it, 0.54.4 did it again, and 0.66.3 did it once more. Each enabled entry
+ * costs an npm install plus a full `eve build`. Local runs cover all enabled
+ * entries; CI supplies EVE_VERSION so each matrix job covers only the release
+ * named in its label.
  */
 export type EveVersion = {
   version: string;
@@ -54,7 +55,8 @@ export type EveVersion = {
 
 export const EVE_VERSIONS: readonly EveVersion[] = [
   { version: "0.62.0", enabled: true },
-  { version: "0.64.1", enabled: true },
+  { version: "0.66.1", enabled: true },
+  { version: "0.67.0", enabled: true },
 ];
 
 const eveVersionUnderTest = process.env.EVE_VERSION;

@@ -47,7 +47,7 @@ assertion about _this_ package.
 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
 
 # Run one enabled version, as each CI matrix job does.
-EVE_VERSION=0.64.1 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
+EVE_VERSION=0.67.0 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
 ```
 
 The URL is used both to create the per-version database and, rewritten, to connect
@@ -56,15 +56,16 @@ enabled entry; CI passes the matrix value so each named job builds exactly one
 release. An unknown or disabled value fails instead of silently running nothing.
 
 Each enabled eve version costs an `npm install` plus a full `eve build`, so
-`eve-versions.mts` enables them deliberately rather than all at once. The supported
-window comes from Eveland's `packages/core/src/eve-compatibility.ts`, and this
-package pins the newest line's verified release (0.64.1). A minor does not reliably
-identify a `@workflow/*` set, so the entries name exact patches. The current
-window, {0.62.x, 0.64.x} (0.63 skipped), carries two sets: world beta.36,
-world-local beta.45 and core beta.53 on 0.62, and world beta.37, world-local
-beta.46 and core beta.55 from 0.64.0 on. The execution model is the same on both
-lines -- turns run inside the session's own run -- so the enabled entries cover
-each set once (0.62.0 and 0.64.1);
+`eve-versions.mts` enables them deliberately rather than all at once. Eveland's
+supported window comes from its `packages/core/src/eve-compatibility.ts`; this
+package pins eve 0.67.0, one line past that window, for the consumer that runs
+it outside Eveland. A minor does not reliably identify a `@workflow/*` set, so
+the entries name exact patches. The window plus the pin carry three sets: world
+beta.36, world-local beta.45 and core beta.53 on 0.62; world beta.37, world-local
+beta.46 and core beta.55 from 0.64.0 through 0.66.2; and world beta.38,
+world-local beta.47 and core beta.56 from 0.66.3 on. The execution model is the
+same on all three -- turns run inside the session's own run -- so the enabled
+entries cover each set once (0.62.0, 0.66.1 and 0.67.0);
 `eve-versions.mts` records why each one earns its install. This is especially
 worth proving for `@workflow/world-local`, because this package wraps its
 `createQueueHandler`.

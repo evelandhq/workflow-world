@@ -32,6 +32,11 @@ export default defineChannel({
     // run, before the address's continuation hook exists, and a delivery that
     // lands in that gap is a racing first message rather than a follow-up.
     //
+    // `mode: "task"` is what ends a session after its turn through eve 0.66,
+    // which is where the e2e's `run_completed` and `hook_disposed` come from.
+    // eve 0.67 removed the run mode and ignores the option: every session parks
+    // after its turn there, and `event-types.mts` asks for less accordingly.
+    //
     // The owner is a conversation, not a task, and that is load-bearing. With
     // no model credentials a task session finishes within a few hundred
     // milliseconds and disposes the address's hook on the way out, so a

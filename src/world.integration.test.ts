@@ -4,6 +4,7 @@ import {
   slotToEventId,
   SPEC_VERSION_CURRENT,
   SPEC_VERSION_MAX_SUPPORTED,
+  SPEC_VERSION_SUPPORTS_SEALED_LOG,
   SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
 } from "@workflow/world";
 import { Pool } from "pg";
@@ -161,17 +162,19 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
     expect(await beta.streams.list(alphaRunId)).toEqual([]);
   });
 
-  test("specVersion is the sealed log, as upstream tells a World to declare", () => {
-    // @workflow/world beta.32 (eve 0.49) minted spec 7 while the runtime floor
-    // stayed at slot identity (6). The World declares `mintedSpecVersion()`,
-    // which is 7 unless WORKFLOW_SEALED_LOG opts the process out; see the note
-    // on `specVersion` in src/index.ts. The run created above is stamped with
-    // it, so the suite exercises writing and reading 7.
+  test("specVersion is the sealed log, one below what upstream now mints", () => {
+    // @workflow/world beta.38 (eve 0.66.3) minted spec 8, the hook force-claim
+    // reader contract, while the runtime floor stayed at slot identity (6).
+    // The World declares 7 on purpose -- 8 would be refused by every runtime
+    // before core beta.56 -- unless WORKFLOW_SEALED_LOG opts the process out;
+    // see the note on `specVersion` in src/index.ts. The run created above is
+    // stamped with it, so the suite exercises writing and reading 7.
     expect(SPEC_VERSION_SUPPORTS_SLOT_IDENTITY).toBe(6);
-    expect(SPEC_VERSION_CURRENT).toBe(7);
+    expect(SPEC_VERSION_SUPPORTS_SEALED_LOG).toBe(7);
+    expect(SPEC_VERSION_CURRENT).toBe(8);
     expect(process.env.WORKFLOW_SEALED_LOG).toBeUndefined();
-    expect(alpha.specVersion).toBe(SPEC_VERSION_CURRENT);
-    expect(alpha.specVersion).toBe(mintedSpecVersion());
+    expect(alpha.specVersion).toBe(SPEC_VERSION_SUPPORTS_SEALED_LOG);
+    expect(alpha.specVersion).toBeLessThan(mintedSpecVersion());
     expect(alpha.specVersion).toBeLessThanOrEqual(SPEC_VERSION_MAX_SUPPORTED);
   });
 
@@ -195,7 +198,7 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
     } finally {
       delete process.env.WORKFLOW_SEALED_LOG;
     }
-    expect(alpha.specVersion).toBe(SPEC_VERSION_CURRENT);
+    expect(alpha.specVersion).toBe(SPEC_VERSION_SUPPORTS_SEALED_LOG);
   });
 
   test("writing for an unprovisioned tenant fails loudly", async () => {
