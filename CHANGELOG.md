@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.22.0...workflow-world-v0.23.0) (2026-09-26)
+
+
+### Features
+
+* release the eve 0.67 pin as 0.23.0 ([6a68aa4](https://github.com/evelandhq/workflow-world/commit/6a68aa47fe9fe2f98b5d8601b4bf4edec5a948d8))
+
 ## [0.22.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.21.0...workflow-world-v0.22.0) (2026-09-23)
 
 
