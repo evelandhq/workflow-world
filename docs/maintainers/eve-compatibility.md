@@ -1,15 +1,31 @@
 # Following Eve
 
 An eve release is almost never a reason to do anything here. What matters is not
-that eve shipped, but whether the `@workflow/*` set it installs moved. The
-current supported window, {0.62.x, 0.64.x} (0.63 skipped), carries two sets:
-world beta.36, world-local beta.45 and core beta.53 on 0.62.0 (unchanged since
-0.61.0), and world beta.37, world-local beta.46 and core beta.55 from 0.64.0 on
-(0.64.1 re-bundled it without moving a version). The pins here follow the
-newest line;
+that eve shipped, but whether the `@workflow/*` set it installs moved. The pins
+here follow eve 0.67.0: world beta.38, world-local beta.47, errors beta.23 and
+core beta.56, the set 0.66.3 moved to. Eveland's supported window is
+{0.62.x, 0.66.x}, verified at 0.62.0 and 0.66.1, and both of those sit on
+earlier sets: world beta.36, world-local beta.45 and core beta.53 on 0.62
+(unchanged since 0.61.0), and world beta.37, world-local beta.46 and core
+beta.55 from 0.64.0 through 0.66.2, which workflow-world 0.22.0 pins and stays
+the match for Eveland. The 0.67 pin exists for a consumer that runs eve 0.67
+in External mode outside Eveland, and the e2e matrix covers each set once.
 `e2e-tests/eve-versions.mts` is the table of record. Exact patches still matter:
-Workflow pins have moved within an eve minor line before, so a minor is not a
-set.
+Workflow pins have moved within an eve minor line before (0.66.3 is the latest
+example), so a minor is not a set.
+
+World beta.38 also moved `SPEC_VERSION_CURRENT` to 8, the hook force-claim
+reader contract. This World keeps declaring and stamping 7: a runtime refuses a
+World above its ceiling, so 8 would shut out eve 0.62 through 0.66.2 -- the
+whole window Eveland deploys -- for a contract this World never exercises (it
+never takes a hook token over). The note on `specVersion` in `src/index.ts` says
+why 7 holds by construction and when the cap comes off; the runtime's accepted
+range still starts at slot identity (6) and now ends at 8, so 7 is inside it on
+every line in the matrix. The conformance harness is the one thing that minds:
+`@workflow/world-testing` beta.56 asserts a World stamps what its own runtime
+mints (8), so the harness stays on beta.55 -- which reads 7 -- until the cap
+comes off. The e2e matrix, which runs real eve builds, is what covers core
+beta.56.
 
 The other axis an eve release can move is the message stream, which the World
 touches through write-side snapshot stripping. eve 0.50.0 took it to v25, where

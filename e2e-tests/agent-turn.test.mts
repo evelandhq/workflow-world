@@ -3,7 +3,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { ensureTenantPartitions, runMigrations } from "../src/index.js";
 import { dropTenantPartitions } from "../src/migrate.js";
-import { waitForRequiredEventTypes } from "./event-types.mts";
+import { requiredTurnEventTypes, waitForRequiredEventTypes } from "./event-types.mts";
 import { ENABLED_EVE_VERSIONS } from "./eve-versions.mts";
 import {
   buildAgent,
@@ -224,16 +224,19 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
       });
 
       test("the turn drives steps, hooks and waits through this World", async () => {
-        await waitForRequiredEventTypes(async () => {
-          const { rows } = await pool.query<{ type: string; count: string }>(
-            `select type, count(*)::text as count
+        await waitForRequiredEventTypes(
+          async () => {
+            const { rows } = await pool.query<{ type: string; count: string }>(
+              `select type, count(*)::text as count
                from workflow.workflow_events
               where tenant_id = $1
               group by type`,
-            [tenantId],
-          );
-          return rows;
-        });
+              [tenantId],
+            );
+            return rows;
+          },
+          { required: requiredTurnEventTypes(entry.version) },
+        );
       });
 
       test("the queue was used, not bypassed", async () => {
