@@ -11,11 +11,13 @@ allowBuilds:
 
 # Already pinned and verified by the existing Eve compatibility matrix.
 minimumReleaseAgeExclude:
-  - eve@0.67.0
+  - eve@0.72.1
   # The conformance harness and the @workflow/* set it pins. The harness is
   # exempt from eve's pins (src/eve-pin-contract.test.ts) and was bumped to the
   # first release whose bundled runtime reads spec 7, which this World now
-  # stamps; conformance/spec.test.mts asserts the two agree.
+  # stamps; conformance/spec.test.mts asserts the two agree. It stays on
+  # beta.55 although the runtime pins are stable 5.0.1: later harnesses demand
+  # spec 8, and this World caps at 7 (src/index.ts).
   - "@workflow/astro@5.0.0-beta.55"
   - "@workflow/builders@5.0.0-beta.55"
   - "@workflow/cli@5.0.0-beta.55"
