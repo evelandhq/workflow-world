@@ -95,11 +95,12 @@ function withoutSnapshot(data: Record<string, unknown>, soFarKey: string): Recor
 /**
  * Strip Eve's cumulative snapshots while preserving unknown bytes exactly.
  *
- * Every supported Eve line speaks message stream v25 (0.50.0 and later), whose
- * appends carry the delta alone, so on a current run this is a no-op: the
- * frame is parsed, nothing is found, and the original buffer is returned. It
- * stays on as a cheap write-side guard so that a v24-shaped append -- a stale
- * build, a hand-written chunk -- can never reintroduce O(n²) storage.
+ * Every supported Eve line speaks message stream v25 (0.50.0 and later) or
+ * v26 (0.69.0 and later, same append events), whose appends carry the delta
+ * alone, so on a current run this is a no-op: the frame is parsed, nothing is
+ * found, and the original buffer is returned. It stays on as a cheap
+ * write-side guard so that a v24-shaped append -- a stale build, a
+ * hand-written chunk -- can never reintroduce O(n²) storage.
  *
  * Nothing rebuilds the snapshot on read. The rehydrator that used to do so was
  * removed once the last v24 line left the supported window: it re-inflated

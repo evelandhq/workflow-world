@@ -195,17 +195,20 @@ export function createWorld(
      * @workflow/world beta.37 that was 7. beta.38 (eve 0.66.3) moved it to 8,
      * the hook force-claim reader contract, and this World deliberately stays
      * one below. Declaring 8 would shut out every runtime before core beta.56
-     * -- eve 0.62 through 0.66.2, the whole window Eveland deploys -- since a
-     * runtime refuses a World above its ceiling at startup, and it would buy
-     * nothing: 8 is a reader contract for the `hook_disposed{forceClaimedBy}`
-     * row another run's `createHook({ experimental_force: true })` writes into
-     * a victim's log, and this World never takes a token over. A forced
+     * -- eve 0.66.2 and older -- since a runtime refuses a World above its
+     * ceiling at startup, and it would buy nothing: 8 is a reader contract for
+     * the `hook_disposed{forceClaimedBy}` row another run's
+     * `createHook({ experimental_force: true })` writes into a victim's log,
+     * and this World never takes a token over. A forced
      * creation meets the same claim check as any other and is answered with an
      * ordinary `hook_conflict`, so no run it stamps is ever stranded by one.
-     * The cap comes off when the runtime's floor reaches 8, exactly as 6 gave
-     * way to 7 -- and the conformance harness moves with it: world-testing
-     * beta.56 asserts the World stamps what its runtime mints, so it stays on
-     * beta.55 until then (docs/maintainers/eve-compatibility.md).
+     * Every line in Eveland's current window ({0.68.x, 0.72.x}: core beta.57
+     * and 5.0.1) reads 8, so the cap is no longer forced by the window; it
+     * comes off when the runtime's floor reaches 8, exactly as 6 gave way to 7,
+     * or earlier by deliberate choice -- and the conformance harness moves with
+     * it: world-testing from beta.56 on (5.0.1 included) asserts every run is
+     * stamped at least what its own runtime mints (8), so it stays on beta.55
+     * until then (docs/maintainers/eve-compatibility.md).
      *
      * Declaring 7 changes nothing in storage. Its only reader obligation is the
      * `noop` filler a backend emits when it pre-assigns event positions and a

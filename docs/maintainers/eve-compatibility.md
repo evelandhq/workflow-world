@@ -2,39 +2,51 @@
 
 An eve release is almost never a reason to do anything here. What matters is not
 that eve shipped, but whether the `@workflow/*` set it installs moved. The pins
-here follow eve 0.67.0: world beta.38, world-local beta.47, errors beta.23 and
-core beta.56, the set 0.66.3 moved to. Eveland's supported window is
-{0.62.x, 0.66.x}, verified at 0.62.0 and 0.66.1, and both of those sit on
-earlier sets: world beta.36, world-local beta.45 and core beta.53 on 0.62
-(unchanged since 0.61.0), and world beta.37, world-local beta.46 and core
-beta.55 from 0.64.0 through 0.66.2, which workflow-world 0.22.0 pins and stays
-the match for Eveland. The 0.67 pin exists for a consumer that runs eve 0.67
-in External mode outside Eveland, and the e2e matrix covers each set once.
-`e2e-tests/eve-versions.mts` is the table of record. Exact patches still matter:
-Workflow pins have moved within an eve minor line before (0.66.3 is the latest
-example), so a minor is not a set.
+here follow eve 0.72.1: world, world-local, errors and core 5.0.1 and utils
+5.0.0, the stable Workflow 5 set eve 0.70.2 moved to. Eveland's
+supported window is {0.68.x, 0.72.x}, verified at 0.68.0 and 0.72.1, and it
+carries two sets: world beta.39, world-local beta.48, errors beta.24 and core
+beta.57 from 0.67.2 through 0.70.1, and the stable set from 0.70.2 on. Pinning
+the newest line puts this release back inside Eveland's window; the e2e matrix
+covers each set once. `e2e-tests/eve-versions.mts` is the table of record.
+Exact patches still matter: Workflow pins have moved within an eve minor line
+before (0.66.3, 0.67.2 and 0.70.2 are the latest examples), so a minor is not a
+set.
+
+The one contract change in that stretch is on the read side. `@workflow/world`
+widened event-log reads to `EventsResolveData`, which adds `'skip-step-inputs'`:
+the runtime replays with it, and a World may leave step inputs out of
+`step_created` and `step_started` under it but must otherwise read it as
+`'all'`. Core beta.57 already sends it. This World has always tested only
+`=== "none"`, so the change is type-level -- the legacy event handler maps the
+value down to an entity `ResolveData` before using it -- and
+`src/storage.events.test.ts` pins the `'all'` reading. The World does not
+implement the input omission.
 
 World beta.38 also moved `SPEC_VERSION_CURRENT` to 8, the hook force-claim
-reader contract. This World keeps declaring and stamping 7: a runtime refuses a
-World above its ceiling, so 8 would shut out eve 0.62 through 0.66.2 -- the
-whole window Eveland deploys -- for a contract this World never exercises (it
-never takes a hook token over). The note on `specVersion` in `src/index.ts` says
-why 7 holds by construction and when the cap comes off; the runtime's accepted
-range still starts at slot identity (6) and now ends at 8, so 7 is inside it on
-every line in the matrix. The conformance harness is the one thing that minds:
-`@workflow/world-testing` beta.56 asserts a World stamps what its own runtime
+reader contract, and 5.0.1 keeps it there. This World keeps declaring and
+stamping 7: a runtime refuses a World above its ceiling, so 8 would shut out
+eve 0.66.2 and older, for a contract this World never exercises (it never takes
+a hook token over). Every line in Eveland's current window reads 8, so the cap
+is no longer forced by the window, but lifting it is a separate change. The note
+on `specVersion` in `src/index.ts` says why 7 holds by construction and when
+the cap comes off; the runtime's accepted range starts at slot identity (6) and
+ends at 8, so 7 is inside it on every line in the matrix. The conformance
+harness is the one thing that minds: `@workflow/world-testing` from beta.56 on,
+5.0.1 included, asserts every run is stamped at least what its own runtime
 mints (8), so the harness stays on beta.55 -- which reads 7 -- until the cap
-comes off. The e2e matrix, which runs real eve builds, is what covers core
-beta.56.
+comes off, even though the runtime pins are now stable. The e2e matrix, which
+runs real eve builds, is what covers the pinned core.
 
 The other axis an eve release can move is the message stream, which the World
 touches through write-side snapshot stripping. eve 0.50.0 took it to v25, where
 appends carry a delta and no cumulative snapshot -- the same shape a compacted
-v24 row already had. Read-side rehydration existed only for v24 runtimes, which
-served persisted appends verbatim and expected the snapshot to be there; it was
-removed once 0.49.x left the supported window, because a v25 runtime normalized
-the rebuilt snapshot away again before the wire and the rebuild cost O(n²) bytes
-per read.
+v24 row already had. eve 0.69.0 moved it to v26 without changing the append
+events, so the stripping stays a no-op on every supported line. Read-side
+rehydration existed only for v24 runtimes, which served persisted appends
+verbatim and expected the snapshot to be there; it was removed once 0.49.x left
+the supported window, because a v25 runtime normalized the rebuilt snapshot
+away again before the wire and the rebuild cost O(n²) bytes per read.
 
 Two versions with very different cadences are easy to conflate:
 

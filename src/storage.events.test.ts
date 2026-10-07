@@ -504,6 +504,86 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
     });
   });
 
+  /**
+   * Not part of the upstream port: `@workflow/world` 5.0 widened event-log
+   * reads to `EventsResolveData`, adding `'skip-step-inputs'`, which the
+   * runtime sends on every replay. A World MAY drop step inputs under it but
+   * MUST otherwise read it as `'all'` -- one that read it as `'none'` would
+   * strip step results and break every replay. This World does not implement
+   * the input omission, so its answer must equal the `'all'` answer.
+   */
+  describe("resolveData 'skip-step-inputs'", () => {
+    async function completeStep(stepId: string, result: Uint8Array) {
+      await createStep(events, testRunId, {
+        stepId,
+        stepName: stepId,
+        input: new Uint8Array([7, 7, 7]),
+      });
+      await events.create(testRunId, { eventType: "step_started", correlationId: stepId });
+      await events.create(testRunId, {
+        eventType: "step_completed",
+        correlationId: stepId,
+        eventData: { result },
+      });
+    }
+
+    function stepResult(page: readonly Event[], stepId: string): unknown {
+      const completed = page.find(
+        (event) => event.eventType === "step_completed" && event.correlationId === stepId,
+      );
+      return (completed as { eventData?: { result?: unknown } } | undefined)?.eventData?.result;
+    }
+
+    it("lists step results exactly as 'all' does", async () => {
+      await completeStep("skip-inputs-step", new Uint8Array([4, 2]));
+
+      const skip = await events.list({
+        runId: testRunId,
+        pagination: { sortOrder: "asc" },
+        resolveData: "skip-step-inputs",
+      });
+      const all = await events.list({
+        runId: testRunId,
+        pagination: { sortOrder: "asc" },
+        resolveData: "all",
+      });
+      const none = await events.list({
+        runId: testRunId,
+        pagination: { sortOrder: "asc" },
+        resolveData: "none",
+      });
+
+      expect(skip.data).toEqual(all.data);
+      expect(stepResult(skip.data, "skip-inputs-step")).toEqual(new Uint8Array([4, 2]));
+      // The comparison only means something if 'none' really strips it.
+      expect(stepResult(none.data, "skip-inputs-step")).toBeUndefined();
+    });
+
+    it("keeps step results in the page a create returns", async () => {
+      await events.create(
+        testRunId,
+        { eventType: "run_started", specVersion: SPEC_VERSION_SUPPORTS_SLOT_IDENTITY },
+        { eventCount: 1 },
+      );
+      await completeStep("skip-inputs-delta", new Uint8Array([9]));
+
+      const result = await events.create(
+        testRunId,
+        {
+          eventType: "step_created",
+          correlationId: "skip-inputs-next",
+          eventData: { stepName: "skip-inputs-next", input: new Uint8Array([1]) },
+          specVersion: SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
+        },
+        { eventCount: 2, sinceCursor: slotToEventId(2), resolveData: "skip-step-inputs" },
+      );
+
+      expect(stepResult(result.events ?? [], "skip-inputs-delta")).toEqual(new Uint8Array([9]));
+      // The created step entity is what step execution reads; its input is never skipped.
+      expect(result.step?.input).toEqual(new Uint8Array([1]));
+    });
+  });
+
   describe("listByCorrelationId", () => {
     it("should list all events with a specific correlation ID", async () => {
       const correlationId = "step-abc123";

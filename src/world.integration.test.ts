@@ -166,7 +166,8 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
     // @workflow/world beta.38 (eve 0.66.3) minted spec 8, the hook force-claim
     // reader contract, while the runtime floor stayed at slot identity (6).
     // The World declares 7 on purpose -- 8 would be refused by every runtime
-    // before core beta.56 -- unless WORKFLOW_SEALED_LOG opts the process out;
+    // before core beta.56 (eve 0.66.2 and older), though core 5.0.1 still
+    // admits 7 -- unless WORKFLOW_SEALED_LOG opts the process out;
     // see the note on `specVersion` in src/index.ts. The run created above is
     // stamped with it, so the suite exercises writing and reading 7.
     expect(SPEC_VERSION_SUPPORTS_SLOT_IDENTITY).toBe(6);

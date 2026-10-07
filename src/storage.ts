@@ -29,6 +29,7 @@ import type {
   CreateEventParams,
   Event,
   EventResult,
+  EventsResolveData,
   ExperimentalSetAttributesResult,
   GetEventParams,
   Hook,
@@ -283,7 +284,7 @@ async function reportSkippedSlots(
   runId: string,
   committedEventId: string,
   askedFor: number,
-  resolveData: ResolveData,
+  resolveData: EventsResolveData,
 ): Promise<{ events: Event[]; hasMore: boolean } | undefined> {
   const committedSlot = eventIdToSlot(committedEventId);
   if (committedSlot === null || askedFor < FIRST_EVENT_SLOT || committedSlot <= askedFor + 1) {
@@ -592,9 +593,12 @@ async function handleLegacyEventPostgres(
   currentRun: { status: string; specVersion: number | null },
   /** The World's declared version; stamped on the event rows a legacy run still records. */
   specVersion: number,
-  params?: { resolveData?: ResolveData },
+  params?: { resolveData?: EventsResolveData },
 ): Promise<EventResult> {
-  const resolveData = params?.resolveData ?? "all";
+  // Everything here is an entity or the created event, never an event-log
+  // page, so 'skip-step-inputs' reads as 'all'. Mapped inline rather than via
+  // world's `entityResolveData`, which older @workflow/world lines lack.
+  const resolveData: ResolveData = params?.resolveData === "none" ? "none" : "all";
 
   switch (data.eventType) {
     case "run_cancelled": {
