@@ -127,8 +127,8 @@ describe("@workflow/* pins track the installed eve", () => {
     // re-nesting its own @workflow/world in the tree. Bumping the harness is the
     // move when it stops accepting what we declare (beta.42 read only through
     // spec 6; beta.51 reads 7, which is what this World now stamps).
-    // It is held on beta.55 even though eve 0.72.1 pins the stable 5.0.1 set:
-    // from beta.56 on (5.0.1 included) the harness requires every run to be
+    // It is held on beta.55 even though eve 0.75.1 pins the stable 5.2 family:
+    // from beta.56 on (every stable 5.x included) the harness requires every run to be
     // stamped at least `mintedSpecVersion()`, which is 8, and this World
     // deliberately declares 7 (see `specVersion` in src/index.ts). The harness
     // moves when that cap comes off; until then the real-eve e2e is what

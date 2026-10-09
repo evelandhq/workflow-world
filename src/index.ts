@@ -202,8 +202,8 @@ export function createWorld(
      * and this World never takes a token over. A forced
      * creation meets the same claim check as any other and is answered with an
      * ordinary `hook_conflict`, so no run it stamps is ever stranded by one.
-     * Every line in Eveland's current window ({0.68.x, 0.72.x}: core beta.57
-     * and 5.0.1) reads 8, so the cap is no longer forced by the window; it
+     * Every line in Eveland's current window ({0.74.x, 0.75.x}: core 5.1.0
+     * and 5.2.0) reads 8, so the cap is no longer forced by the window; it
      * comes off when the runtime's floor reaches 8, exactly as 6 gave way to 7,
      * or earlier by deliberate choice -- and the conformance harness moves with
      * it: world-testing from beta.56 on (5.0.1 included) asserts every run is
