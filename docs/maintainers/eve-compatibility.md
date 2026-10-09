@@ -2,16 +2,16 @@
 
 An eve release is almost never a reason to do anything here. What matters is not
 that eve shipped, but whether the `@workflow/*` set it installs moved. The pins
-here follow eve 0.72.1: world, world-local, errors and core 5.0.1 and utils
-5.0.0, the stable Workflow 5 set eve 0.70.2 moved to. Eveland's
-supported window is {0.68.x, 0.72.x}, verified at 0.68.0 and 0.72.1, and it
-carries two sets: world beta.39, world-local beta.48, errors beta.24 and core
-beta.57 from 0.67.2 through 0.70.1, and the stable set from 0.70.2 on. Pinning
-the newest line puts this release back inside Eveland's window; the e2e matrix
+here follow eve 0.75.1: world 5.0.3, world-local 5.1.0, errors 5.0.3, core
+5.2.0 and utils 5.0.1, the stable Workflow 5.2 family eve 0.75.1 moved to.
+Eveland's supported window is {0.74.x, 0.75.x}, verified at 0.74.0 and 0.75.1,
+and it carries two sets: world, world-local and errors 5.0.2 with core 5.1.0
+from 0.73.0 through 0.75.0, and the 5.2 family from 0.75.1 on. Pinning the
+newest line puts this release back inside Eveland's window; the e2e matrix
 covers each set once. `e2e-tests/eve-versions.mts` is the table of record.
 Exact patches still matter: Workflow pins have moved within an eve minor line
-before (0.66.3, 0.67.2 and 0.70.2 are the latest examples), so a minor is not a
-set.
+before (0.66.3, 0.67.2, 0.70.2 and 0.75.1 are the latest examples), so a minor
+is not a set.
 
 The one contract change in that stretch is on the read side. `@workflow/world`
 widened event-log reads to `EventsResolveData`, which adds `'skip-step-inputs'`:
@@ -21,7 +21,9 @@ the runtime replays with it, and a World may leave step inputs out of
 `=== "none"`, so the change is type-level -- the legacy event handler maps the
 value down to an entity `ResolveData` before using it -- and
 `src/storage.events.test.ts` pins the `'all'` reading. The World does not
-implement the input omission.
+implement the input omission. The stable releases since only add optional
+members a World may ignore: a stream writer's `release()`, an advisory
+`afterStepBody` mark on step writes, and a hook's `nodeVersion`.
 
 World beta.38 also moved `SPEC_VERSION_CURRENT` to 8, the hook force-claim
 reader contract, and 5.0.1 keeps it there. This World keeps declaring and

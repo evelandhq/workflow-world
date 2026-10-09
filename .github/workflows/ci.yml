@@ -130,15 +130,14 @@ jobs:
       matrix:
         # Mirrors the enabled entries in e2e-tests/eve-versions.mts. Keep them in
         # step — the file is what the suite reads; this list is only what CI
-        # pays for. Every entry writes delta-only message appends (stream v25
-        # on 0.68, v26 with the same append events from 0.69) and shares one
-        # execution model, so the axis left is the bundled Workflow set.
-        # Eveland's window is {0.68.x, 0.72.x}: 0.68.0, its floor and what
-        # existing Eveland Releases run, samples core beta.57 (world beta.39,
-        # world-local beta.48); 0.72.1, Eveland's verified release on the
-        # newest line, samples the stable 5.0.1 set 0.70.2 moved to, which the
-        # pins here follow.
-        eve: ["0.68.0", "0.72.1"]
+        # pays for. Every entry writes delta-only message appends (stream v26)
+        # and shares one execution model, so the axis left is the bundled
+        # Workflow set. Eveland's window is {0.74.x, 0.75.x}: 0.74.0, its floor
+        # and what existing Eveland Releases run, samples core 5.1.0 (world and
+        # world-local 5.0.2); 0.75.1, Eveland's verified release on the newest
+        # line, samples the stable 5.2 family it moved to, which the pins here
+        # follow.
+        eve: ["0.74.0", "0.75.1"]
     services:
       postgres:
         image: postgres:17-alpine

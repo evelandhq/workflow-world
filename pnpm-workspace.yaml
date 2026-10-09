@@ -11,7 +11,13 @@ allowBuilds:
 
 # Already pinned and verified by the existing Eve compatibility matrix.
 minimumReleaseAgeExclude:
-  - eve@0.72.1
+  - eve@0.75.1
+  # The @workflow/* set eve 0.75.1 bundles (src/eve-pin-contract.test.ts pins
+  # this package to it), published the same day eve 0.75.1 was.
+  - "@workflow/core@5.2.0"
+  - "@workflow/world@5.0.3"
+  - "@workflow/world-local@5.1.0"
+  - "@workflow/world-vercel@5.2.0"
   # The conformance harness and the @workflow/* set it pins. The harness is
   # exempt from eve's pins (src/eve-pin-contract.test.ts) and was bumped to the
   # first release whose bundled runtime reads spec 7, which this World now
@@ -36,3 +42,8 @@ minimumReleaseAgeExclude:
   - "@workflow/world-vercel@5.0.0-beta.50"
   - "@workflow/world@5.0.0-beta.37"
   - workflow@5.0.0-beta.55
+  - "@workflow/core@5.2.0"
+  - "@workflow/errors@5.0.3"
+  - "@workflow/world-local@5.1.0"
+  - "@workflow/world-vercel@5.2.0"
+  - "@workflow/world@5.0.3"
