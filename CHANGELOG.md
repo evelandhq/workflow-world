@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.24.0...workflow-world-v0.25.0) (2026-10-09)
+
+
+### Features
+
+* follow eve 0.75.1's stable [@workflow](https://github.com/workflow) 5.2 family ([#110](https://github.com/evelandhq/workflow-world/issues/110)) ([dd7b54c](https://github.com/evelandhq/workflow-world/commit/dd7b54c2fdd1db68275daa54f641f480c12703e8))
+
 ## [0.24.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.23.0...workflow-world-v0.24.0) (2026-10-07)
 
 
