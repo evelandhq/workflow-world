@@ -52,8 +52,8 @@ importers:
         specifier: 5.0.0-beta.55
         version: 5.0.0-beta.55(@aws-sdk/credential-provider-web-identity@3.972.49)(@nestjs/common@11.2.1(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.1(@nestjs/common@11.2.1(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(react@19.2.8)(typescript@5.9.3)(vitest@4.1.10(@types/node@24.13.3)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)))(ws@8.21.3)
       eve:
-        specifier: 0.75.1
-        version: 0.75.1(ai@7.0.87(zod@4.5.4))
+        specifier: 0.79.0
+        version: 0.79.0(ai@7.0.87(zod@4.5.4))
       oxfmt:
         specifier: 0.58.0
         version: 0.58.0
@@ -1811,13 +1811,13 @@ packages:
     resolution: {integrity: sha512-aIL5Fx7mawVa300al2BnEE4iNvo1qETxLrPI/o05L7z6go7fCw1J6EQmbK4FmJ2AS7kgVF/KEZWufBfdClMcPg==}
     engines: {node: '>= 0.6'}
 
-  eve@0.75.1:
-    resolution: {integrity: sha512-z9A0ZvfQZVnmuYerwWyxKhIlyqDiwplH9E0skuoP+du/UIh9526W51CktuKDvzJaVUY1+2IPT59ILSIPjaAGJg==}
+  eve@0.79.0:
+    resolution: {integrity: sha512-H+SERBdpVUh3w5r/KQxOMnN/fyXiE3UXyBL56yviVON5UHLbBZBbobCzdOUog5OsP3hw1iZzjcSuHC0XF2YJ4Q==}
     engines: {node: '>=24'}
     hasBin: true
     peerDependencies:
       '@opentelemetry/api': ^1.0.0
-      ai: ^7.0.128
+      ai: ^7.0.137
       braintrust: ^3.0.0
       chat: ^4.41.0
       dd-trace: ^6.13.0
@@ -4930,7 +4930,7 @@ snapshots:
 
   etag@1.8.1: {}
 
-  eve@0.75.1(ai@7.0.87(zod@4.5.4)):
+  eve@0.79.0(ai@7.0.87(zod@4.5.4)):
     dependencies:
       ai: 7.0.87(zod@4.5.4)
       nitro: 3.0.260903-beta

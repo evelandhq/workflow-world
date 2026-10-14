@@ -8,8 +8,8 @@
  * when the answer is no.
  *
  * Quiet is the point. eve ships often and almost none of it reaches this
- * package — the currently supported {0.74.x, 0.75.x} window contains only two
- * distinct sets, with 0.75.1 introducing the one pinned here.
+ * package — the currently supported {0.76.x, 0.79.x} window contains a single
+ * set, the one 0.75.1 introduced and pinned here.
  * A check that fired on every eve release would be noise nobody reads; this one
  * fires roughly once per eve minor line, which is the real cadence of work here.
  *

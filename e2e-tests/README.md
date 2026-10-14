@@ -47,7 +47,7 @@ assertion about _this_ package.
 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
 
 # Run one enabled version, as each CI matrix job does.
-EVE_VERSION=0.75.1 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
+EVE_VERSION=0.79.0 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
 ```
 
 The URL is used both to create the per-version database and, rewritten, to connect
@@ -58,13 +58,12 @@ release. An unknown or disabled value fails instead of silently running nothing.
 Each enabled eve version costs an `npm install` plus a full `eve build`, so
 `eve-versions.mts` enables them deliberately rather than all at once. Eveland's
 supported window comes from its `packages/core/src/eve-compatibility.ts`; it is
-currently {0.74.x, 0.75.x}, and this package pins its newest line's verified
-release, eve 0.75.1. A minor does not reliably identify a `@workflow/*` set, so
-the entries name exact patches. The window carries two sets: world and
-world-local 5.0.2 with core 5.1.0 from 0.73.0 through 0.75.0, and the stable
-5.2 family (world 5.0.3, world-local 5.1.0, core 5.2.0) from 0.75.1 on. The
-execution model is the same on both -- turns run inside the session's own run
--- so the enabled entries cover each set once (0.74.0 and 0.75.1);
+currently {0.76.x, 0.79.x}, and this package pins the `@workflow/*` set both
+lines bundle, the stable 5.2 family (world 5.0.3, world-local 5.1.0, core
+5.2.0) eve 0.75.1 moved to. A minor does not reliably identify a `@workflow/*`
+set, so the entries name exact patches. With one set in the window, the two
+enabled entries (0.76.0 and 0.79.0) sample eve's two readings of the World
+instead: 0.79.0 consults `capabilities.deploymentAffinity`, 0.76.0 predates it;
 `eve-versions.mts` records why each one earns its install. This is especially
 worth proving for `@workflow/world-local`, because this package wraps its
 `createQueueHandler`.

@@ -3,12 +3,12 @@
 An eve release is almost never a reason to do anything here. What matters is not
 that eve shipped, but whether the `@workflow/*` set it installs moved. The pins
 here follow eve 0.75.1: world 5.0.3, world-local 5.1.0, errors 5.0.3, core
-5.2.0 and utils 5.0.1, the stable Workflow 5.2 family eve 0.75.1 moved to.
-Eveland's supported window is {0.74.x, 0.75.x}, verified at 0.74.0 and 0.75.1,
-and it carries two sets: world, world-local and errors 5.0.2 with core 5.1.0
-from 0.73.0 through 0.75.0, and the 5.2 family from 0.75.1 on. Pinning the
-newest line puts this release back inside Eveland's window; the e2e matrix
-covers each set once. `e2e-tests/eve-versions.mts` is the table of record.
+5.2.0 and utils 5.0.1, the stable Workflow 5.2 family eve 0.75.1 moved to and
+every release since, through 0.79.0, still bundles. Eveland's supported window
+is {0.76.x, 0.79.x}, verified at 0.76.0 and 0.79.0, so it carries that one set;
+the e2e matrix runs both lines because eve's own reading of the World differs
+between them (0.76.1 added the stranded-session guard that
+`capabilities.deploymentAffinity` turns off; see `docs/design.md`). `e2e-tests/eve-versions.mts` is the table of record.
 Exact patches still matter: Workflow pins have moved within an eve minor line
 before (0.66.3, 0.67.2, 0.70.2 and 0.75.1 are the latest examples), so a minor
 is not a set.

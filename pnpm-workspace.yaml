@@ -11,9 +11,10 @@ allowBuilds:
 
 # Already pinned and verified by the existing Eve compatibility matrix.
 minimumReleaseAgeExclude:
-  - eve@0.75.1
-  # The @workflow/* set eve 0.75.1 bundles (src/eve-pin-contract.test.ts pins
-  # this package to it), published the same day eve 0.75.1 was.
+  - eve@0.79.0
+  # The @workflow/* set eve 0.75.1 introduced and 0.79.0 still bundles
+  # (src/eve-pin-contract.test.ts pins this package to it), published the same
+  # day eve 0.75.1 was.
   - "@workflow/core@5.2.0"
   - "@workflow/world@5.0.3"
   - "@workflow/world-local@5.1.0"
