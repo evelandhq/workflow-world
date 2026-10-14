@@ -132,12 +132,12 @@ jobs:
         # step — the file is what the suite reads; this list is only what CI
         # pays for. Every entry writes delta-only message appends (stream v26)
         # and shares one execution model, so the axis left is the bundled
-        # Workflow set. Eveland's window is {0.74.x, 0.75.x}: 0.74.0, its floor
-        # and what existing Eveland Releases run, samples core 5.1.0 (world and
-        # world-local 5.0.2); 0.75.1, Eveland's verified release on the newest
-        # line, samples the stable 5.2 family it moved to, which the pins here
-        # follow.
-        eve: ["0.74.0", "0.75.1"]
+        # Workflow set. Eveland's window is {0.76.x, 0.79.x}, and both lines
+        # bundle the stable 5.2 family the pins here follow, so the axis this
+        # matrix still samples is eve's own handling of the World: 0.76.0, the
+        # floor, predates eve's stranded-session guard; 0.79.0, Eveland's
+        # verified release on the newest line, reads `deploymentAffinity`.
+        eve: ["0.76.0", "0.79.0"]
     services:
       postgres:
         image: postgres:17-alpine

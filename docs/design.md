@@ -168,9 +168,10 @@ what this does: a world instance always runs inside one deployment and therefore
 has an ambient tenant, so guessing another tenant's token resolves to nothing
 rather than to their hook.
 
-Two capabilities are declared rather than assumed. Hook token retention is
+Capabilities are declared rather than assumed. Hook token retention is
 announced through `capabilities.hookRetention`, because a World that stays silent
-is treated as not supporting it. And `events.create` reports `maxEvents` on every
+is treated as not supporting it. Deployment affinity is announced through
+`capabilities.deploymentAffinity` (see below). And `events.create` reports `maxEvents` on every
 response that carries a run, because the runtime enforces the ceiling and a World
 that omits the field leaves a runaway workflow with no bound at all.
 
@@ -213,22 +214,30 @@ parses it.
 5.0.0-beta.25 — first picked up by eve 0.31.2 — added one required param and four
 more optional members. The required one, `runId` on
 `ListEventsByCorrelationIdParams`, is implemented; see
-`events.listByCorrelationId`. The optional four are unimplemented, and one of
-them is a live design question rather than a shrug:
+`events.listByCorrelationId`. Of the optional four, one is now declared and the
+other three are unimplemented:
 
-- **`capabilities.deploymentAffinity`** turns on the runtime's own affinity
-  guard: a misrouted delivery is re-routed to the run's deployment and ultimately
-  fails the run with `DEPLOYMENT_MISMATCH`. This World qualifies to declare it —
-  the guard is unsafe only for Worlds whose deployment id is synthetic or
-  version-tagged, and `queue.getDeploymentId` returns the real one. It stays
-  unset because the dispatcher already resolves affinity from the run row before
-  any delivery happens (`resolveAffinity`), so the guard would be a second
-  mechanism for a condition the first one is designed to make unreachable — and
-  the two disagree about the remedy: the dispatcher treats a terminal run's
-  straggler as droppable, while the guard ultimately fails the run. Declaring it
-  is worth doing only alongside evidence that misrouted deliveries actually
-  occur, which would mean the dispatcher's own routing has a hole worth fixing
-  directly.
+- **`capabilities.deploymentAffinity`** was left unset here until eve 0.76.1,
+  and is declared now. On its own it turns on the runtime's affinity guard: a
+  misrouted delivery is re-routed to the run's deployment and ultimately fails
+  the run with `DEPLOYMENT_MISMATCH`. This World qualifies — the guard is unsafe
+  only for Worlds whose deployment id is synthetic or version-tagged, and
+  `queue.getDeploymentId` returns the real one — but the dispatcher already
+  resolves affinity from the run row before any delivery happens
+  (`resolveAffinity`), so the guard alone was a second mechanism for a condition
+  the first is designed to make unreachable. eve 0.76.1 gave the flag a second
+  reader: eve itself takes it to mean "this World routes each run to its own
+  deployment". A World without it is assumed to run one eve version at a time,
+  so eve compares every run's `$eve.version` attribute with its own version,
+  parks or cancels deliveries for runs another version created, and ends a
+  session whose owner run another version created (`session_stranded`) instead
+  of resuming that run and letting it hand the session over. On Eveland, where
+  Deployments on different eve versions run side by side, that turned every
+  channel-address continuation across an eve-version promote into a reset. The
+  guard's remedy still differs from the dispatcher's (a terminal run's straggler
+  is dropped by the dispatcher, failed by the guard), but with the dispatcher
+  routing on the run row the guard should never fire; if it does, the
+  dispatcher's routing has a hole worth fixing directly.
 - **`queue.isDeploymentUnavailableError`** lets the runtime distinguish "this
   deployment definitively cannot receive the message" from a transient failure.
   The dispatcher already makes exactly that distinction on the activation

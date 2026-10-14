@@ -3,21 +3,20 @@
  * release installs, not npm's `latest`, is what decides whether an entry earns
  * its install.
  *
- * Eveland's supported window is {0.74.x, 0.75.x} -- contiguous, verified at
- * 0.74.0 and 0.75.1 -- and the pins here follow its newest line, eve 0.75.1.
- * Eveland retired 0.68 when 0.75 entered, so the core beta.57 set it carried
- * left the matrix with it, as the stable 5.0.1 set did when 0.72 was retired
- * for 0.73. The window carries TWO `@workflow/*` sets: 0.73.0 moved to core
- * 5.1.0 with world, world-local and errors 5.0.2 and kept that set through
- * 0.75.0, and 0.75.1 moved to the stable 5.2 family:
+ * Eveland's supported window is {0.76.x, 0.79.x} -- gapped, verified at
+ * 0.76.0 and 0.79.0 -- and the pins here follow the stable 5.2 family that
+ * eve 0.75.1 moved to and every release since, through 0.79.0, bundles.
+ * Eveland retired 0.74 when 0.79 entered, so the core 5.1.0 / world 5.0.2 set
+ * it carried left the matrix with it, as the core beta.57 set did when 0.68
+ * was retired. The window carries ONE `@workflow/*` set:
  *
- * | package                 | 0.73.0-0.75.0 | 0.75.1 |
- * | ----------------------- | ------------- | ------ |
- * | `@workflow/world`       | 5.0.2         | 5.0.3  |
- * | `@workflow/world-local` | 5.0.2         | 5.1.0  |
- * | `@workflow/core`        | 5.1.0         | 5.2.0  |
- * | `@workflow/errors`      | 5.0.2         | 5.0.3  |
- * | `@workflow/utils`       | 5.0.1         | 5.0.1  |
+ * | package                 | 0.75.1-0.79.0 |
+ * | ----------------------- | ------------- |
+ * | `@workflow/world`       | 5.0.3         |
+ * | `@workflow/world-local` | 5.1.0         |
+ * | `@workflow/core`        | 5.2.0         |
+ * | `@workflow/errors`      | 5.0.3         |
+ * | `@workflow/utils`       | 5.0.1         |
  *
  * World beta.37 added an opt-in request/response path (`capabilities.invoke`,
  * `World.invoke()`, optional `invoke`/`requestId`/`input` on queue messages)
@@ -28,7 +27,7 @@
  * this World always has (`src/storage.events.test.ts` pins it). The 5.x
  * releases since only add optional members (a stream writer's `release`, an
  * advisory `afterStepBody` mark on step writes, a hook's `nodeVersion`). Spec
- * versions did not move: both sets mint 8 and accept 6 through 8, and this
+ * versions did not move: the set mints 8 and accept 6 through 8, and this
  * World keeps declaring 7 (`src/index.ts`).
  *
  * The whole window writes delta-only appends on message stream v26, which
@@ -38,10 +37,13 @@
  * (`<sessionId>:anchor`, `<runId>:handoff`), deployment handoff and renewable
  * stream leases. The per-turn child `turnWorkflow` run left with 0.55.
  *
- * - 0.74.0 is the window's floor, which existing Eveland Releases run, and
- *   samples the core 5.1.0 / world 5.0.2 set.
- * - 0.75.1 is Eveland's verified release on the newest line, what the pins
- *   follow, and samples the stable 5.2 family.
+ * - 0.76.0 is the window's floor, which existing Eveland Releases run. It
+ *   predates eve's stranded-session guard (0.76.1).
+ * - 0.79.0 is Eveland's verified release on the newest line. From 0.76.1 eve
+ *   reads `capabilities.deploymentAffinity`: without it eve assumes one eve
+ *   version runs at a time and wraps the World's queue handler in its
+ *   stranded-replay guard, so the two entries exercise eve's two readings of
+ *   this World on the same Workflow set.
  *
  * Every entry is past 0.67.0, which removed the `conversation` / `task` run
  * mode: every session parks after its turn, so a first turn no longer
@@ -61,8 +63,8 @@ export type EveVersion = {
 };
 
 export const EVE_VERSIONS: readonly EveVersion[] = [
-  { version: "0.74.0", enabled: true },
-  { version: "0.75.1", enabled: true },
+  { version: "0.76.0", enabled: true },
+  { version: "0.79.0", enabled: true },
 ];
 
 const eveVersionUnderTest = process.env.EVE_VERSION;

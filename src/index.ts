@@ -202,8 +202,8 @@ export function createWorld(
      * and this World never takes a token over. A forced
      * creation meets the same claim check as any other and is answered with an
      * ordinary `hook_conflict`, so no run it stamps is ever stranded by one.
-     * Every line in Eveland's current window ({0.74.x, 0.75.x}: core 5.1.0
-     * and 5.2.0) reads 8, so the cap is no longer forced by the window; it
+     * Every line in Eveland's current window ({0.76.x, 0.79.x}: core 5.2.0)
+     * reads 8, so the cap is no longer forced by the window; it
      * comes off when the runtime's floor reaches 8, exactly as 6 gave way to 7,
      * or earlier by deliberate choice -- and the conformance harness moves with
      * it: world-testing from beta.56 on (5.0.1 included) asserts every run is
@@ -230,12 +230,26 @@ export function createWorld(
      * scheme marker. The conformance suite asserts the installed runtime agrees.
      */
     specVersion,
-    /**
-     * Declared so the runtime knows hook token retention is honoured here. A
-     * World that stays silent is treated as not supporting it, which was the
-     * previous state — and worse than that, the field was accepted and dropped.
-     */
-    capabilities: { hookRetention: { active: true } },
+    capabilities: {
+      /**
+       * Declared so the runtime knows hook token retention is honoured here. A
+       * World that stays silent is treated as not supporting it, which was the
+       * previous state — and worse than that, the field was accepted and dropped.
+       */
+      hookRetention: { active: true },
+      /**
+       * An Eveland Deployment is one immutable build under a real id, and the
+       * dispatcher delivers every run to the deployment on its row. Since 0.76.1
+       * eve reads this flag as "this World routes each run to its own
+       * deployment": without it eve assumes one eve version runs at a time,
+       * parks or cancels deliveries for runs another eve version created, and
+       * ends a session whose owner run was created by another eve version
+       * instead of letting that run hand the session over. The runtime's own
+       * affinity guard comes with it, and stays a second line behind the
+       * dispatcher's routing. See docs/design.md.
+       */
+      deploymentAffinity: true,
+    },
     ...storage,
     ...streamer,
     ...queue,

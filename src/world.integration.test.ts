@@ -93,6 +93,15 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
     expect(run.deploymentId).toBe("dep_alpha_1");
   });
 
+  test("declares deployment affinity, so eve keeps runs of every eve version on their own deployment", () => {
+    // Without it eve (0.76.1+) treats the World as running one eve version at a
+    // time: deliveries for runs another eve version created are parked or
+    // cancelled, and a session owned by such a run is ended rather than handed
+    // over to the deployment that received the message.
+    expect(alpha.capabilities?.deploymentAffinity).toBe(true);
+    expect(alpha.capabilities?.hookRetention?.active).toBe(true);
+  });
+
   test("resolveLatestDeploymentId follows the promoted deployment", async () => {
     expect(await alpha.resolveLatestDeploymentId?.()).toBe("dep_alpha_1");
   });
