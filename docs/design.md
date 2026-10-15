@@ -565,6 +565,83 @@ own send, the dispatcher's reschedule, and boot recovery — must derive the nam
 identically or the serialization is silently partial, so it has exactly one
 definition.
 
+**A hook wake sent while its run's queue is held is the one exception.** It is
+new input for the run, not a duplicate, and it is the only way a cancel reaches
+a step that is running: eve runs the step inside the delivery that claimed it,
+and the replay the cancel's wake starts is what aborts it. Queued behind that
+delivery, the replay would start after the step had finished and its side
+effect had gone out. So when the World sends a hook wake (`isHookWake`) and a
+delivery holds the run's queue, the wake takes no queue name. On an idle run it
+queues as usual. Such a wake is also counted against a cap of its own rather
+than the tenant's delivery cap (`wakeFlag`): the delivery it interrupts already
+holds a slot of that cap. The wake cap has the size of the delivery cap, and
+like it, it is approximate: graphile reads the forbidden flags before a claim
+and the count rises after it, so idle workers claiming at once can overshoot. A
+wake with no input in its payload and no producer idempotency key also takes a
+per-run job key, so a burst of input during a long step leaves one pending wake
+rather than one per message. That is safe because `resumeHook` commits the input
+to the event log before it publishes such a wake; a wake that carries its input
+(`hookInput`) or a producer key keeps a key of its own.
+
+A wake running beside its owner does not weaken the exclusion a step had
+before. A replay executes inline
+only a step it claims itself, and the storage claim on a new step's
+`step_started` gives that to one caller. Any other step it can only enqueue as a
+step message; while the owner's ownership lease (860 s by default) is live,
+`@workflow/core` arms only a delayed backstop replay of the run instead. Past the
+lease, a step message can be claimed while the step still runs, on any
+replica, once the run's queue is free; while the owner runs, the queue is free
+only when the owner is a wake that bypassed it. So storage keeps the delivery that started
+a step on the step (`owner_message_id`), and refuses another delivery's
+`step_started` with a retry while that delivery's graphile job is still locked
+(`deliveryInFlight`). The owner's own redelivery may start it again, and a
+refused start comes back later, at a tenth of how long the step has run (30 s
+to 5 min): each retry is a delivery, so the retries thin out on a long step.
+
+The fence ends where the queue lock always ended: when the owner's delivery
+does. A delivery past the dispatch timeout is aborted and its job unlocked
+while the step body may still run on its executor; the owner's own redelivery
+then ran it again before this change too. A dead embedded runner leaves its job
+locked until graphile's four-hour stale-lock threshold, as it leaves a run's
+queue locked, so a step it owned waits that long to start again. Rows written
+before migration 0019, or by an older World, have no owner and are not fenced;
+their owner held the run's queue, which still orders the step message behind
+it.
+
+Limits, in order of likelihood:
+
+- The decision is made once, at send time. A wake that finds the queue idle
+  waits behind a step message that is already queued there, and a wake the
+  dispatcher reschedules goes back into the queue. A replay that is already
+  queued is no problem: it reads the input from the event log. The other way
+  round, a wake that found the queue held may run beside whichever delivery
+  holds it by the time it is claimed; the step claim and the restart fence
+  above cover that delivery too.
+- The wake still needs a free dispatcher slot and a free slot of its tenant's
+  wake cap. With either held by running work, it waits like any other job. A
+  wake's replay can go on to run ordinary work in the same job, such as the turn
+  for input that queued up during the cancelled step, and that holds a wake slot
+  meanwhile. Reserving dispatcher slots for wakes would need them under a job
+  name of their own; lowering the tenant cap instead starves a parent step that
+  holds a slot while it waits for its child run.
+- A wake that meets a running step leaves that delayed backstop replay behind,
+  at most one per step start. It is a no-op replay, but in external mode it
+  usually lands on an idle deployment and costs a cold start.
+- The per-run key folds only wakes still pending. A wake already claimed keeps
+  running, so with free dispatcher slots a burst of input gives about one
+  replay per message. A claimed wake that a newer one supersedes loses its
+  retries: if it then fails, its job row stays behind as failed, with no dead
+  letter, and the newer wake replays the same log.
+- A step that resumes a hook of its own run sends a wake that bypasses its own
+  delivery: one extra replay and one backstop replay, no second execution. eve
+  resumes other runs' hooks (a parent session), so this is rare.
+- The restart fence reads graphile's private job table by payload, which has
+  no index. It runs only when a running step is started again, which is rare,
+  and a failed read lets the start through as before.
+
+Boot recovery releases a dead worker's lock on a flow job in no queue by the job
+itself, since there is no queue to find it by.
+
 This costs a sweep. graphile does not reclaim a queue row when its last job
 completes, so one row per run would accumulate for ever; the dispatcher runs
 graphile's own queue cleanup on an interval.

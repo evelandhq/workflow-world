@@ -1,16 +1,18 @@
 /**
  * Multi-tenant port of `@workflow/world-postgres`'s queue.
  *
- * The graphile mapping is upstream's — same `jobKey`, same 49-attempt budget,
- * same reschedule semantics. What changes is who claims the work:
+ * The graphile mapping is upstream's — same `jobKey` (except a bypassing hook
+ * wake's, see `placeInvoke`), same 49-attempt budget, same reschedule
+ * semantics. What changes is who claims the work:
  *
  *   * `embedded` keeps the in-process runner, but its graphile job names are
  *     suffixed per tenant. On a shared database an unsuffixed name would let
  *     any agent claim any project's jobs, which is exactly the cross-project
  *     turn stealing that per-project databases were introduced to stop.
  *   * `external` registers no runner at all. Jobs go to a shared, unsuffixed
- *     name that the platform dispatcher claims, tagged with a `project:<id>`
- *     flag so the dispatcher can apply per-tenant fairness caps via
+ *     name that the platform dispatcher claims, tagged with a tenant flag
+ *     (`tenantFlag`, or `wakeFlag` for a hook wake that bypasses its run's
+ *     queue) so the dispatcher can apply per-tenant fairness caps via
  *     graphile's `forbiddenFlags`.
  *
  * A tenant that switches from embedded to external keeps draining its old
@@ -35,6 +37,7 @@ import {
   QueuePayloadSchema,
   type QueuePrefix,
   type ValidQueueName,
+  type WorkflowInvokePayload,
   WorkflowInvokePayloadSchema,
 } from "@workflow/world";
 import {
@@ -54,11 +57,14 @@ import {
   DEPLOYMENT_HEADER,
   DISPATCH_VERSION_HEADER,
   FLOW_JOB_NAME,
+  isHookWake,
   readRuntimeSecretFromEnv,
   runQueueName,
   RUNTIME_SECRET_HEADER,
   secretMatches,
+  tenantFlag,
   TIMER_JOB_NAME,
+  wakeFlag,
 } from "./dispatch-contract.js";
 import { MIGRATION_LOCK_KEY } from "./migrate.js";
 import { derivePartitionName } from "./tenant.js";
@@ -286,6 +292,71 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     }
   }
 
+  /**
+   * A hook wake passes its run's queue only while a delivery holds it; on an idle
+   * run it queues as usual. Decided once, at send time.
+   *
+   * Reads graphile 0.16's private queue table, as boot recovery does. A newer
+   * graphile schema may rename it, so a failed read queues the wake as usual:
+   * every inbox message is a hook wake, and a throw would fail to publish them.
+   */
+  let warnedLockReadFailure = false;
+  async function bypassesRunQueue(invoke: WorkflowInvokePayload): Promise<boolean> {
+    if (!isHookWake(invoke)) return false;
+    try {
+      const { rows } = await pool.query(
+        `select 1
+           from graphile_worker._private_job_queues
+          where queue_name = $1
+            and locked_at is not null`,
+        [runQueueName(tenantId, invoke.runId)],
+      );
+      return rows.length > 0;
+    } catch (err) {
+      // Once per queue: a lasting failure would otherwise log on every inbox message.
+      if (!warnedLockReadFailure) {
+        warnedLockReadFailure = true;
+        console.warn(
+          "[eveland workflow world] Could not read a run queue's lock; hook wakes queue as usual, so a cancel waits for a running step:",
+          err,
+        );
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Where a sent message goes: into its run's queue, or past it as a bypassing
+   * hook wake (`bypassesRunQueue`).
+   *
+   * At most one pending bypassing wake per run: graphile replaces a pending job
+   * under the same key. A claimed one keeps running, but graphile spends its
+   * retries, so if it then fails nothing retries it, no dead letter is written
+   * and its failed row stays behind; the new job replays the same log. Safe because `resumeHook` commits
+   * the input to the event log before it publishes the wake. A wake that carries
+   * its input (`hookInput`) keeps a key of its own, and so does one with a
+   * producer key: were this World to declare `hookResumeDedup`, core would key
+   * every wake `hook-<resumeId>` and wakes would stop folding.
+   */
+  async function placeInvoke(
+    message: unknown,
+    messageId: MessageId,
+    opts: { idempotencyKey?: string; delaySeconds?: number } | undefined,
+  ): Promise<{ jobKey: string; runId?: string; bypassingWake: boolean }> {
+    const idempotencyKey = opts?.idempotencyKey;
+    const invoke = WorkflowInvokePayloadSchema.safeParse(message);
+    if (!invoke.success) return { jobKey: idempotencyKey ?? messageId, bypassingWake: false };
+    const { runId, hookInput } = invoke.data;
+    // A delayed wake (core re-routing one) is not urgent, and under the run's
+    // wake key it would push a pending cancel back by its delay.
+    const delayed = (opts?.delaySeconds ?? 0) > 0;
+    if (delayed || !(await bypassesRunQueue(invoke.data))) {
+      return { jobKey: idempotencyKey ?? messageId, runId, bypassingWake: false };
+    }
+    const wakeKey = hookInput === undefined ? `wfwake:${tenantId}:${runId}` : messageId;
+    return { jobKey: idempotencyKey ?? wakeKey, bypassingWake: true };
+  }
+
   async function addGraphileJob({
     queueId,
     body,
@@ -297,6 +368,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     jobKey,
     runId,
     deploymentId,
+    bypassingWake = false,
   }: {
     queueId: string;
     body: Buffer | Uint8Array;
@@ -306,10 +378,12 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     headers?: Record<string, string>;
     delaySeconds?: number;
     jobKey?: string;
-    /** Present for a workflow invoke; absent for anything the schema rejects. */
+    /** The run whose queue this job waits in; absent when it waits in none. */
     runId?: string;
     /** The deployment this message is addressed to; this one when omitted. */
     deploymentId?: string;
+    /** Counted against the tenant's wake cap rather than its delivery cap. */
+    bypassingWake?: boolean;
   }) {
     const utils = workerUtils;
     if (!utils) {
@@ -356,7 +430,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
       // Read by the dispatcher's `forbiddenFlags` callback to throttle a
       // tenant that is already at its in-flight cap, without starving others.
-      flags: [`project:${tenantId}`],
+      flags: [bypassingWake ? wakeFlag(tenantId) : tenantFlag(tenantId)],
     });
   }
 
@@ -621,7 +695,6 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     const { id: queueId } = parseQueueName(queue);
     const body = transport.serialize(message) as Buffer;
     const messageId = MessageId.parse(`msg_${generateMessageId()}`);
-    const invoke = WorkflowInvokePayloadSchema.safeParse(message);
     await addGraphileJob({
       queueId,
       body,
@@ -630,8 +703,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       idempotencyKey: opts?.idempotencyKey,
       headers: opts?.headers,
       delaySeconds: opts?.delaySeconds,
-      jobKey: opts?.idempotencyKey ?? messageId,
-      ...(invoke.success ? { runId: invoke.data.runId } : {}),
+      ...(await placeInvoke(message, messageId, opts)),
       // A producer that names a deployment means it: `start()` with an explicit
       // `deploymentId` (eve's deployment handoff) and the capability probe
       // before it address ANOTHER deployment. `start()` writes `run_created`
@@ -655,13 +727,15 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       const bodyStream = Stream.Readable.toWeb(Stream.Readable.from([messageData.data]));
       const body = await transport.deserialize(bodyStream as ReadableStream<Uint8Array>);
       QueuePayloadSchema.parse(body);
-      // Unconditional now: there is only the workflow queue kind, so every
-      // message that parses as a workflow invoke gets a serialization key.
+      // There is only the workflow queue kind, so every message that parses as a
+      // workflow invoke has a run. A hook wake takes no in-process serialization
+      // key, for the reason it may bypass the run queue (`bypassesRunQueue`).
       const parsedInvoke = WorkflowInvokePayloadSchema.safeParse(body);
-      const serializedRunId = parsedInvoke.success ? parsedInvoke.data.runId : undefined;
-      const workflowRunSerializationKey = serializedRunId
-        ? `workflow:${serializedRunId}`
-        : undefined;
+      const runId = parsedInvoke.success ? parsedInvoke.data.runId : undefined;
+      const workflowRunSerializationKey =
+        parsedInvoke.success && !isHookWake(parsedInvoke.data)
+          ? `workflow:${parsedInvoke.data.runId}`
+          : undefined;
       const executeTask = async (): Promise<"completed" | "rescheduled"> => {
         const result = await executeMessageOverHttp({
           queueName,
@@ -688,7 +762,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
             headers: messageData.headers,
             delaySeconds: result.timeoutSeconds,
             jobKey: messageData.idempotencyKey ?? messageData.messageId,
-            ...(serializedRunId ? { runId: serializedRunId } : {}),
+            ...(runId ? { runId } : {}),
             // A reschedule is the same message: it keeps its address.
             deploymentId: messageData.deploymentId,
           });

@@ -48,6 +48,7 @@ describe.skipIf(!testUrl)("boot recovery of a stranded Graphile queue lock", () 
   let service: DispatcherService | undefined;
   let staleWorker: ChildProcessWithoutNullStreams | undefined;
   let liveWorker: ChildProcessWithoutNullStreams | undefined;
+  let queueHolder: ChildProcessWithoutNullStreams | undefined;
   let targetRunId: string | undefined;
   let inFlight = 0;
   let peakInFlight = 0;
@@ -114,6 +115,7 @@ describe.skipIf(!testUrl)("boot recovery of a stranded Graphile queue lock", () 
     await service?.stop().catch(() => {});
     await killWorker(staleWorker);
     await killWorker(liveWorker);
+    await killWorker(queueHolder);
     if (workerIdsToClean.size > 0) {
       await workerUtils?.forceUnlockWorkers([...workerIdsToClean]).catch(() => {});
     }
@@ -224,6 +226,101 @@ describe.skipIf(!testUrl)("boot recovery of a stranded Graphile queue lock", () 
     expect(stillLive?.queue_locked_by).toBe(liveLock.queue_locked_by);
     expect(liveWorker.exitCode).toBeNull();
   }, 90_000);
+
+  test("a replacement dispatcher releases a hook wake that went in with no run queue", async () => {
+    await service?.stop();
+    service = undefined;
+    await killWorker(liveWorker);
+    liveWorker = undefined;
+
+    const created = await world.events.create(null, {
+      eventType: "run_created",
+      eventData: { deploymentId: DEPLOYMENT, workflowName: "greet", input: [] },
+      specVersion: 5,
+    });
+    targetRunId = created.run!.runId;
+    const runQueue = runQueueName(TENANT, targetRunId);
+    const queueName = `${getQueueTopicPrefix("workflow", NAMESPACE)}greet` as ValidQueueName;
+
+    // Hold the run's queue the way a delivery running a step holds it, so the
+    // wake sent next goes in with no queue.
+    await world.queue(queueName, { runId: targetRunId });
+    await prioritize("queues.queue_name = $1", runQueue);
+    queueHolder = await startBlockingWorker(FLOW_JOB_NAME);
+    workerIdsToClean.add((await waitForQueueLock(runQueue, 10_000)).queue_locked_by);
+
+    const resumedAt = Date.now();
+    const { messageId: wakeMessageId } = await world.queue(queueName, {
+      runId: targetRunId,
+      hookResumeTiming: { resumeRequestedAtMs: resumedAt, queuePublishRequestedAtMs: resumedAt },
+    });
+    if (!wakeMessageId) throw new Error("the World's enqueue returned no message id");
+    await prioritize("jobs.payload->>'messageId' = $1", wakeMessageId);
+    staleWorker = await startBlockingWorker(FLOW_JOB_NAME);
+    let wakeLock: { job_queue_id: string | null; locked_by: string | null } | undefined;
+    await waitFor(
+      async () => {
+        const { rows } = await admin.query<{
+          job_queue_id: string | null;
+          locked_by: string | null;
+        }>(
+          "select job_queue_id, locked_by from graphile_worker._private_jobs where payload->>'messageId' = $1",
+          [wakeMessageId],
+        );
+        wakeLock = rows[0];
+        return wakeLock?.locked_by != null;
+      },
+      10_000,
+      "wake lock",
+    );
+    expect(wakeLock?.job_queue_id).toBeNull();
+    workerIdsToClean.add(wakeLock!.locked_by!);
+    await killWorker(queueHolder);
+    queueHolder = undefined;
+    await killWorker(staleWorker);
+    staleWorker = undefined;
+
+    service = await startDispatcherService({
+      env: {
+        NODE_ENV: "development",
+        WORKFLOW_WORLD_URL: testUrl!,
+        WORKFLOW_WORLD_RUNTIME_SECRET: RUNTIME_SECRET,
+        WORKFLOW_DISPATCHER_ACTIVATION_API_URL: "http://activation.test",
+        WORKFLOW_DISPATCHER_POOL_SIZE: "5",
+        WORKFLOW_DISPATCHER_CONCURRENCY: "2",
+        WORKFLOW_DISPATCHER_POLL_INTERVAL_MS: "50",
+        WORKFLOW_DISPATCHER_MAINTENANCE_INTERVAL_MS: "0",
+      },
+      activation: {
+        async activate() {
+          return {
+            type: "activated",
+            activation: { leaseId: `lease_wake_${suffix}`, endpointPort: agentPort },
+          };
+        },
+        async renew() {
+          return true;
+        },
+        async release() {},
+      },
+      telemetry: { emit() {}, async shutdown() {} },
+    });
+
+    await waitFor(() => delivered.includes(wakeMessageId), 30_000, "stranded wake delivery");
+  }, 90_000);
+
+  /** Puts the matching jobs first, so a blocking worker claims them and not another suite's. */
+  async function prioritize(where: string, value: string): Promise<void> {
+    await admin.query(
+      `update graphile_worker._private_jobs as jobs
+          set priority = -32768
+         from graphile_worker._private_jobs as same
+         left join graphile_worker._private_job_queues as queues on queues.id = same.job_queue_id
+        where same.id = jobs.id
+          and ${where}`,
+      [value],
+    );
+  }
 
   async function readQueueLock(queueName: string): Promise<QueueLock | undefined> {
     const { rows } = await admin.query<QueueLock>(

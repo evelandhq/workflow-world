@@ -38,10 +38,18 @@ describe.skipIf(!testUrl)("dispatch loop", () => {
   let agent: Server;
   let agentPort: number;
   /** Messages eve's handler actually accepted and passed to the runtime. */
-  const delivered: Array<{ queueName: string; messageId: string; attempt: number }> = [];
+  const delivered: Array<{
+    runId?: string;
+    hookWake: boolean;
+    queueName: string;
+    messageId: string;
+    attempt: number;
+  }> = [];
   /** Responses eve's handler produced, including the ones it refused. */
   const responses: number[] = [];
   let released = 0;
+  /** A delivery for a run listed here stays in eve's handler until the run is released. */
+  const held = new Map<string, Promise<void>>();
 
   beforeAll(async () => {
     process.env.EVELAND_SCHEDULER_RUNTIME_SECRET = RUNTIME_SECRET;
@@ -60,12 +68,16 @@ describe.skipIf(!testUrl)("dispatch loop", () => {
 
     // eve's real queue handler, wrapped by ours. This is what validates the
     // queue-name prefix, the dispatch version and the runtime secret.
-    const handler = world.createQueueHandler(getQueueTopicPrefix("workflow"), async (_m, meta) => {
+    const handler = world.createQueueHandler(getQueueTopicPrefix("workflow"), async (m, meta) => {
+      const payload = m as { runId?: string; hookResumeTiming?: unknown };
       delivered.push({
+        runId: payload.runId,
+        hookWake: payload.hookResumeTiming !== undefined,
         queueName: meta.queueName,
         messageId: meta.messageId,
         attempt: meta.attempt,
       });
+      await held.get(payload.runId ?? "");
     });
 
     agent = createServer((req, res) => {
@@ -112,7 +124,9 @@ describe.skipIf(!testUrl)("dispatch loop", () => {
       config: {
         concurrency: 4,
         pollIntervalMs: 100,
-        maxInFlightPerTenant: 4,
+        // One, so the delivery a hook wake interrupts fills the tenant's delivery
+        // cap and the wake gets through only because it counts against its own.
+        maxInFlightPerTenant: 1,
         // Long enough that the sweep never fires during the test; its own
         // behaviour is covered by run-serialization.integration.test.ts.
         queueGcIntervalMs: 3_600_000,
@@ -155,10 +169,68 @@ describe.skipIf(!testUrl)("dispatch loop", () => {
     expect(message.messageId).toMatch(/^msg_/);
     expect(message.attempt).toBeGreaterThanOrEqual(1);
 
+    // The lease is released after eve's handler answers, so after the delivery.
+    await waitFor(() => released > 0, 10_000);
     // Nothing was refused along the way: no 400 from the queue-name check, no
     // 401 from the secret or deployment binding.
     expect(responses.every((status) => status === 200)).toBe(true);
-    expect(released).toBeGreaterThan(0);
+  }, 60_000);
+
+  test("a hook wake reaches a run while another delivery for it is still running", async () => {
+    // eve runs a step inside the delivery that claimed it, and a cancel reaches
+    // that step only through the replay its hook wake starts. Queued behind the
+    // running delivery, the cancel would arrive after the step it was meant to stop.
+    const run = await world.events.create(null, {
+      eventType: "run_created",
+      eventData: { deploymentId: DEPLOYMENT, workflowName: "greet", input: [] },
+      specVersion: 5,
+    });
+    const runId = run.run!.runId;
+    const queueName = `${getQueueTopicPrefix("workflow")}greet` as ValidQueueName;
+    const wakesOf = () =>
+      delivered.filter((entry) => entry.runId === runId).map((entry) => entry.hookWake);
+    let release = (): void => {};
+    held.set(runId, new Promise<void>((resolve) => (release = resolve)));
+
+    try {
+      await world.queue(queueName, { runId });
+      await waitFor(() => wakesOf().length === 1, 30_000);
+
+      // A plain replay is a duplicate of the running one, and still waits.
+      await world.queue(queueName, { runId });
+      const resumedAt = Date.now();
+      await world.queue(queueName, {
+        runId,
+        hookResumeTiming: { resumeRequestedAtMs: resumedAt, queuePublishRequestedAtMs: resumedAt },
+      });
+      await waitFor(() => wakesOf().length === 2, 5_000);
+
+      // The first wake is still running and fills the tenant's wake cap of one,
+      // so later ones wait too: wakes cannot take the whole pool. Waiting, they
+      // fold into one job under the run's wake key.
+      for (let wake = 0; wake < 2; wake += 1) {
+        await world.queue(queueName, {
+          runId,
+          hookResumeTiming: {
+            resumeRequestedAtMs: resumedAt,
+            queuePublishRequestedAtMs: resumedAt,
+          },
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      expect(wakesOf()).toEqual([false, true]);
+      const pending = await admin.query(
+        "select 1 from graphile_worker._private_jobs where key = $1 and locked_at is null",
+        [`wfwake:${TENANT}:${runId}`],
+      );
+      expect(pending.rows).toHaveLength(1);
+    } finally {
+      release();
+    }
+
+    await waitFor(() => wakesOf().length === 4, 30_000);
+    expect(wakesOf().slice(0, 2)).toEqual([false, true]);
+    expect(wakesOf().slice(2).sort()).toEqual([false, true]);
   }, 60_000);
 
   test("a dispatch addressed to another deployment is refused", async () => {

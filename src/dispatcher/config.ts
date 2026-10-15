@@ -83,8 +83,8 @@ const MIN_DISPATCHER_POOL_SIZE = 4;
 const DEFAULT_OWNERSHIP_LIVENESS_MS = 90_000;
 
 /**
- * How many tenants one dispatcher may have in flight at once, derived from the
- * machine the way build concurrency is. A held dispatch costs one socket and one
+ * How many deliveries one tenant may have in flight on one dispatcher, derived
+ * from the machine the way build concurrency is. A held dispatch costs one socket and one
  * PG connection slot, not a core, so this is far more generous than a build cap —
  * the point is a ceiling, not a throttle.
  */

@@ -1,7 +1,7 @@
 import type { Job, TaskSpec } from "graphile-worker";
 import type { Pool } from "pg";
 import { z } from "zod/v4";
-import { FLOW_JOB_NAME, runQueueName, TIMER_JOB_NAME } from "./dispatch-contract.js";
+import { FLOW_JOB_NAME, runQueueName, tenantFlag, TIMER_JOB_NAME } from "./dispatch-contract.js";
 import { MessageData, readRunId } from "./message.js";
 import { MAX_GRAPHILE_JOB_ATTEMPTS } from "./queue-policy.js";
 
@@ -100,7 +100,7 @@ export async function addDelayedDelivery(
     // run it belongs to.
     ...(runId ? { queueName: runQueueName(message.tenantId, runId) } : {}),
     maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
-    flags: [`project:${message.tenantId}`],
+    flags: [tenantFlag(message.tenantId)],
   });
 }
 
@@ -129,7 +129,7 @@ export function createTimerHandler(input: { addJob: AddJob; flowJobName: string 
       ...(jobKey ? { jobKey } : {}),
       ...(runQueue ? { queueName: runQueue } : {}),
       maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
-      flags: [`project:${message.tenantId}`],
+      flags: [tenantFlag(message.tenantId)],
     });
   };
 }

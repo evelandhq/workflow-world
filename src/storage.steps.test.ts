@@ -1,5 +1,7 @@
 import type { Step, Storage, WorkflowRun } from "@workflow/world";
 import { eventIdToSlot, SPEC_VERSION_CURRENT } from "@workflow/world";
+import { TooEarlyError } from "@workflow/errors";
+import { makeWorkerUtils, type WorkerUtils } from "graphile-worker";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "./drizzle/index.js";
@@ -294,6 +296,120 @@ describe.skipIf(!testUrl)("steps storage", () => {
       expect(updated.status).toBe("failed");
       expect(updated.error).toEqual(serializedError);
       expect(updated.completedAt).toBeInstanceOf(Date);
+    });
+  });
+
+  describe("restart while the owning delivery is in flight", () => {
+    const OWNER = "msg_owner_in_flight";
+    let workerUtils: WorkerUtils;
+
+    beforeAll(async () => {
+      workerUtils = await makeWorkerUtils({ pgPool: pool });
+      await workerUtils.migrate();
+    });
+
+    afterAll(async () => {
+      await pool.query(
+        "delete from graphile_worker._private_jobs where payload->>'messageId' = $1",
+        [OWNER],
+      );
+      await workerUtils?.release();
+    });
+
+    /** The owner's graphile job, held by a worker as the dispatcher holds a delivery's. */
+    async function holdOwnerJob(held: boolean): Promise<void> {
+      await pool.query(
+        "delete from graphile_worker._private_jobs where payload->>'messageId' = $1",
+        [OWNER],
+      );
+      await workerUtils.addJob("wfw_owner_probe", { messageId: OWNER });
+      if (held) {
+        await pool.query(
+          `update graphile_worker._private_jobs
+              set locked_at = now(), locked_by = 'worker_owner'
+            where payload->>'messageId' = $1`,
+          [OWNER],
+        );
+      }
+    }
+
+    async function startOwned(stepId: string): Promise<void> {
+      await events.create(testRunId, {
+        eventType: "step_started",
+        correlationId: stepId,
+        eventData: { stepName: "owned", input: new Uint8Array([1]), ownerMessageId: OWNER },
+      });
+    }
+
+    it("refuses another delivery's start of a running step while its owner is in flight", async () => {
+      await startOwned("owned-1");
+      await holdOwnerJob(true);
+
+      const restart = events.create(testRunId, {
+        eventType: "step_started",
+        correlationId: "owned-1",
+        eventData: { stepName: "owned" },
+      });
+
+      await expect(restart).rejects.toSatisfy((error) => TooEarlyError.is(error));
+      expect((await steps.get(testRunId, "owned-1")).attempt).toBe(1);
+    });
+
+    it("lets the owner's own redelivery start the step again", async () => {
+      await startOwned("owned-2");
+      await holdOwnerJob(true);
+
+      const step = await updateStep(events, testRunId, "owned-2", "step_started", {
+        stepName: "owned",
+        ownerMessageId: OWNER,
+      });
+
+      expect(step.attempt).toBe(2);
+    });
+
+    it("does not fence a step that a bare start owns, and a bare start clears the owner", async () => {
+      await startOwned("owned-4");
+      await holdOwnerJob(false);
+      await updateStep(events, testRunId, "owned-4", "step_started", { stepName: "owned" });
+      const { rows } = await pool.query<{ owner_message_id: string | null }>(
+        "select owner_message_id from workflow.workflow_steps where tenant_id = $1 and step_id = $2",
+        [TENANT, "owned-4"],
+      );
+      expect(rows[0]?.owner_message_id).toBeNull();
+
+      await holdOwnerJob(true);
+      const step = await updateStep(events, testRunId, "owned-4", "step_started", {
+        stepName: "owned",
+      });
+
+      expect(step.attempt).toBe(3);
+    });
+
+    it("does not fence a step waiting for its retry, whatever its last owner", async () => {
+      await startOwned("owned-5");
+      await events.create(testRunId, {
+        eventType: "step_retrying",
+        correlationId: "owned-5",
+        eventData: { error: "retry error" },
+      });
+      await holdOwnerJob(true);
+
+      const step = await updateStep(events, testRunId, "owned-5", "step_started", {
+        stepName: "owned",
+      });
+
+      expect(step.attempt).toBe(2);
+    });
+
+    it("lets another delivery start the step once its owner has ended", async () => {
+      await startOwned("owned-3");
+      await holdOwnerJob(false);
+
+      const step = await updateStep(events, testRunId, "owned-3", "step_started", {
+        stepName: "owned",
+      });
+
+      expect(step.attempt).toBe(2);
     });
   });
 

@@ -6,9 +6,12 @@ const here = import.meta.dirname;
 export const repoRoot = path.resolve(here, "..");
 const workRoot = path.join(here, ".work");
 
-/** Where a given eve version's agent project is built. */
-export function agentDir(eveVersion: string): string {
-  return path.join(workRoot, `eve-${eveVersion}`);
+/** Where a given eve version's agent project is built from a given fixture. */
+export function agentDir(eveVersion: string, fixture = "fixture"): string {
+  return path.join(
+    workRoot,
+    fixture === "fixture" ? `eve-${eveVersion}` : `${fixture}-eve-${eveVersion}`,
+  );
 }
 
 export function tenantFor(eveVersion: string): string {
@@ -57,12 +60,20 @@ export function packWorld(): string {
  * Deliberately a full `eve build`, not `eve dev`: the built server is what a
  * deployment runs, and the build is where eve resolves and bundles the World.
  */
-export function buildAgent(input: { eveVersion: string; worldTarball: string }): string {
-  const dir = agentDir(input.eveVersion);
+export function buildAgent(input: {
+  eveVersion: string;
+  worldTarball: string;
+  /** A directory under e2e-tests/ holding the agent; `fixture` when omitted. */
+  fixture?: string;
+  /** Installed beside eve, for what the fixture's own code imports. */
+  dependencies?: Record<string, string>;
+}): string {
+  const fixture = input.fixture ?? "fixture";
+  const dir = agentDir(input.eveVersion, fixture);
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
 
-  fs.cpSync(path.join(here, "fixture"), dir, { recursive: true });
+  fs.cpSync(path.join(here, fixture), dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "package.json"),
     `${JSON.stringify(
@@ -71,7 +82,7 @@ export function buildAgent(input: { eveVersion: string; worldTarball: string }):
         private: true,
         version: "0.0.0",
         type: "commonjs",
-        dependencies: { eve: input.eveVersion },
+        dependencies: { eve: input.eveVersion, ...input.dependencies },
       },
       null,
       2,
@@ -107,6 +118,8 @@ export function installedWorldVersion(dir: string): string {
   return manifest.version;
 }
 
+export const E2E_RUNTIME_SECRET = "e2e-runtime-secret";
+
 export type StartedAgent = {
   port: number;
   stop: () => Promise<void>;
@@ -127,6 +140,10 @@ export async function startAgent(input: {
   databaseUrl: string;
   tenantId: string;
   deploymentId: string;
+  /** `external` leaves delivery to a dispatcher the caller runs. */
+  runner?: "embedded" | "external";
+  /** Laid over the inherited environment. */
+  env?: Record<string, string>;
 }): Promise<StartedAgent> {
   let output = "";
   const proc = cp.spawn("npx", ["eve", "start", "--port", String(input.port)], {
@@ -138,8 +155,9 @@ export async function startAgent(input: {
       WORKFLOW_WORLD_URL: input.databaseUrl,
       WORKFLOW_WORLD_TENANT_ID: input.tenantId,
       WORKFLOW_WORLD_DEPLOYMENT_ID: input.deploymentId,
-      WORKFLOW_WORLD_RUNNER: "embedded",
-      WORKFLOW_WORLD_RUNTIME_SECRET: "e2e-runtime-secret",
+      WORKFLOW_WORLD_RUNNER: input.runner ?? "embedded",
+      WORKFLOW_WORLD_RUNTIME_SECRET: E2E_RUNTIME_SECRET,
+      ...input.env,
     },
   });
 

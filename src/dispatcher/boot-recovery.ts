@@ -2,7 +2,7 @@ import { MessageData } from "../message.js";
 import type { WorkerUtils } from "graphile-worker";
 import type { Pool } from "pg";
 import { FLOW_JOB_NAME } from "./runner.js";
-import { runQueueName, TIMER_JOB_NAME } from "../dispatch-contract.js";
+import { runQueueName, tenantFlag, TIMER_JOB_NAME } from "../dispatch-contract.js";
 import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
 
 /**
@@ -13,8 +13,8 @@ import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
  * Graphile's four-hour stale-lock threshold. The service therefore calls the
  * lock-reclaiming entry point only after taking lifecycle ownership and before
  * starting its worker pool. At that point every worker id found on an active run's
- * exact queue belongs to the dead generation and can be passed to Graphile's
- * `forceUnlockWorkers` safely.
+ * exact queue, or on a flow job in no queue, belongs to the dead generation and
+ * can be passed to Graphile's `forceUnlockWorkers` safely.
  *
  * Standalone callers deliberately default to re-enqueue only. Unlocking while a
  * pool is already running could clear a live worker's queue lock.
@@ -152,7 +152,9 @@ async function recoverActiveRunsForAllTenants(
             -- by a worker the reclaim below is about to release. One that has
             -- spent its attempts is left behind by graphile and delivers
             -- nothing, so it does not count. A held timer is the same job
-            -- waiting outside the queue, so it counts too.
+            -- waiting outside the queue, so it counts too. A hook wake in no
+            -- queue is not seen here, so a run left with one may also get a
+            -- recovery replay: one replay too many, never one too few.
             (exists (
               select 1
                 from graphile_worker._private_jobs as jobs
@@ -199,35 +201,35 @@ async function recoverActiveRunsForAllTenants(
     [TIMER_JOB_NAME],
   );
 
-  // A timer the dead generation was promoting is locked on the job row alone —
-  // it has no queue — and would otherwise count as the run's live job above
-  // while graphile kept it for four hours.
-  const { rows: timerLocks } = reclaimOldWorkerLocks
-    ? await input.pool.query<{ locked_by: string }>(
-        `select distinct jobs.locked_by
-           from graphile_worker._private_jobs as jobs
-           join graphile_worker._private_tasks as tasks on tasks.id = jobs.task_id
-          where tasks.identifier = $1
-            and jobs.locked_by is not null`,
-        [TIMER_JOB_NAME],
-      )
-    : { rows: [] };
-
   // Lock reclaim covers ALL candidates, filtered or not. Every worker id found
   // here belongs to the dead generation, and a filtered-out run's queue must
   // not stay locked: the host may settle or re-admit it later, and a stale lock
   // would hold its next legitimate delivery for graphile's four-hour threshold.
-  const oldWorkerIds = [
-    ...new Set([
-      ...rows.flatMap((row) => (row.locked_by ? [row.locked_by] : [])),
-      ...timerLocks.map((row) => row.locked_by),
-    ]),
-  ];
-  if (reclaimOldWorkerLocks && oldWorkerIds.length > 0) {
-    await input.workerUtils.forceUnlockWorkers(oldWorkerIds);
-    input.log?.("unlocked old dispatcher workers during boot recovery", {
-      workers: oldWorkerIds.length,
-    });
+  const oldWorkerIds = new Set(rows.flatMap((row) => (row.locked_by ? [row.locked_by] : [])));
+  if (reclaimOldWorkerLocks) {
+    // A job in no queue shows a dead worker's lock on the job alone: a hook
+    // wake that bypassed its run's queue (`bypassesRunQueue` in queue.ts), or
+    // a held timer the dead generation was promoting (`timers.ts`). Left
+    // locked, a run parked on a hook would wait four hours for the input that
+    // wake carries, and a timer would count as the run's live job above for
+    // as long. No graphile index covers locked jobs, so this reads the whole
+    // job table, once per boot.
+    const { rows: unqueued } = await input.pool.query<{ locked_by: string }>(
+      `select distinct jobs.locked_by
+         from graphile_worker._private_jobs as jobs
+         join graphile_worker._private_tasks as tasks on tasks.id = jobs.task_id
+        where tasks.identifier = any($1)
+          and jobs.job_queue_id is null
+          and jobs.locked_by is not null`,
+      [[FLOW_JOB_NAME, TIMER_JOB_NAME]],
+    );
+    for (const { locked_by } of unqueued) oldWorkerIds.add(locked_by);
+    if (oldWorkerIds.size > 0) {
+      await input.workerUtils.forceUnlockWorkers([...oldWorkerIds]);
+      input.log?.("unlocked old dispatcher workers during boot recovery", {
+        workers: oldWorkerIds.size,
+      });
+    }
   }
 
   const liveJobs = rows.filter((row) => row.has_live_job).length;
@@ -351,7 +353,7 @@ async function recoverActiveRunsForAllTenants(
         jobKey: messageId,
         queueName: runQueueName(row.tenant_id, row.id),
         maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
-        flags: [`project:${row.tenant_id}`],
+        flags: [tenantFlag(row.tenant_id)],
         ...(pacing ? { runAt: new Date(sweepStartedAt + wave * pacing.waveIntervalMs) } : {}),
       });
       enqueued += 1;
