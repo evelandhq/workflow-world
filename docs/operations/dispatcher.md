@@ -136,6 +136,10 @@ that differ from a platform host:
   start, which that World needs: every `step_started` it writes sets
   `workflow_steps.owner_message_id`. Without a dispatcher (embedded mode), run
   `workflow-world-setup` before the agents start.
+- **Leave `WORKFLOW_OPTIMISTIC_INLINE_START` unset on the agents.** With it on,
+  a step's body starts before its claim resolves, and a hook wake running beside
+  another delivery can then run a step a second time (design.md, "Delivery and
+  failure semantics").
 - **Keep the flow route private.** `/.well-known/workflow/` receives dispatches
   carrying the runtime secret. Only the dispatcher should reach it; do not
   publish it through the ingress.

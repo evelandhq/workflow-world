@@ -586,7 +586,20 @@ to the event log before it publishes such a wake; a wake that carries its input
 A wake running beside its owner does not weaken the exclusion a step had
 before. A replay executes inline
 only a step it claims itself, and the storage claim on a new step's
-`step_started` gives that to one caller. Any other step it can only enqueue as a
+`step_started` gives that to one caller.
+
+That holds only while neither replay starts a step optimistically, that is,
+runs a new step's body before its claim resolves, which two racing replays can
+both do. `@workflow/core` 5.2 reaches optimistic start two ways, and both stay
+away from a run that can receive a hook wake: a deployment opts in with
+`WORKFLOW_OPTIMISTIC_INLINE_START=1`, which must not be set where this World
+runs; and turbo forces it on a run's first delivery, but only until the run has
+a hook or a wait, and a run that receives a hook wake has a hook. Without per-run
+serialization the forced start does race: twelve competing deliveries during a
+live run ran step bodies a second time in three of three runs, and in none of
+four with `WORKFLOW_OPTIMISTIC_INLINE_START=0`. Both conditions are internal to
+core, so `src/core-concurrency-contract.test.ts` checks them against the
+installed dist, and a core bump that changes either fails there. Any other step it can only enqueue as a
 step message; while the owner's ownership lease (860 s by default) is live,
 `@workflow/core` arms only a delayed backstop replay of the run instead. Past the
 lease, a step message can be claimed while the step still runs, on any
