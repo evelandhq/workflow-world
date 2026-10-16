@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.26.0...workflow-world-v0.26.1) (2026-10-16)
+
+
+### Fixes
+
+* let a hook wake past a held run queue, so a cancel stops a running tool ([#114](https://github.com/evelandhq/workflow-world/issues/114)) ([c46f756](https://github.com/evelandhq/workflow-world/commit/c46f7569e7fe44f5ef637b13ee3f3cff872e8369))
+
 ## [0.26.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.25.0...workflow-world-v0.26.0) (2026-10-16)
 
 
