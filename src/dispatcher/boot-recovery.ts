@@ -8,13 +8,13 @@ import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
 /**
  * Recovery after a dispatcher that died mid-dispatch.
  *
- * A job key only deduplicates jobs. It does not clear the per-run queue's
- * `locked_by`, so re-enqueueing alone leaves a replacement job unavailable until
- * Graphile's four-hour stale-lock threshold. The service therefore calls the
- * lock-reclaiming entry point only after taking lifecycle ownership and before
- * starting its worker pool. At that point every worker id found on an active run's
- * exact queue belongs to the dead generation and can be passed to Graphile's
- * `forceUnlockWorkers` safely.
+ * A job key only deduplicates jobs. It does not clear a queue's `locked_by` or a
+ * queue-less job's own lock, so re-enqueueing alone leaves a replacement job
+ * unavailable until Graphile's four-hour stale-lock threshold. The service
+ * therefore calls the lock-reclaiming entry point only after taking lifecycle
+ * ownership and before starting its worker pool. At that point worker ids found
+ * on active run queues and timer jobs belong to the dead generation and can be
+ * passed to Graphile's `forceUnlockWorkers` safely.
  *
  * Standalone callers deliberately default to re-enqueue only. Unlocking while a
  * pool is already running could clear a live worker's queue lock.
