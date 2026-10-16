@@ -114,6 +114,25 @@ describe.skipIf(!testUrl)("boot recovery replays a hook-holding run parked on a 
 
     const parked = await createHookedRun("parked");
 
+    const timerQueued = await createHookedRun("timer_queued");
+    await timerQueued.world.events.create(timerQueued.runId, {
+      eventType: "wait_created",
+      correlationId: `wait_queued_${suffix}`,
+      eventData: { resumeAt: new Date(Date.now() + 60_000) },
+    } as Parameters<typeof timerQueued.world.events.create>[1]);
+    await timerQueued.world.queue(
+      `${getQueueTopicPrefix("workflow")}sleeper` as ValidQueueName,
+      { runId: timerQueued.runId },
+      { delaySeconds: 60 },
+    );
+    const { rows: timerJobs } = await admin.query<{ job_queue_id: number | null }>(
+      `select job_queue_id
+         from graphile_worker._private_jobs
+        where payload->>'tenantId' = $1 and payload->>'runId' = $2`,
+      [TENANT, timerQueued.runId],
+    );
+    expect(timerJobs[0]?.job_queue_id).toBeNull();
+
     const log: Array<[string, unknown]> = [];
     await reenqueueActiveRunsForAllTenants({
       pool: admin,
@@ -128,6 +147,9 @@ describe.skipIf(!testUrl)("boot recovery replays a hook-holding run parked on a 
     expect(await recovered(woken.runId)).toBe(false);
     // Never slept: a session on its inbox, exactly what the hook rule protects.
     expect(await recovered(parked.runId)).toBe(false);
+    // A scheduled job has no graphile queue row while its timer is pending, but
+    // its runId in the payload still makes boot recovery recognize the wake-up.
+    expect(await recovered(timerQueued.runId)).toBe(false);
     expect(log).toContainEqual([
       "recovering hook-holding runs whose sleep timer was lost",
       { runs: 1 },

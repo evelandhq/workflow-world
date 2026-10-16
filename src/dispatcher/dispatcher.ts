@@ -68,6 +68,7 @@ export type DispatcherDeps = {
 
 /** Extracts the run id from a vqs payload without interpreting the rest of it. */
 export function readRunId(message: MessageData): string | undefined {
+  if (message.runId) return message.runId;
   try {
     const body = JSON.parse(Buffer.from(message.data).toString("utf8")) as {
       runId?: unknown;

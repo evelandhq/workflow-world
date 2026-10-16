@@ -78,12 +78,12 @@ The dispatcher binds no port. Readiness is the literal line
 and by the conformance harness.
 
 The current dispatcher is deliberately single-instance. On startup it holds a
-PostgreSQL advisory lock for its whole lifetime, reclaims only the old Graphile
-worker ids found on active runs' exact `wfrun:<tenant>:<run>` queues, re-enqueues
-the active runs that have no job left on their queue, and only then starts its
-worker pool and reports ready. A run whose job is still queued — a pending
-delivery, a sleep's timer, or the delivery the dead dispatcher was holding — is
-left to that job, and a run that holds a hook is left to that hook's
+PostgreSQL advisory lock for its whole lifetime, reclaims old Graphile worker ids
+found on active runs' queues or timer jobs, re-enqueues active runs that have no
+job left to wake them, and only then starts its worker pool and reports ready. A
+run whose job is still queued — a pending delivery, a queue-less sleep timer, or
+the delivery the dead dispatcher was holding — is left to that job, and a run that
+holds a hook is left to that hook's
 resolution; re-enqueueing beside either only bought a cold start per run. The
 runs it does re-enqueue are released a few deployments at a time
 (`WORKFLOW_DISPATCHER_BOOT_RECOVERY_DEPLOYMENTS_PER_WAVE` every

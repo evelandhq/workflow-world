@@ -61,16 +61,23 @@ export async function startDispatcher(input: {
 
   const reenqueue: DispatcherDeps["reenqueue"] = async ({ jobName, message, delaySeconds }) => {
     const runId = readRunId(message);
-    await workerUtils.addJob(jobName, MessageData.encode(message), {
-      jobKey: message.idempotencyKey ?? message.messageId,
-      runAt: new Date(Date.now() + delaySeconds * 1000),
-      // Same per-run serialization the World applies on the first delivery. A
-      // reschedule that omitted it would be concurrently claimable against the
-      // run it belongs to.
-      ...(runId ? { queueName: runQueueName(message.tenantId, runId) } : {}),
-      maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
-      flags: [`project:${message.tenantId}`],
-    });
+    const runAt = new Date(Date.now() + delaySeconds * 1000);
+    const deferredRunQueue = Boolean(runId && delaySeconds > 0);
+    await workerUtils.addJob(
+      jobName,
+      MessageData.encode({
+        ...message,
+        ...(runId ? { runId } : {}),
+        ...(deferredRunQueue ? { deferredRunQueue: true } : {}),
+      }),
+      {
+        jobKey: message.idempotencyKey ?? message.messageId,
+        runAt,
+        ...(runId && !deferredRunQueue ? { queueName: runQueueName(message.tenantId, runId) } : {}),
+        maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
+        flags: [`project:${message.tenantId}`],
+      },
+    );
   };
 
   const onDeadLetter: DispatcherDeps["onDeadLetter"] = async ({
@@ -122,6 +129,19 @@ export async function startDispatcher(input: {
     const message = MessageData.parse(payload);
     const attempt = readAttempt(helpers) ?? message.attempt;
     const isFinalAttempt = readIsFinalAttempt(helpers);
+    if (message.deferredRunQueue && message.runId) {
+      await workerUtils.addJob(
+        jobName,
+        MessageData.encode({ ...message, deferredRunQueue: false }),
+        {
+          jobKey: `${message.messageId}:run:${String(attempt)}`,
+          queueName: runQueueName(message.tenantId, message.runId),
+          maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
+          flags: [`project:${message.tenantId}`],
+        },
+      );
+      return;
+    }
     // `MessageData.id` is only the sub-queue id: the enqueue path ran it
     // through `parseQueueName`, which strips the `__wkf_<kind>_` prefix. eve's
     // handler rejects a name without that prefix outright ("Unhandled

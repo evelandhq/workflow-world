@@ -29,7 +29,7 @@ export const DISPATCH_VERSION = 1;
 export const FLOW_JOB_NAME = "eveland_wf_flows";
 
 /**
- * graphile queue name that serializes every delivery for one run.
+ * graphile queue name that serializes runnable deliveries for one run.
  *
  * graphile executes jobs sharing a `queueName` strictly one at a time, which is
  * exactly the guarantee `external` mode otherwise loses. In `embedded` mode the
@@ -42,13 +42,16 @@ export const FLOW_JOB_NAME = "eveland_wf_flows";
  * independently claimable jobs, and boot recovery's `msg_recover_<runId>` key
  * collapses only against another sweep.
  *
- * Every enqueue path must derive the name the same way or the serialization is
- * silently partial, so it has exactly one definition. Tenant-scoped because run
- * ids come from the runtime and two tenants could in principle mint the same one.
+ * Future-scheduled jobs wait without a named queue so idle timers do not leave a
+ * queue row per run; when due, a short handoff puts each job back on this queue
+ * before execution. Every enqueue path must derive the name the same way or the
+ * serialization is silently partial, so it has exactly one definition.
+ * Tenant-scoped because run ids come from the runtime and two tenants could in
+ * principle mint the same one.
  *
  * One caveat, measured rather than assumed: graphile does NOT reclaim the queue
  * row when the last job in it completes. `_private_job_queues` keeps one row per
- * distinct run for ever, so the dispatcher runs graphile's own `GC_JOB_QUEUES`
+ * distinct runnable run until the dispatcher runs graphile's own `GC_JOB_QUEUES`
  * cleanup periodically. Without that sweep this design is a slow table leak.
  */
 export function runQueueName(tenantId: string, runId: string): string {

@@ -27,12 +27,13 @@ import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
  * It is safe to run repeatedly: `jobKey` collapses duplicates, and the workflow
  * handler replays the event log rather than re-executing completed work.
  *
- * A run whose per-run queue still holds a retryable job is not a candidate.
- * That job is the run's own wake-up — a delayed continuation for a sleep, a
- * pending first delivery, or a delivery the dead dispatcher was holding, which
- * the lock reclaim above makes claimable again. Re-enqueueing beside it added
- * nothing the run needed and cost one cold-start activation per run: with a
- * few hundred active runs across a few dozen deployments, every dispatcher
+ * A run with a retryable job is not a candidate, whether that job is on its
+ * per-run queue or is a queue-less future timer. That job is the run's own wake-up
+ * — a delayed continuation for a sleep, a pending first delivery, or a delivery
+ * the dead dispatcher was holding, which the lock reclaim above makes claimable
+ * again. Re-enqueueing beside it added nothing the run needed and cost one
+ * cold-start activation per run: with a few hundred active runs across a few
+ * dozen deployments, every dispatcher
  * restart became a cold-start storm.
  *
  * A run that holds a hook is not a candidate either, unless it is also parked
@@ -90,8 +91,8 @@ type BootRecoveryInput = {
   pacing?: BootRecoveryPacing;
   /**
    * The host's say over what gets replayed. Called once with every candidate
-   * (an active run with no live job on its queue; runs that still have one are
-   * never offered, because nothing would be enqueued for them anyway) —
+   * (an active run with no live job; runs that still have one are never offered,
+   * because nothing would be enqueued for them anyway) —
    * one call rather than a per-run predicate, because the question the host
    * answers ("is this run's Deployment still activatable?") is a control-plane
    * lookup it will want to batch. Only the runs returned are re-enqueued;
@@ -128,13 +129,33 @@ async function recoverActiveRunsForAllTenants(
     name: string;
     deployment_id: string;
     queue_namespace: string | null;
-    locked_by: string | null;
+    locked_by: string[] | null;
     has_live_job: boolean;
     has_hook: boolean;
     has_timer: boolean;
   }>(
     `select runs.tenant_id, runs.id, runs.name, runs.deployment_id, runs.queue_namespace,
-            queues.locked_by,
+            array_remove(
+              array_cat(
+                case
+                  when queues.locked_by is null then array[]::text[]
+                  else array[queues.locked_by]
+                end,
+                coalesce(
+                  (
+                    select array_agg(distinct jobs.locked_by)
+                      from graphile_worker._private_jobs as jobs
+                     where jobs.job_queue_id is null
+                       and jobs.payload->>'tenantId' = runs.tenant_id
+                       and jobs.payload->>'runId' = runs.id
+                       and jobs.attempts < jobs.max_attempts
+                       and jobs.locked_by is not null
+                  ),
+                  array[]::text[]
+                )
+              ),
+              null
+            ) as locked_by,
             -- A job graphile will still deliver: due now, due later, or locked
             -- by a worker the reclaim below is about to release. One that has
             -- spent its attempts is left behind by graphile and delivers
@@ -142,8 +163,16 @@ async function recoverActiveRunsForAllTenants(
             exists (
               select 1
                 from graphile_worker._private_jobs as jobs
-               where jobs.job_queue_id = queues.id
-                 and jobs.attempts < jobs.max_attempts
+              where jobs.job_queue_id = queues.id
+                and jobs.attempts < jobs.max_attempts
+            )
+            or exists (
+             select 1
+               from graphile_worker._private_jobs as jobs
+              where jobs.job_queue_id is null
+                and jobs.payload->>'tenantId' = runs.tenant_id
+                and jobs.payload->>'runId' = runs.id
+                and jobs.attempts < jobs.max_attempts
             ) as has_live_job,
             -- A hook the run still holds: its resolution enqueues the run's
             -- next delivery on its own, so boot needs to write nothing.
@@ -186,7 +215,7 @@ async function recoverActiveRunsForAllTenants(
   // here belongs to the dead generation, and a filtered-out run's queue must
   // not stay locked: the host may settle or re-admit it later, and a stale lock
   // would hold its next legitimate delivery for graphile's four-hour threshold.
-  const oldWorkerIds = [...new Set(rows.flatMap((row) => (row.locked_by ? [row.locked_by] : [])))];
+  const oldWorkerIds = [...new Set(rows.flatMap((row) => row.locked_by ?? []))];
   if (reclaimOldWorkerLocks && oldWorkerIds.length > 0) {
     await input.workerUtils.forceUnlockWorkers(oldWorkerIds);
     input.log?.("unlocked old dispatcher workers during boot recovery", {
@@ -294,6 +323,7 @@ async function recoverActiveRunsForAllTenants(
       // and a 400 is non-retryable, so every recovered run dead-lettered.
       id: row.name,
       data: Buffer.from(JSON.stringify({ runId: row.id })),
+      runId: row.id,
       attempt: 1,
       messageId: messageId as MessageData["messageId"],
       tenantId: row.tenant_id,

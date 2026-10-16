@@ -313,6 +313,12 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
         headers,
         tenantId,
         deploymentId: deploymentId ?? config.deploymentId,
+        ...(runId
+          ? {
+              runId,
+              ...(runAt ? { deferredRunQueue: true } : {}),
+            }
+          : {}),
         // Recorded so the delivery side can rebuild the exact prefix; the
         // dispatcher must not re-resolve it from its own environment.
         ...(queueNamespace !== undefined ? { queueNamespace } : {}),
@@ -320,9 +326,9 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       {
         ...(jobKey ? { jobKey } : {}),
         ...(runAt ? { runAt } : {}),
-        // Serializes concurrent deliveries for one run. Without it two claimed
-        // jobs replay the same run's event log at the same time.
-        ...(runId ? { queueName: runQueueName(tenantId, runId) } : {}),
+        // Future jobs are queue-less while they wait; the due-time handoff below
+        // puts them back on the run's serialized queue before executing them.
+        ...(runId && !runAt ? { queueName: runQueueName(tenantId, runId) } : {}),
         maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
         // Read by the dispatcher's `forbiddenFlags` callback to throttle a
         // tenant that is already at its in-flight cap, without starving others.
@@ -622,6 +628,20 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       const attempt = graphileHelpers.success
         ? graphileHelpers.data.job.attempts
         : messageData.attempt;
+      if (messageData.deferredRunQueue && messageData.runId) {
+        await addGraphileJob({
+          queueId: messageData.id,
+          body: messageData.data,
+          messageId: messageData.messageId,
+          attempt,
+          idempotencyKey: messageData.idempotencyKey,
+          headers: messageData.headers,
+          jobKey: `${messageData.messageId}:run:${String(attempt)}`,
+          runId: messageData.runId,
+          deploymentId: messageData.deploymentId,
+        });
+        return;
+      }
       const queueName = `${queue}${messageData.id}` as ValidQueueName;
       const bodyStream = Stream.Readable.toWeb(Stream.Readable.from([messageData.data]));
       const body = await transport.deserialize(bodyStream as ReadableStream<Uint8Array>);

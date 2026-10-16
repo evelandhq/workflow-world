@@ -56,13 +56,19 @@ sequenceDiagram
     participant A as agent deployment<br/>(eve executor + this World)
     participant PG as shared Postgres<br/>(control tables + partitions + graphile)
     participant D as workflow dispatcher
-    A->>PG: world.queue → add_job(flags=[project:X], queueName=wfrun:…, run_at)
+    A->>PG: world.queue → add_job(flags=[project:X], queueName=wfrun:… OR run_at timer)
     D->>PG: graphile claim (LISTEN/NOTIFY + poll, forbiddenFlags skips capped tenants)
     D->>D: affinity: run.deploymentId → activation lease → executor endpoint
     D->>A: held POST /.well-known/workflow/v1/flow (for the step's whole duration)
     A->>PG: executor runs the step; storage/events/chunks written direct
     A-->>D: 200 → job complete (failure → maxAttempts 49 + backoff)
 ```
+
+Future-scheduled jobs do not create a named queue while they wait. Once due, the
+World or dispatcher briefly claims the marker and hands it to the run's serialized
+queue before executing it. This keeps long sleeps from leaving one available
+`_private_job_queues` row per active run without weakening per-run dispatch
+serialization.
 
 Postgres is the rendezvous. The dispatcher is the only actively polling party.
 Agents receive POSTs and write to the database; they never call the platform, and

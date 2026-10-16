@@ -86,9 +86,66 @@ describe("dispatcher queue retry policy", () => {
 
       expect(workerUtils.addJob).toHaveBeenCalledWith(
         FLOW_JOB_NAME,
-        expect.anything(),
-        expect.objectContaining({ maxAttempts: 49 }),
+        expect.objectContaining({
+          runId: "wrun_1",
+          deferredRunQueue: true,
+        }),
+        expect.objectContaining({ maxAttempts: 49, runAt: expect.any(Date) }),
       );
+      expect(vi.mocked(workerUtils.addJob).mock.calls[0]?.[2]).not.toHaveProperty("queueName");
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  it("hands a due delayed delivery to its run queue without dispatching it yet", async () => {
+    const pool = { query: vi.fn(async () => ({ rows: [] })) } as any;
+    const runtime = await startDispatcher({
+      pool,
+      config: {
+        concurrency: 1,
+        pollIntervalMs: 100,
+        maxInFlightPerTenant: 1,
+        queueGcIntervalMs: 3_600_000,
+      },
+      deps: {
+        activation: {
+          activate: vi.fn(),
+          renew: vi.fn(),
+          release: vi.fn(),
+        },
+        runLookup: vi.fn(async () => null),
+        runtimeSecret: "test-secret",
+        dispatchTimeoutMs: 5_000,
+        leaseRenewIntervalMs: 60_000,
+        activationLeaseTtlMs: 180_000,
+      },
+    });
+
+    try {
+      const task = vi.mocked(run).mock.calls[0]?.[0]?.taskList?.[FLOW_JOB_NAME];
+      const message: MessageData = {
+        id: "greet",
+        data: Buffer.from(JSON.stringify({ runId: "wrun_1" })),
+        attempt: 1,
+        messageId: "msg_1" as MessageData["messageId"],
+        tenantId: "tenant-1",
+        deploymentId: "deployment-1",
+        runId: "wrun_1",
+        deferredRunQueue: true,
+      };
+
+      await task!(MessageData.encode(message), { job: { attempts: 2, max_attempts: 49 } } as any);
+
+      expect(workerUtils.addJob).toHaveBeenCalledWith(
+        FLOW_JOB_NAME,
+        expect.objectContaining({ runId: "wrun_1", deferredRunQueue: false }),
+        expect.objectContaining({
+          jobKey: "msg_1:run:2",
+          queueName: "wfrun:tenant-1:wrun_1",
+        }),
+      );
+      expect(nodeHttpFetch).not.toHaveBeenCalled();
     } finally {
       await runtime.stop();
     }

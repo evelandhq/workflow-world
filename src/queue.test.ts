@@ -356,14 +356,15 @@ describe("postgres queue http execution", () => {
           // a message that omits them is undeliverable in external mode.
           tenantId: TENANT,
           deploymentId: DEPLOYMENT,
+          runId: "run_01ABC",
+          deferredRunQueue: true,
         }),
         expect.objectContaining({
           jobKey: "step_01ABC",
           maxAttempts: 49,
           runAt: new Date("2024-01-01T00:00:05.000Z"),
-          // Fork additions: per-run serialization, and the fairness flag the
-          // dispatcher's `forbiddenFlags` callback throttles on.
-          queueName: runQueueName(TENANT, "run_01ABC"),
+          // The delayed job has no named queue while it waits; it is put on the
+          // per-run queue when it becomes due.
           flags: [`project:${TENANT}`],
         }),
       );
@@ -504,13 +505,39 @@ describe("postgres queue http execution", () => {
         expect.objectContaining({
           jobKey: "wrun_01ABC",
           runAt: new Date("2024-01-01T00:00:30.000Z"),
-          queueName: runQueueName(TENANT, "wrun_01ABC"),
         }),
       );
+      expect(vi.mocked(workerUtilsMock.addJob).mock.calls[0]?.[1]).toMatchObject({
+        runId: "wrun_01ABC",
+        deferredRunQueue: true,
+      });
     } finally {
       vi.unstubAllGlobals();
       vi.useRealTimers();
     }
+  });
+
+  it("puts a due delayed delivery on its run queue before executing it", async () => {
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+    const task = getTaskHandler(EMBEDDED_JOB_NAME);
+    const message = MessageData.parse(
+      buildMessageData("__wkf_workflow_test-workflow", { runId: "wrun_01ABC" }),
+    );
+
+    await task(MessageData.encode({ ...message, runId: "wrun_01ABC", deferredRunQueue: true }), {
+      job: { attempts: 2 },
+    });
+
+    expect(workerUtilsMock.addJob).toHaveBeenCalledWith(
+      EMBEDDED_JOB_NAME,
+      expect.not.objectContaining({ deferredRunQueue: true }),
+      expect.objectContaining({
+        jobKey: `${message.messageId}:run:2`,
+        queueName: runQueueName(TENANT, "wrun_01ABC"),
+      }),
+    );
+    expect(nodeHttpFetch).not.toHaveBeenCalled();
   });
 
   it("does not re-execute a redelivered message that already completed", async () => {

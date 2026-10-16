@@ -25,6 +25,10 @@ export const MessageData = z.object({
       "The ID of the sub-queue. For workflows, it's the workflow name. For steps, it's the step name.",
     ),
   data: Base64Buffer.describe("The message that was sent"),
+  /** Internal run identity lets boot recovery find future jobs without a queue row. */
+  runId: z.string().optional(),
+  /** A future job is re-queued into its serialized run queue when it becomes due. */
+  deferredRunQueue: z.boolean().optional(),
   tenantId: z.string().describe("Eveland project id that owns this message"),
   deploymentId: z
     .string()
