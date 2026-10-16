@@ -94,6 +94,12 @@ When first upgrading from a version that did not take this ownership lock, stop
 the old dispatcher before starting the new one; the new lock cannot fence a
 binary that never participates in it.
 
+Upgrade the dispatcher before deploying Worlds that emit queue-less timers.
+Those markers use the separate `eveland_wf_flow_timers` task, which older
+dispatchers leave queued. Deploying a World first therefore delays its timers
+until the dispatcher is upgraded; immediate deliveries still use
+`eveland_wf_flows`. A new dispatcher also accepts older Worlds' queued deliveries.
+
 ## Ownership liveness
 
 A session-level advisory lock is released when its session ends, and PostgreSQL

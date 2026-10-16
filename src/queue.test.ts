@@ -29,6 +29,7 @@ import {
   DISPATCH_VERSION,
   DISPATCH_VERSION_HEADER,
   FLOW_JOB_NAME,
+  FLOW_TIMER_JOB_NAME,
   RUNTIME_SECRET_HEADER,
   runQueueName,
 } from "./dispatch-contract.js";
@@ -41,6 +42,7 @@ const TENANT = "prj_port_extra_queue";
 const DEPLOYMENT = "dep_port_extra_queue";
 /** What `getJobQueueName()` derives in embedded mode: shared name + tenant suffix. */
 const EMBEDDED_JOB_NAME = derivePartitionName(FLOW_JOB_NAME, TENANT);
+const EMBEDDED_TIMER_JOB_NAME = derivePartitionName(FLOW_TIMER_JOB_NAME, TENANT);
 
 type RecordedRequest = {
   method: string | undefined;
@@ -346,7 +348,7 @@ describe("postgres queue http execution", () => {
       );
 
       expect(workerUtilsMock.addJob).toHaveBeenCalledWith(
-        EMBEDDED_JOB_NAME,
+        EMBEDDED_TIMER_JOB_NAME,
         expect.objectContaining({
           attempt: 1,
           headers: { traceparent: "trace-parent" },
@@ -500,7 +502,7 @@ describe("postgres queue http execution", () => {
       await expect(task(payload, { job: { attempts: 2 } })).resolves.toBeUndefined();
 
       expect(workerUtilsMock.addJob).toHaveBeenCalledWith(
-        EMBEDDED_JOB_NAME,
+        EMBEDDED_TIMER_JOB_NAME,
         expect.objectContaining({ attempt: 3, idempotencyKey: "wrun_01ABC" }),
         expect.objectContaining({
           jobKey: "wrun_01ABC",
@@ -517,28 +519,31 @@ describe("postgres queue http execution", () => {
     }
   });
 
-  it("puts a due delayed delivery on its run queue before executing it", async () => {
-    const queue = buildQueue(buildConfig(), pool);
-    await queue.start();
-    const task = getTaskHandler(EMBEDDED_JOB_NAME);
-    const message = MessageData.parse(
-      buildMessageData("__wkf_workflow_test-workflow", { runId: "wrun_01ABC" }),
-    );
+  it.each([EMBEDDED_JOB_NAME, EMBEDDED_TIMER_JOB_NAME])(
+    "hands a due timer from %s to its run queue",
+    async (jobName) => {
+      const queue = buildQueue(buildConfig(), pool);
+      await queue.start();
+      const task = getTaskHandler(jobName);
+      const message = MessageData.parse(
+        buildMessageData("__wkf_workflow_test-workflow", { runId: "wrun_01ABC" }),
+      );
 
-    await task(MessageData.encode({ ...message, runId: "wrun_01ABC", deferredRunQueue: true }), {
-      job: { attempts: 2 },
-    });
+      await task(MessageData.encode({ ...message, runId: "wrun_01ABC", deferredRunQueue: true }), {
+        job: { attempts: 2 },
+      });
 
-    expect(workerUtilsMock.addJob).toHaveBeenCalledWith(
-      EMBEDDED_JOB_NAME,
-      expect.not.objectContaining({ deferredRunQueue: true }),
-      expect.objectContaining({
-        jobKey: `${message.messageId}:run:2`,
-        queueName: runQueueName(TENANT, "wrun_01ABC"),
-      }),
-    );
-    expect(nodeHttpFetch).not.toHaveBeenCalled();
-  });
+      expect(workerUtilsMock.addJob).toHaveBeenCalledWith(
+        EMBEDDED_JOB_NAME,
+        expect.not.objectContaining({ deferredRunQueue: true }),
+        expect.objectContaining({
+          jobKey: `${message.messageId}:run:2`,
+          queueName: runQueueName(TENANT, "wrun_01ABC"),
+        }),
+      );
+      expect(nodeHttpFetch).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not re-execute a redelivered message that already completed", async () => {
     // graphile redelivers on its own schedule; the idempotency-key cache is what

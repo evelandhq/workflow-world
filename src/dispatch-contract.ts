@@ -15,18 +15,24 @@
 export const DISPATCH_VERSION = 1;
 
 /**
- * The graphile task name the World enqueues to and the dispatcher claims from.
+ * The graphile task name for runnable workflow deliveries.
  *
  * Both ends have to agree on it, so it lives here rather than in either half.
  * In `embedded` mode the World suffixes it per tenant (see `getJobQueueName`);
  * in `external` mode the name is shared, because the dispatcher deliberately
  * claims across all tenants.
  *
- * There is one name because `@workflow/world` has one queue kind. Up to
- * 5.0.0-beta.22 there was also a `'step'` kind with its own queue; beta.23
- * removed it, and the runtime now runs steps inline inside the flow handler.
+ * There is one runtime queue kind: steps run inline inside the flow handler.
+ * Deferred timers use a separate internal task below before becoming runnable.
  */
 export const FLOW_JOB_NAME = "eveland_wf_flows";
+
+/**
+ * Queue-less timers need a separate task name: older consumers do not understand
+ * the deferred marker and would execute them without per-run serialization.
+ * They leave this task untouched until a compatible consumer can hand it off.
+ */
+export const FLOW_TIMER_JOB_NAME = "eveland_wf_flow_timers";
 
 /**
  * graphile queue name that serializes runnable deliveries for one run.

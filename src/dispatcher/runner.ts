@@ -21,10 +21,10 @@ import {
  * mode. Embedded-mode jobs carry a per-tenant suffix and are deliberately not
  * claimed here — they belong to that deployment's own in-process runner.
  */
-import { FLOW_JOB_NAME, runQueueName } from "../dispatch-contract.js";
+import { FLOW_JOB_NAME, FLOW_TIMER_JOB_NAME, runQueueName } from "../dispatch-contract.js";
 import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
 
-export { FLOW_JOB_NAME };
+export { FLOW_JOB_NAME, FLOW_TIMER_JOB_NAME };
 
 export type DispatcherConfig = {
   concurrency: number;
@@ -64,7 +64,7 @@ export async function startDispatcher(input: {
     const runAt = new Date(Date.now() + delaySeconds * 1000);
     const deferredRunQueue = Boolean(runId && delaySeconds > 0);
     await workerUtils.addJob(
-      jobName,
+      deferredRunQueue ? FLOW_TIMER_JOB_NAME : jobName,
       MessageData.encode({
         ...message,
         ...(runId ? { runId } : {}),
@@ -131,7 +131,7 @@ export async function startDispatcher(input: {
     const isFinalAttempt = readIsFinalAttempt(helpers);
     if (message.deferredRunQueue && message.runId) {
       await workerUtils.addJob(
-        jobName,
+        FLOW_JOB_NAME,
         MessageData.encode({ ...message, deferredRunQueue: false }),
         {
           jobKey: `${message.messageId}:run:${String(attempt)}`,
@@ -216,6 +216,7 @@ export async function startDispatcher(input: {
     forbiddenFlags: () => fairness.forbiddenFlags(),
     taskList: {
       [FLOW_JOB_NAME]: makeHandler(FLOW_JOB_NAME),
+      [FLOW_TIMER_JOB_NAME]: makeHandler(FLOW_TIMER_JOB_NAME),
     },
   });
 

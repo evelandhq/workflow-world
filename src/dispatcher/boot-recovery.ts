@@ -134,25 +134,25 @@ async function recoverActiveRunsForAllTenants(
     has_hook: boolean;
     has_timer: boolean;
   }>(
-    `select runs.tenant_id, runs.id, runs.name, runs.deployment_id, runs.queue_namespace,
+    `with timer_jobs as materialized (
+       -- Group once, with tenant/run identity as one join key. Separate join
+       -- clauses let a merge on tenant alone compare every run with every timer.
+       select array[jobs.payload->>'tenantId', jobs.payload->>'runId'] as run_key,
+              array_agg(distinct jobs.locked_by)
+                filter (where jobs.locked_by is not null) as locked_by
+         from graphile_worker._private_jobs as jobs
+        where jobs.job_queue_id is null
+          and jobs.attempts < jobs.max_attempts
+        group by array[jobs.payload->>'tenantId', jobs.payload->>'runId']
+     )
+     select runs.tenant_id, runs.id, runs.name, runs.deployment_id, runs.queue_namespace,
             array_remove(
               array_cat(
                 case
                   when queues.locked_by is null then array[]::text[]
                   else array[queues.locked_by]
                 end,
-                coalesce(
-                  (
-                    select array_agg(distinct jobs.locked_by)
-                      from graphile_worker._private_jobs as jobs
-                     where jobs.job_queue_id is null
-                       and jobs.payload->>'tenantId' = runs.tenant_id
-                       and jobs.payload->>'runId' = runs.id
-                       and jobs.attempts < jobs.max_attempts
-                       and jobs.locked_by is not null
-                  ),
-                  array[]::text[]
-                )
+                coalesce(timer_jobs.locked_by, array[]::text[])
               ),
               null
             ) as locked_by,
@@ -166,14 +166,7 @@ async function recoverActiveRunsForAllTenants(
               where jobs.job_queue_id = queues.id
                 and jobs.attempts < jobs.max_attempts
             )
-            or exists (
-             select 1
-               from graphile_worker._private_jobs as jobs
-              where jobs.job_queue_id is null
-                and jobs.payload->>'tenantId' = runs.tenant_id
-                and jobs.payload->>'runId' = runs.id
-                and jobs.attempts < jobs.max_attempts
-            ) as has_live_job,
+            or timer_jobs.run_key is not null as has_live_job,
             -- A hook the run still holds: its resolution enqueues the run's
             -- next delivery on its own, so boot needs to write nothing.
             exists (
@@ -197,6 +190,8 @@ async function recoverActiveRunsForAllTenants(
        from workflow.workflow_runs as runs
        left join graphile_worker._private_job_queues as queues
          on queues.queue_name = concat('wfrun:', runs.tenant_id, ':', runs.id)
+       left join timer_jobs
+         on timer_jobs.run_key = array[runs.tenant_id::text, runs.id::text]
       where runs.status in ('pending', 'running')
         -- A dead letter is terminal for dispatch, not a workflow-authored
         -- run_failed event. Keep it operator-replayable without recreating the

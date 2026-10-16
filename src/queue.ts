@@ -8,8 +8,8 @@
  *     suffixed per tenant. On a shared database an unsuffixed name would let
  *     any agent claim any project's jobs, which is exactly the cross-project
  *     turn stealing that per-project databases were introduced to stop.
- *   * `external` registers no runner at all. Jobs go to a shared, unsuffixed
- *     name that the platform dispatcher claims, tagged with a `project:<id>`
+ *   * `external` registers no runner at all. Jobs go to shared, unsuffixed
+ *     task names that the platform dispatcher claims, tagged with a `project:<id>`
  *     flag so the dispatcher can apply per-tenant fairness caps via
  *     graphile's `forbiddenFlags`.
  *
@@ -54,6 +54,7 @@ import {
   DEPLOYMENT_HEADER,
   DISPATCH_VERSION_HEADER,
   FLOW_JOB_NAME,
+  FLOW_TIMER_JOB_NAME,
   readRuntimeSecretFromEnv,
   runQueueName,
   RUNTIME_SECRET_HEADER,
@@ -113,9 +114,9 @@ type RunnerStart = { controller: AbortController; promise: Promise<void> };
 type LoopbackTarget = { hosts: string[]; port: number };
 
 /**
- * One graphile task name carries every workflow message. Upstream once had a
- * second one for steps; `@workflow/world` 5.0.0-beta.23 removed that queue kind
- * because the runtime now runs steps inline inside the flow handler.
+ * Workflow deliveries and their deferred timer markers have separate graphile
+ * task names. There is still only one runtime queue kind: steps run inline
+ * inside the flow handler.
  *
  * A claimed job is deserialized and handed to the *local* world's queue handler,
  * which is how the executor half stays eve's code rather than ours.
@@ -178,18 +179,15 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
 
   /**
    * Embedded runners get a per-tenant job name so a shared database cannot let
-   * one project's agent claim another's work. External runners share one name,
+   * one project's agent claim another's work. External runners share task names,
    * because the dispatcher deliberately claims across all tenants.
    *
-   * There is exactly one job name because there is exactly one queue kind:
-   * `@workflow/world` 5.0.0-beta.23 reduced `QueueKind` to `'workflow'`, having
-   * removed the former `'step'` variant — the runtime now runs steps inline
-   * inside the flow handler instead of enqueueing them.
+   * Timers use a separate name so an older embedded runner or dispatcher cannot
+   * claim a queue-less marker and execute it without the serialized handoff.
    */
-  function getJobQueueName(): string {
-    return config.runner === "embedded"
-      ? derivePartitionName(FLOW_JOB_NAME, tenantId)
-      : FLOW_JOB_NAME;
+  function getJobQueueName(deferredRunQueue = false): string {
+    const jobName = deferredRunQueue ? FLOW_TIMER_JOB_NAME : FLOW_JOB_NAME;
+    return config.runner === "embedded" ? derivePartitionName(jobName, tenantId) : jobName;
   }
 
   /**
@@ -301,9 +299,10 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       typeof delaySeconds === "number" && delaySeconds > 0
         ? new Date(Date.now() + delaySeconds * 1000)
         : undefined;
+    const deferredRunQueue = Boolean(runId && runAt);
 
     await utils.addJob(
-      getJobQueueName(),
+      getJobQueueName(deferredRunQueue),
       MessageData.encode({
         id: queueId,
         data: Buffer.from(body),
@@ -741,7 +740,9 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
   async function setupListeners() {
     const taskList: Record<string, (payload: unknown, helpers: unknown) => Promise<void>> = {};
     const workflowPrefix = getQueueTopicPrefix("workflow", queueNamespace);
-    taskList[getJobQueueName()] = createTaskHandler(workflowPrefix);
+    const handler = createTaskHandler(workflowPrefix);
+    taskList[getJobQueueName()] = handler;
+    taskList[getJobQueueName(true)] = handler;
 
     runner = await run({
       pgPool: pool,

@@ -45,7 +45,7 @@ export type {
   OwnershipLivenessSettings,
 } from "./ownership.js";
 export type { DispatcherEvent, DispatcherTelemetry } from "./observability.js";
-export { FLOW_JOB_NAME, startDispatcher } from "./runner.js";
+export { FLOW_JOB_NAME, FLOW_TIMER_JOB_NAME, startDispatcher } from "./runner.js";
 export type { DispatcherConfig, DispatcherRuntime } from "./runner.js";
 export { resolveDispatchRuntimeSecret } from "./secrets.js";
 export { startDispatcherService } from "./service.js";

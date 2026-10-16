@@ -70,6 +70,11 @@ queue before executing it. This keeps long sleeps from leaving one available
 `_private_job_queues` row per active run without weakening per-run dispatch
 serialization.
 
+Timer markers use the separate Graphile task `eveland_wf_flow_timers` (suffixed
+per tenant in embedded mode). Older consumers only know `eveland_wf_flows`, so
+they cannot accidentally execute a queue-less timer during an upgrade. A
+compatible consumer moves each due marker to `eveland_wf_flows` on the run queue.
+
 Postgres is the rendezvous. The dispatcher is the only actively polling party.
 Agents receive POSTs and write to the database; they never call the platform, and
 the platform never loads tenant code.
