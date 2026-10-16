@@ -1,8 +1,10 @@
-import { MessageData } from "../message.js";
+import { MessageData, readRunId } from "../message.js";
 import type { Pool } from "pg";
 import type { ActivationClient } from "./activation-client.js";
 import { withRenewedLease } from "./lease.js";
 import { postVqsMessage, type VqsResult } from "./vqs-client.js";
+
+export { readRunId };
 
 /**
  * Where a message should execute, and whether it can execute at all.
@@ -65,23 +67,6 @@ export type DispatcherDeps = {
    */
   executorFailures?: ExecutorFailureTracker;
 };
-
-/** Extracts the run id from a vqs payload without interpreting the rest of it. */
-export function readRunId(message: MessageData): string | undefined {
-  try {
-    const body = JSON.parse(Buffer.from(message.data).toString("utf8")) as {
-      runId?: unknown;
-      workflowRunId?: unknown;
-    };
-    if (typeof body.runId === "string") return body.runId;
-    // Step invocations name it differently.
-    if (typeof body.workflowRunId === "string") return body.workflowRunId;
-  } catch {
-    // A body the dispatcher cannot read is still dispatchable — affinity just
-    // falls back to the message's deployment hint.
-  }
-  return undefined;
-}
 
 export async function resolveAffinity(
   message: MessageData,

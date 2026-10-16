@@ -31,6 +31,7 @@ import {
   FLOW_JOB_NAME,
   RUNTIME_SECRET_HEADER,
   runQueueName,
+  TIMER_JOB_NAME,
 } from "./dispatch-contract.js";
 import { inflightDeliveries } from "./inflight.js";
 import { MessageData } from "./message.js";
@@ -41,6 +42,7 @@ const TENANT = "prj_port_extra_queue";
 const DEPLOYMENT = "dep_port_extra_queue";
 /** What `getJobQueueName()` derives in embedded mode: shared name + tenant suffix. */
 const EMBEDDED_JOB_NAME = derivePartitionName(FLOW_JOB_NAME, TENANT);
+const EMBEDDED_TIMER_JOB_NAME = derivePartitionName(TIMER_JOB_NAME, TENANT);
 
 type RecordedRequest = {
   method: string | undefined;
@@ -511,6 +513,87 @@ describe("postgres queue http execution", () => {
       vi.unstubAllGlobals();
       vi.useRealTimers();
     }
+  });
+
+  it("holds a far-off embedded delivery as a timer instead of on the run's queue", async () => {
+    // graphile locks every queue that holds a job on every claim, due or not
+    // (evelandhq/workflow-world#115), so a sleep must not keep its run's queue.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2024-01-01T00:00:00.000Z"));
+    try {
+      const queue = buildQueue(buildConfig(), pool);
+      await queue.start();
+
+      await queue.queue(
+        "__wkf_workflow_test-workflow",
+        { runId: "wrun_01SLEEP" },
+        { delaySeconds: 82_800, idempotencyKey: "wait_01:hop-7" },
+      );
+
+      expect(workerUtilsMock.addJob).toHaveBeenCalledWith(
+        EMBEDDED_TIMER_JOB_NAME,
+        expect.objectContaining({
+          idempotencyKey: "wait_01:hop-7",
+          runQueue: runQueueName(TENANT, "wrun_01SLEEP"),
+        }),
+        {
+          jobKey: "wait_01:hop-7",
+          runAt: new Date("2024-01-01T23:00:00.000Z"),
+          maxAttempts: 49,
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("puts a due embedded timer back on its run's queue under the same key", async () => {
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+
+    const timer = getTaskHandler(EMBEDDED_TIMER_JOB_NAME);
+    await timer(
+      {
+        ...buildMessageData(
+          "__wkf_workflow_test-workflow",
+          { runId: "wrun_01SLEEP" },
+          { idempotencyKey: "wait_01:hop-7" },
+        ),
+        runQueue: runQueueName(TENANT, "wrun_01SLEEP"),
+      },
+      { job: { attempts: 1, key: "wait_01:hop-7" } },
+    );
+
+    expect(workerUtilsMock.addJob).toHaveBeenCalledWith(
+      EMBEDDED_JOB_NAME,
+      expect.not.objectContaining({ runQueue: expect.anything() }),
+      {
+        jobKey: "wait_01:hop-7",
+        queueName: runQueueName(TENANT, "wrun_01SLEEP"),
+        maxAttempts: 49,
+        flags: [`project:${TENANT}`],
+      },
+    );
+  });
+
+  it("never writes a timer from a deployment in external mode", async () => {
+    // Only the dispatcher creates timers there: a deployment's world is baked
+    // at build time, and a job only a newer dispatcher could claim would wait
+    // on that upgrade.
+    const queue = buildQueue(buildConfig({ runner: "external" }), pool);
+    await queue.start();
+
+    await queue.queue(
+      "__wkf_workflow_test-workflow",
+      { runId: "wrun_01SLEEP" },
+      { delaySeconds: 82_800 },
+    );
+
+    expect(workerUtilsMock.addJob).toHaveBeenCalledWith(
+      FLOW_JOB_NAME,
+      expect.anything(),
+      expect.objectContaining({ queueName: runQueueName(TENANT, "wrun_01SLEEP") }),
+    );
   });
 
   it("does not re-execute a redelivered message that already completed", async () => {

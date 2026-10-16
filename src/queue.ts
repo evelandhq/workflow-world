@@ -58,10 +58,18 @@ import {
   runQueueName,
   RUNTIME_SECRET_HEADER,
   secretMatches,
+  TIMER_JOB_NAME,
 } from "./dispatch-contract.js";
 import { MIGRATION_LOCK_KEY } from "./migrate.js";
 import { derivePartitionName } from "./tenant.js";
 import { MAX_GRAPHILE_JOB_ATTEMPTS } from "./queue-policy.js";
+import {
+  createTimerHandler,
+  holdsAsTimer,
+  moveDelayedJobsToTimers,
+  registerTimerTask,
+  timerPayload,
+} from "./timers.js";
 
 /**
  * Structural stand-in for `@vercel/queue`'s `Transport`. Upstream imports the
@@ -193,6 +201,17 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
   }
 
   /**
+   * Where an embedded runner holds a delivery that is not due yet (see
+   * `timers.ts`). Per-tenant for the same reason as the flow name.
+   *
+   * External mode has none: there the dispatcher alone creates timers, so a
+   * deployment never writes a job that only a newer dispatcher could claim.
+   */
+  function getTimerJobName(): string {
+    return derivePartitionName(TIMER_JOB_NAME, tenantId);
+  }
+
+  /**
    * The executor half stays eve's — `@workflow/world-local` owns vqs decoding
    * and hands the message to the runtime. It is wrapped only to enforce the
    * dispatch contract, because this handler is what the platform dispatcher
@@ -302,33 +321,43 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
         ? new Date(Date.now() + delaySeconds * 1000)
         : undefined;
 
-    await utils.addJob(
-      getJobQueueName(),
-      MessageData.encode({
-        id: queueId,
-        data: Buffer.from(body),
-        attempt,
-        messageId,
-        idempotencyKey,
-        headers,
-        tenantId,
-        deploymentId: deploymentId ?? config.deploymentId,
-        // Recorded so the delivery side can rebuild the exact prefix; the
-        // dispatcher must not re-resolve it from its own environment.
-        ...(queueNamespace !== undefined ? { queueNamespace } : {}),
-      }),
-      {
+    const holdAsTimer = config.runner === "embedded" && holdsAsTimer(runId, delaySeconds);
+    const encoded = MessageData.encode({
+      id: queueId,
+      data: Buffer.from(body),
+      attempt,
+      messageId,
+      idempotencyKey,
+      headers,
+      tenantId,
+      deploymentId: deploymentId ?? config.deploymentId,
+      // Recorded so the delivery side can rebuild the exact prefix; the
+      // dispatcher must not re-resolve it from its own environment.
+      ...(queueNamespace !== undefined ? { queueNamespace } : {}),
+    });
+
+    if (holdAsTimer && runId) {
+      // Not due for a while: wait off the run's queue, so it costs this
+      // tenant's claims nothing until then. The timer task puts it back.
+      await utils.addJob(getTimerJobName(), timerPayload(encoded, runQueueName(tenantId, runId)), {
         ...(jobKey ? { jobKey } : {}),
         ...(runAt ? { runAt } : {}),
-        // Serializes concurrent deliveries for one run. Without it two claimed
-        // jobs replay the same run's event log at the same time.
-        ...(runId ? { queueName: runQueueName(tenantId, runId) } : {}),
         maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
-        // Read by the dispatcher's `forbiddenFlags` callback to throttle a
-        // tenant that is already at its in-flight cap, without starving others.
-        flags: [`project:${tenantId}`],
-      },
-    );
+      });
+      return;
+    }
+
+    await utils.addJob(getJobQueueName(), encoded, {
+      ...(jobKey ? { jobKey } : {}),
+      ...(runAt ? { runAt } : {}),
+      // Serializes concurrent deliveries for one run. Without it two claimed
+      // jobs replay the same run's event log at the same time.
+      ...(runId ? { queueName: runQueueName(tenantId, runId) } : {}),
+      maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
+      // Read by the dispatcher's `forbiddenFlags` callback to throttle a
+      // tenant that is already at its in-flight cap, without starving others.
+      flags: [`project:${tenantId}`],
+    });
   }
 
   async function getExecutionBaseUrl(): Promise<string | undefined> {
@@ -722,6 +751,13 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     const taskList: Record<string, (payload: unknown, helpers: unknown) => Promise<void>> = {};
     const workflowPrefix = getQueueTopicPrefix("workflow", queueNamespace);
     taskList[getJobQueueName()] = createTaskHandler(workflowPrefix);
+    taskList[getTimerJobName()] = createTimerHandler({
+      addJob: (identifier, payload, spec) => {
+        if (!workerUtils) throw new Error("Postgres queue worker utils are not initialized");
+        return workerUtils.addJob(identifier, payload, spec);
+      },
+      flowJobName: getJobQueueName(),
+    });
 
     runner = await run({
       pgPool: pool,
@@ -739,6 +775,28 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       pollInterval: 500, // 500ms = 0.5s (graphile-worker uses LISTEN/NOTIFY when available)
       taskList,
     });
+    void moveLegacyDelaysToTimers();
+  }
+
+  /**
+   * Deliveries this tenant enqueued before timers existed still wait on their
+   * run's queue. One pass at startup moves them; everything enqueued from here
+   * on is held as a timer from the start.
+   */
+  async function moveLegacyDelaysToTimers(): Promise<void> {
+    try {
+      await registerTimerTask(pool, getTimerJobName());
+      const moved = await moveDelayedJobsToTimers(pool, {
+        flowJobName: getJobQueueName(),
+        timerJobName: getTimerJobName(),
+      });
+      if (moved > 0) await workerUtils?.cleanup({ tasks: ["GC_JOB_QUEUES"] });
+    } catch (err) {
+      console.warn(
+        "[eveland workflow world] Failed to move delayed deliveries off run queues:",
+        err,
+      );
+    }
   }
 
   return {

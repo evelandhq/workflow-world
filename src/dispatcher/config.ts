@@ -2,6 +2,7 @@ import os from "node:os";
 import { resolveStreamCompaction } from "../config.js";
 import { MIN_OWNERSHIP_LIVENESS_MS } from "./ownership.js";
 import { parseStaticEndpoints } from "./static-activation.js";
+import { DEFAULT_TIMER_SWEEP_INTERVAL_MS } from "../timers.js";
 import {
   DEFAULT_EXECUTOR_FAILURE_LIMIT,
   DEFAULT_EXECUTOR_FAILURE_MIN_SPAN_MS,
@@ -24,6 +25,7 @@ export type DispatcherConfiguration = {
   leaseRenewIntervalMs: number;
   activationLeaseTtlMs: number;
   queueGcIntervalMs: number;
+  timerSweepIntervalMs: number;
   bootRecoveryDeploymentsPerWave: number;
   bootRecoveryWaveIntervalMs: number;
   executorFailureLimit: number;
@@ -215,6 +217,14 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
     // safe: the sweep only deletes queues with no jobs left, so running it more
     // often costs a query and running it less lets rows sit around.
     queueGcIntervalMs: positiveNumber(env.WORKFLOW_DISPATCHER_QUEUE_GC_INTERVAL_MS, 300_000),
+    // How long a deployment's delayed continuation may sit on its run's queue
+    // before the dispatcher moves it to a timer — the window in which it still
+    // costs every claim a row lock. One UPDATE that writes only when it moves
+    // something, so the default is short.
+    timerSweepIntervalMs: positiveNumber(
+      env.WORKFLOW_DISPATCHER_TIMER_SWEEP_INTERVAL_MS,
+      DEFAULT_TIMER_SWEEP_INTERVAL_MS,
+    ),
     bootRecoveryDeploymentsPerWave: positiveNumber(
       env.WORKFLOW_DISPATCHER_BOOT_RECOVERY_DEPLOYMENTS_PER_WAVE,
       DEFAULT_BOOT_RECOVERY_DEPLOYMENTS_PER_WAVE,

@@ -569,6 +569,13 @@ This costs a sweep. graphile does not reclaim a queue row when its last job
 completes, so one row per run would accumulate for ever; the dispatcher runs
 graphile's own queue cleanup on an interval.
 
+It also costs every claim. graphile 0.16 locks every queue that holds any job,
+due or not, before it picks one, so a queue must not outlive the work that is
+due on it. A delivery due more than a minute out therefore waits as a timer job
+with no queue and returns to the run's queue when it is due; serialization
+covers the delivery, never the wait. See
+[delayed deliveries](operations/dispatcher.md#delayed-deliveries-and-claim-cost).
+
 **Deduplication is a bounded in-process filter, not a durable record.** Only
 messages carrying an idempotency key participate, and only a _completed_ dispatch
 is suppressed — suppressing on failure would let one transient blip swallow a
