@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.25.0...workflow-world-v0.26.0) (2026-10-16)
+
+
+### Features
+
+* hold delayed deliveries off their run queue until they are due ([#117](https://github.com/evelandhq/workflow-world/issues/117)) ([7575b5d](https://github.com/evelandhq/workflow-world/commit/7575b5d1715390f27c7dd5b88f8b8bf6fc66222f)), closes [#115](https://github.com/evelandhq/workflow-world/issues/115)
+
 ## [0.25.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.24.0...workflow-world-v0.25.0) (2026-10-14)
 
 
