@@ -29,6 +29,25 @@ export const DISPATCH_VERSION = 1;
 export const FLOW_JOB_NAME = "eveland_wf_flows";
 
 /**
+ * The graphile task name for a delivery that is not due yet, held outside its
+ * run's queue until it is.
+ *
+ * graphile 0.16's `get_job` locks every available named queue on every claim
+ * (`for update skip locked` over `_private_job_queues`), so its cost grows with
+ * the number of queues, not the number of due jobs. A sleeping run's delayed
+ * continuation kept its `wfrun:` queue alive for the whole sleep — eve's session
+ * timeout re-arms every 23 hours for a week — and with a few hundred sessions
+ * every claim locked a few hundred rows (evelandhq/workflow-world#115).
+ *
+ * The dispatcher alone owns this name. It moves far-future flow jobs here (see
+ * `dispatcher/timers.ts`), and when one comes due it re-adds it as a flow job on
+ * the run's queue, so per-run serialization still covers the delivery itself.
+ * Deployments keep enqueueing flow jobs exactly as before: their world is baked
+ * at build time, and none of them would ever learn a new name.
+ */
+export const TIMER_JOB_NAME = "eveland_wf_timers";
+
+/**
  * graphile queue name that serializes every delivery for one run.
  *
  * graphile executes jobs sharing a `queueName` strictly one at a time, which is
@@ -50,6 +69,11 @@ export const FLOW_JOB_NAME = "eveland_wf_flows";
  * row when the last job in it completes. `_private_job_queues` keeps one row per
  * distinct run for ever, so the dispatcher runs graphile's own `GC_JOB_QUEUES`
  * cleanup periodically. Without that sweep this design is a slow table leak.
+ *
+ * A second caveat: a queue costs every claim one row lock for as long as it has
+ * any job, due or not. A delayed job therefore does not wait in this queue — the
+ * dispatcher holds it as a {@link TIMER_JOB_NAME} job and puts it back here only
+ * once it is due.
  */
 export function runQueueName(tenantId: string, runId: string): string {
   return `wfrun:${tenantId}:${runId}`;

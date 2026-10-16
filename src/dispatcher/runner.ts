@@ -21,16 +21,24 @@ import {
  * mode. Embedded-mode jobs carry a per-tenant suffix and are deliberately not
  * claimed here — they belong to that deployment's own in-process runner.
  */
-import { FLOW_JOB_NAME, runQueueName } from "../dispatch-contract.js";
-import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
+import { FLOW_JOB_NAME, TIMER_JOB_NAME } from "../dispatch-contract.js";
+import {
+  addDelayedDelivery,
+  createTimerHandler,
+  DEFAULT_TIMER_SWEEP_INTERVAL_MS,
+  moveDelayedJobsToTimers,
+  registerTimerTask,
+} from "../timers.js";
 
-export { FLOW_JOB_NAME };
+export { FLOW_JOB_NAME, TIMER_JOB_NAME };
 
 export type DispatcherConfig = {
   concurrency: number;
   pollIntervalMs: number;
   maxInFlightPerTenant: number;
   queueGcIntervalMs: number;
+  /** How often delayed deliveries are moved off their run queues; see timers.ts. */
+  timerSweepIntervalMs?: number;
   /** Consecutive executor 5xx on one run before it is dead-lettered. */
   executorFailureLimit?: number;
   /** The streak must also span at least this long; see the tracker. */
@@ -59,17 +67,15 @@ export async function startDispatcher(input: {
   const dedup = createMessageDedup();
   const log = input.deps.log ?? (() => {});
 
+  const addJob: typeof workerUtils.addJob = (identifier, payload, spec) =>
+    workerUtils.addJob(identifier, payload, spec);
+
   const reenqueue: DispatcherDeps["reenqueue"] = async ({ jobName, message, delaySeconds }) => {
-    const runId = readRunId(message);
-    await workerUtils.addJob(jobName, MessageData.encode(message), {
+    await addDelayedDelivery(addJob, {
+      jobName,
+      message,
+      delaySeconds,
       jobKey: message.idempotencyKey ?? message.messageId,
-      runAt: new Date(Date.now() + delaySeconds * 1000),
-      // Same per-run serialization the World applies on the first delivery. A
-      // reschedule that omitted it would be concurrently claimable against the
-      // run it belongs to.
-      ...(runId ? { queueName: runQueueName(message.tenantId, runId) } : {}),
-      maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
-      flags: [`project:${message.tenantId}`],
     });
   };
 
@@ -196,6 +202,7 @@ export async function startDispatcher(input: {
     forbiddenFlags: () => fairness.forbiddenFlags(),
     taskList: {
       [FLOW_JOB_NAME]: makeHandler(FLOW_JOB_NAME),
+      [TIMER_JOB_NAME]: createTimerHandler({ addJob, flowJobName: FLOW_JOB_NAME }),
     },
   });
 
@@ -206,12 +213,46 @@ export async function startDispatcher(input: {
   //
   // Cheap and idempotent, so a fixed interval beats trying to be clever about
   // when it is needed. `unref` so it never holds the process open.
-  const queueGcTimer = setInterval(() => {
-    void workerUtils.cleanup({ tasks: ["GC_JOB_QUEUES"] }).catch((error: unknown) => {
+  const collectQueues = () =>
+    workerUtils.cleanup({ tasks: ["GC_JOB_QUEUES"] }).catch((error: unknown) => {
       log("job queue cleanup failed", { error: String(error) });
     });
-  }, config.queueGcIntervalMs);
+  const queueGcTimer = setInterval(() => void collectQueues(), config.queueGcIntervalMs);
   queueGcTimer.unref();
+
+  // Every claim locks every queue that still has a job, due or not (see
+  // timers.ts), so a sleeping run must not keep its queue. Deployments enqueue
+  // their delayed continuations straight onto the run's queue; this moves them
+  // off it and collects the queues they leave empty right away rather than at
+  // the next GC. Runs once at start, so a backlog left by an older dispatcher
+  // is cleared before it costs anything further.
+  let sweeping = false;
+  let timerTaskRegistered = false;
+  const sweepTimers = async () => {
+    if (sweeping) return;
+    sweeping = true;
+    try {
+      if (!timerTaskRegistered) {
+        await registerTimerTask(pool);
+        timerTaskRegistered = true;
+      }
+      const moved = await moveDelayedJobsToTimers(pool);
+      if (moved > 0) {
+        log("moved delayed deliveries off their run queues", { jobs: moved });
+        await collectQueues();
+      }
+    } catch (error) {
+      log("delayed delivery sweep failed", { error: String(error) });
+    } finally {
+      sweeping = false;
+    }
+  };
+  void sweepTimers();
+  const timerSweepTimer = setInterval(
+    () => void sweepTimers(),
+    config.timerSweepIntervalMs ?? DEFAULT_TIMER_SWEEP_INTERVAL_MS,
+  );
+  timerSweepTimer.unref();
 
   return {
     runner,
@@ -221,6 +262,7 @@ export async function startDispatcher(input: {
     executorFailures,
     async stop() {
       clearInterval(queueGcTimer);
+      clearInterval(timerSweepTimer);
       try {
         await runner.stop();
       } finally {

@@ -2,7 +2,7 @@ import { MessageData } from "../message.js";
 import type { WorkerUtils } from "graphile-worker";
 import type { Pool } from "pg";
 import { FLOW_JOB_NAME } from "./runner.js";
-import { runQueueName } from "../dispatch-contract.js";
+import { runQueueName, TIMER_JOB_NAME } from "../dispatch-contract.js";
 import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
 
 /**
@@ -30,7 +30,9 @@ import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
  * A run whose per-run queue still holds a retryable job is not a candidate.
  * That job is the run's own wake-up — a delayed continuation for a sleep, a
  * pending first delivery, or a delivery the dead dispatcher was holding, which
- * the lock reclaim above makes claimable again. Re-enqueueing beside it added
+ * the lock reclaim above makes claimable again. A continuation the dispatcher
+ * holds as a timer outside the queue (`timers.ts`) counts the same way: it is
+ * still the run's job, just not on the queue yet. Re-enqueueing beside it added
  * nothing the run needed and cost one cold-start activation per run: with a
  * few hundred active runs across a few dozen deployments, every dispatcher
  * restart became a cold-start storm.
@@ -133,18 +135,32 @@ async function recoverActiveRunsForAllTenants(
     has_hook: boolean;
     has_timer: boolean;
   }>(
-    `select runs.tenant_id, runs.id, runs.name, runs.deployment_id, runs.queue_namespace,
+    `with timers as (
+       -- Deliveries held outside their run's queue until they are due
+       -- (timers.ts). Each records the queue it goes back to. Tested with IN
+       -- below, which Postgres runs as one hashed subplan: a join here was
+       -- planned as a nested loop over every run and every timer.
+       select distinct jobs.payload ->> 'runQueue' as run_queue
+         from graphile_worker._private_jobs as jobs
+         join graphile_worker._private_tasks as tasks on tasks.id = jobs.task_id
+        where tasks.identifier = $1
+          and jobs.attempts < jobs.max_attempts
+     )
+     select runs.tenant_id, runs.id, runs.name, runs.deployment_id, runs.queue_namespace,
             queues.locked_by,
             -- A job graphile will still deliver: due now, due later, or locked
             -- by a worker the reclaim below is about to release. One that has
             -- spent its attempts is left behind by graphile and delivers
-            -- nothing, so it does not count.
-            exists (
+            -- nothing, so it does not count. A held timer is the same job
+            -- waiting outside the queue, so it counts too.
+            (exists (
               select 1
                 from graphile_worker._private_jobs as jobs
                where jobs.job_queue_id = queues.id
                  and jobs.attempts < jobs.max_attempts
-            ) as has_live_job,
+            ) or concat('wfrun:', runs.tenant_id, ':', runs.id) in (
+              select timers.run_queue from timers
+            )) as has_live_job,
             -- A hook the run still holds: its resolution enqueues the run's
             -- next delivery on its own, so boot needs to write nothing.
             exists (
@@ -180,13 +196,33 @@ async function recoverActiveRunsForAllTenants(
              and dead.resolved_at is null
         )
       order by runs.tenant_id, runs.created_at`,
+    [TIMER_JOB_NAME],
   );
+
+  // A timer the dead generation was promoting is locked on the job row alone —
+  // it has no queue — and would otherwise count as the run's live job above
+  // while graphile kept it for four hours.
+  const { rows: timerLocks } = reclaimOldWorkerLocks
+    ? await input.pool.query<{ locked_by: string }>(
+        `select distinct jobs.locked_by
+           from graphile_worker._private_jobs as jobs
+           join graphile_worker._private_tasks as tasks on tasks.id = jobs.task_id
+          where tasks.identifier = $1
+            and jobs.locked_by is not null`,
+        [TIMER_JOB_NAME],
+      )
+    : { rows: [] };
 
   // Lock reclaim covers ALL candidates, filtered or not. Every worker id found
   // here belongs to the dead generation, and a filtered-out run's queue must
   // not stay locked: the host may settle or re-admit it later, and a stale lock
   // would hold its next legitimate delivery for graphile's four-hour threshold.
-  const oldWorkerIds = [...new Set(rows.flatMap((row) => (row.locked_by ? [row.locked_by] : [])))];
+  const oldWorkerIds = [
+    ...new Set([
+      ...rows.flatMap((row) => (row.locked_by ? [row.locked_by] : [])),
+      ...timerLocks.map((row) => row.locked_by),
+    ]),
+  ];
   if (reclaimOldWorkerLocks && oldWorkerIds.length > 0) {
     await input.workerUtils.forceUnlockWorkers(oldWorkerIds);
     input.log?.("unlocked old dispatcher workers during boot recovery", {

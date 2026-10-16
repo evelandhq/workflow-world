@@ -59,3 +59,20 @@ export const MessageData = z.object({
     .describe("eve queue namespace resolved by the enqueuing deployment"),
 });
 export type MessageData = z.infer<typeof MessageData>;
+
+/** Extracts the run id from a vqs payload without interpreting the rest of it. */
+export function readRunId(message: MessageData): string | undefined {
+  try {
+    const body = JSON.parse(Buffer.from(message.data).toString("utf8")) as {
+      runId?: unknown;
+      workflowRunId?: unknown;
+    };
+    if (typeof body.runId === "string") return body.runId;
+    // Step invocations name it differently.
+    if (typeof body.workflowRunId === "string") return body.workflowRunId;
+  } catch {
+    // A body the dispatcher cannot read is still dispatchable — affinity just
+    // falls back to the message's deployment hint.
+  }
+  return undefined;
+}

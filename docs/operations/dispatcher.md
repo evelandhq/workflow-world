@@ -42,6 +42,74 @@ leave the pool alone. Earlier versions rejected a concurrency above
 `poolSize - 2`, on the belief that a running job holds a connection; that bound
 is gone, and only a floor of 4 on the pool itself remains.
 
+## Delayed deliveries and claim cost
+
+graphile-worker 0.16 claims a job by first locking every available named queue
+(`for update skip locked` over `_private_job_queues`) and only then picking a
+due job; 0.17 and 0.18 still do this by default. Each lock is a WAL record and
+each claim a commit, so a claim costs one row lock **per queue that holds any
+job, due or not**. Per-run serialization gives every run its own
+`wfrun:<tenant>:<run>` queue, and a sleeping run's delayed continuation used to
+keep that queue alive for the whole sleep — eve's session timeout re-arms every
+23 hours for as long as the session lives. A few hundred live sessions meant a
+few hundred row locks on every claim, and with a high
+`WORKFLOW_DISPATCHER_CONCURRENCY` and a short poll interval that was a steady
+stream of WAL and fsyncs (evelandhq/workflow-world#115).
+
+The dispatcher therefore holds any delivery due more than a minute out as an
+`eveland_wf_timers` job with no queue. Every
+`WORKFLOW_DISPATCHER_TIMER_SWEEP_INTERVAL_MS`, and once at startup, it moves such
+jobs off their run queues and reclaims the queues they leave empty; its own
+`{ timeoutSeconds }` reschedules skip the queue from the start. When a timer
+comes due the dispatcher re-adds it to the run's queue as an ordinary flow job,
+under the same job key, so the delivery itself is still serialized. Deployments
+enqueue exactly what they did before, so this applies to every build already
+deployed, and no deployment ever writes a job that only a newer dispatcher could
+claim. Jobs that have been attempted keep their place, since moving one would
+reset its retry count. An `embedded` runner does the same for its own tenant,
+under its per-tenant task names: it holds far-off deliveries as timers when it
+enqueues them, and moves its older ones once at startup.
+
+**Rolling the dispatcher back below this version** leaves held timers with no
+consumer: an older dispatcher does not claim `eveland_wf_timers`. Stop it and
+return them to their run queues first:
+
+```sql
+begin;
+insert into graphile_worker._private_job_queues (queue_name)
+select distinct jobs.payload ->> 'runQueue'
+  from graphile_worker._private_jobs as jobs
+  join graphile_worker._private_tasks as tasks on tasks.id = jobs.task_id
+ where tasks.identifier = 'eveland_wf_timers'
+on conflict do nothing;
+update graphile_worker._private_jobs as jobs
+   set task_id = flow.id,
+       job_queue_id = queues.id,
+       flags = jsonb_build_object('project:' || (jobs.payload ->> 'tenantId'), true)
+  from graphile_worker._private_tasks as timer,
+       graphile_worker._private_tasks as flow,
+       graphile_worker._private_job_queues as queues
+ where timer.identifier = 'eveland_wf_timers'
+   and flow.identifier = 'eveland_wf_flows'
+   and jobs.task_id = timer.id
+   and queues.queue_name = jobs.payload ->> 'runQueue'
+   and jobs.locked_at is null;
+commit;
+```
+
+An `embedded` tenant rolled back to an older build has the same gap for its
+own timers, until a build of this version or later runs again.
+
+The number of `_private_job_queues` rows now tracks runs with work due, not
+runs that are alive:
+
+```sql
+select count(*) from graphile_worker._private_job_queues;
+select count(*) from graphile_worker._private_jobs jobs
+  join graphile_worker._private_tasks tasks on tasks.id = jobs.task_id
+ where tasks.identifier = 'eveland_wf_timers';
+```
+
 ## Executors that are always running
 
 Set `WORKFLOW_DISPATCHER_STATIC_ENDPOINTS` instead of the activation API when
@@ -82,7 +150,8 @@ PostgreSQL advisory lock for its whole lifetime, reclaims only the old Graphile
 worker ids found on active runs' exact `wfrun:<tenant>:<run>` queues, re-enqueues
 the active runs that have no job left on their queue, and only then starts its
 worker pool and reports ready. A run whose job is still queued — a pending
-delivery, a sleep's timer, or the delivery the dead dispatcher was holding — is
+delivery, a sleep's timer (on its queue or held as an `eveland_wf_timers` job),
+or the delivery the dead dispatcher was holding — is
 left to that job, and a run that holds a hook is left to that hook's
 resolution; re-enqueueing beside either only bought a cold start per run. The
 runs it does re-enqueue are released a few deployments at a time
