@@ -94,6 +94,7 @@ import {
 import { monotonicFactory } from "ulid";
 import { type Drizzle, Schema } from "./drizzle/index.js";
 import type { SerializedContent } from "./drizzle/schema.js";
+import { deliveryInFlight } from "./delivery-liveness.js";
 import { resolveRunRetentionForCreation } from "./run-retention-resolution.js";
 import { dedupIndexName } from "./tenant.js";
 import { compact } from "./util.js";
@@ -388,6 +389,23 @@ function isCorrelatedEventUniqueViolation(
     constraint === "workflow_events_entity_creation_unique" ||
     constraint === dedupIndexName(tenantId)
   );
+}
+
+/**
+ * How long a refused restart waits before asking again whether the owner has
+ * ended: a tenth of how long the step has run, from 30 s to 5 min. Each ask is a
+ * delivery, possibly a cold start, and a step that has run long is likely to
+ * run on, so the asks thin out as it does.
+ */
+function ownerRecheckSeconds(startedAt: Date | null, now: Date): number {
+  const runningSeconds = startedAt ? (now.getTime() - startedAt.getTime()) / 1000 : 0;
+  return Math.min(300, Math.max(30, Math.ceil(runningSeconds / 10)));
+}
+
+function ownerMessageIdOf(eventData: unknown): string | null {
+  if (typeof eventData !== "object" || eventData === null) return null;
+  const { ownerMessageId } = eventData as { ownerMessageId?: unknown };
+  return typeof ownerMessageId === "string" ? ownerMessageId : null;
 }
 
 export function createRunsStorage(drizzle: Drizzle, tenantId: string): Storage["runs"] {
@@ -793,6 +811,7 @@ export function createEventsStorage(
       status: Schema.steps.status,
       startedAt: Schema.steps.startedAt,
       retryAfter: Schema.steps.retryAfter,
+      ownerMessageId: Schema.steps.ownerMessageId,
     })
     .from(Schema.steps)
     .where(
@@ -1148,6 +1167,7 @@ export function createEventsStorage(
         status: string;
         startedAt: Date | null;
         retryAfter: Date | null;
+        ownerMessageId: string | null;
       } | null = null;
       const stepEventsNeedingValidation = ["step_started", "step_retrying"];
       if (stepEventsNeedingValidation.includes(data.eventType) && data.correlationId) {
@@ -1703,6 +1723,50 @@ export function createEventsStorage(
             stepCreatedLazily = true;
           }
 
+          // A step already running keeps its owner while that delivery is in
+          // flight. The runtime's ownership lease lapses after 860 s by default,
+          // and a step message for the step can then be claimed on any replica
+          // once its run's queue is free, which happens while the owner runs
+          // only when the owner is a hook wake that bypassed that queue.
+          // Starting it again there would run the body twice, so the restart
+          // waits until the owner has ended. The owner's own recovery (a
+          // redelivery of the same message) is not a second start.
+          const ownerMessageId = ownerMessageIdOf(data.eventData);
+          if (
+            !stepCreatedLazily &&
+            validatedStep?.status === "running" &&
+            validatedStep.ownerMessageId !== null &&
+            validatedStep.ownerMessageId !== ownerMessageId
+          ) {
+            const [current] = await tx
+              .select({
+                status: Schema.steps.status,
+                owner: Schema.steps.ownerMessageId,
+                startedAt: Schema.steps.startedAt,
+              })
+              .from(Schema.steps)
+              .where(
+                and(
+                  eq(Schema.steps.tenantId, tenantId),
+                  eq(Schema.steps.runId, effectiveRunId),
+                  eq(Schema.steps.stepId, data.correlationId!),
+                ),
+              )
+              .for("update")
+              .limit(1);
+            if (
+              current?.status === "running" &&
+              current.owner !== null &&
+              current.owner !== ownerMessageId &&
+              (await deliveryInFlight(tx, current.owner))
+            ) {
+              throw new TooEarlyError(
+                `Cannot start step "${data.correlationId}": the delivery running it is still in flight`,
+                { retryAfter: ownerRecheckSeconds(current.startedAt, now) },
+              );
+            }
+          }
+
           // Retried steps may be scheduled for later. Keep this check inside
           // the transaction so the step_started write cannot slip past it.
           if (validatedStep?.retryAfter && validatedStep.retryAfter.getTime() > Date.now()) {
@@ -1726,6 +1790,9 @@ export function createEventsStorage(
               // overlapping starts.
               startedAt: sql`COALESCE(${Schema.steps.startedAt}, ${now.toISOString()})`,
               retryAfter: null,
+              // A bare start (a queued step message) clears ownership, as the
+              // runtime's own replay consumer reads it.
+              ownerMessageId,
             })
             .where(
               and(

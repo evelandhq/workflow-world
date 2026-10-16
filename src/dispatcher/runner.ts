@@ -11,6 +11,7 @@ import {
   readRunId,
   type DispatchOutcome,
   type DispatcherDeps,
+  type FairnessLane,
   type ExecutorFailureTracker,
   type Fairness,
   type MessageDedup,
@@ -21,7 +22,7 @@ import {
  * mode. Embedded-mode jobs carry a per-tenant suffix and are deliberately not
  * claimed here — they belong to that deployment's own in-process runner.
  */
-import { FLOW_JOB_NAME, TIMER_JOB_NAME } from "../dispatch-contract.js";
+import { FLOW_JOB_NAME, TIMER_JOB_NAME, wakeFlag } from "../dispatch-contract.js";
 import {
   addDelayedDelivery,
   createTimerHandler,
@@ -141,7 +142,8 @@ export async function startDispatcher(input: {
     // registered `__<ns>_wkf_workflow_*` is an unhandled queue every time.
     const queueName = `${getQueueTopicPrefix("workflow", message.queueNamespace)}${message.id}`;
 
-    fairness.acquire(message.tenantId);
+    const lane = readFairnessLane(helpers, message.tenantId);
+    fairness.acquire(message.tenantId, lane);
     try {
       let outcome: DispatchOutcome;
       try {
@@ -183,7 +185,7 @@ export async function startDispatcher(input: {
       }
       throw new Error(outcome.reason);
     } finally {
-      fairness.release(message.tenantId);
+      fairness.release(message.tenantId, lane);
     }
   };
 
@@ -275,6 +277,13 @@ export async function startDispatcher(input: {
 function readAttempt(helpers: unknown): number | undefined {
   const attempts = (helpers as { job?: { attempts?: unknown } } | null)?.job?.attempts;
   return typeof attempts === "number" ? attempts : undefined;
+}
+
+/** The cap this job counts against: its tenant's wake cap if the World flagged it so. */
+function readFairnessLane(helpers: unknown, tenantId: string): FairnessLane {
+  const flags = (helpers as { job?: { flags?: Record<string, unknown> | null } } | null)?.job
+    ?.flags;
+  return flags?.[wakeFlag(tenantId)] ? "wake" : "delivery";
 }
 
 function readIsFinalAttempt(helpers: unknown): boolean {

@@ -1,5 +1,11 @@
+import { WorkflowInvokePayloadSchema } from "@workflow/world";
 import { describe, expect, test } from "vitest";
-import { checkDispatchVersion, DISPATCH_VERSION, secretMatches } from "./dispatch-contract.js";
+import {
+  checkDispatchVersion,
+  DISPATCH_VERSION,
+  secretMatches,
+  isHookWake,
+} from "./dispatch-contract.js";
 
 describe("dispatch contract", () => {
   test("accepts the current version", () => {
@@ -40,4 +46,30 @@ describe("dispatch contract", () => {
     expect(secretMatches("s3cret", undefined)).toBe(false);
     expect(secretMatches("s3cret", "s3cret-longer")).toBe(false);
   });
+
+  test("a wake from a hook resume is a hook wake", () => {
+    const timing = { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 };
+    const hookInput = {
+      resumeId: "res_1",
+      hookId: "hook_1",
+      token: "tok_1",
+      payload: null,
+      payloadDigest: "d",
+    };
+    expect(isHookWake(invoke({ runId: "wrun_1", hookResumeTiming: timing }))).toBe(true);
+    expect(isHookWake(invoke({ runId: "wrun_1", hookInput }))).toBe(true);
+  });
+
+  test("a plain replay or a step message is not a hook wake", () => {
+    const timing = { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 };
+    expect(isHookWake(invoke({ runId: "wrun_1" }))).toBe(false);
+    expect(
+      isHookWake(invoke({ runId: "wrun_1", stepId: "step_1", hookResumeTiming: timing })),
+    ).toBe(false);
+  });
 });
+
+/** Parsed the way the World parses a message, so a renamed upstream field fails here. */
+function invoke(payload: Record<string, unknown>) {
+  return WorkflowInvokePayloadSchema.parse(payload);
+}

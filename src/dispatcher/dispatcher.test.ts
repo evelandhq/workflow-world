@@ -1,5 +1,10 @@
 import type { MessageData } from "../message.js";
-import { DISPATCH_VERSION_HEADER, RUNTIME_SECRET_HEADER } from "../dispatch-contract.js";
+import {
+  DISPATCH_VERSION_HEADER,
+  RUNTIME_SECRET_HEADER,
+  tenantFlag,
+  wakeFlag,
+} from "../dispatch-contract.js";
 import { getQueueTopicPrefix } from "@workflow/world";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -414,6 +419,18 @@ describe("fairness", () => {
     fairness.acquire("p_alpha");
     expect(fairness.forbiddenFlags()).toEqual(["project:p_alpha"]);
     expect(fairness.forbiddenFlags()).not.toContain("project:p_beta");
+  });
+
+  test("a tenant at its cap still takes a hook wake, up to a cap of its own", () => {
+    const fairness = createFairness({ maxInFlightPerTenant: 1 });
+    fairness.acquire("p_alpha");
+    expect(fairness.forbiddenFlags()).not.toContain(wakeFlag("p_alpha"));
+
+    fairness.acquire("p_alpha", "wake");
+    expect(fairness.forbiddenFlags()).toEqual([tenantFlag("p_alpha"), wakeFlag("p_alpha")]);
+
+    fairness.release("p_alpha", "wake");
+    expect(fairness.forbiddenFlags()).toEqual([tenantFlag("p_alpha")]);
   });
 
   test("releasing frees the slot and forgets the tenant", () => {

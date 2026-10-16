@@ -374,6 +374,168 @@ describe("postgres queue http execution", () => {
     }
   });
 
+  it("enqueues a hook wake past its run's queue while a delivery holds it", async () => {
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+    vi.mocked(pool.query).mockResolvedValueOnce({ rows: [{}] } as never);
+
+    await queue.queue("__wkf_workflow_greet", {
+      runId: "wrun_01ABC",
+      hookResumeTiming: { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 },
+    });
+
+    expect(vi.mocked(pool.query).mock.calls.at(-1)?.[1]).toEqual([
+      runQueueName(TENANT, "wrun_01ABC"),
+    ]);
+    const options = vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2];
+    expect(options).not.toHaveProperty("queueName");
+    // The delivery it interrupts already holds a slot of the tenant's cap.
+    expect(options).toEqual(expect.objectContaining({ flags: [`wake:${TENANT}`] }));
+    // One pending bypassing wake per run: a later one replaces it.
+    expect(options).toEqual(expect.objectContaining({ jobKey: `wfwake:${TENANT}:wrun_01ABC` }));
+  });
+
+  it("keys a bypassing wake by its producer's idempotency key or its own input when it has one", async () => {
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+    const hookResumeTiming = { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 };
+
+    vi.mocked(pool.query).mockResolvedValueOnce({ rows: [{}] } as never);
+    await queue.queue(
+      "__wkf_workflow_greet",
+      { runId: "wrun_01ABC", hookResumeTiming },
+      { idempotencyKey: "hook-res_1" },
+    );
+    expect(vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2]).toEqual(
+      expect.objectContaining({ jobKey: "hook-res_1" }),
+    );
+
+    vi.mocked(pool.query).mockResolvedValueOnce({ rows: [{}] } as never);
+    const { messageId } = await queue.queue("__wkf_workflow_greet", {
+      runId: "wrun_01ABC",
+      hookInput: {
+        resumeId: "res_2",
+        hookId: "hook_1",
+        token: "tok_1",
+        payload: null,
+        payloadDigest: "d",
+      },
+    });
+    expect(vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2]).toEqual(
+      expect.objectContaining({ jobKey: messageId }),
+    );
+  });
+
+  it("queues a hook wake as usual when the run queue's lock cannot be read", async () => {
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+    vi.mocked(pool.query).mockRejectedValueOnce(new Error("relation does not exist"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await queue.queue("__wkf_workflow_greet", {
+      runId: "wrun_01ABC",
+      hookResumeTiming: { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 },
+    });
+
+    expect(vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2]).toEqual(
+      expect.objectContaining({
+        queueName: runQueueName(TENANT, "wrun_01ABC"),
+        flags: [`project:${TENANT}`],
+      }),
+    );
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("queues a delayed hook wake as usual, so it cannot push back a pending one", async () => {
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+    const lookups = vi.mocked(pool.query).mock.calls.length;
+
+    await queue.queue(
+      "__wkf_workflow_greet",
+      {
+        runId: "wrun_01ABC",
+        hookResumeTiming: { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 },
+      },
+      { delaySeconds: 5 },
+    );
+
+    expect(vi.mocked(pool.query).mock.calls.length).toBe(lookups);
+    expect(vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2]).toEqual(
+      expect.objectContaining({
+        queueName: runQueueName(TENANT, "wrun_01ABC"),
+        flags: [`project:${TENANT}`],
+      }),
+    );
+  });
+
+  it("does not look up the run queue for a message that is not a hook wake", async () => {
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+    const lookups = vi.mocked(pool.query).mock.calls.length;
+
+    await queue.queue("__wkf_workflow_greet", { runId: "wrun_01ABC" });
+
+    expect(vi.mocked(pool.query).mock.calls.length).toBe(lookups);
+    expect(vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2]).toEqual(
+      expect.objectContaining({ queueName: runQueueName(TENANT, "wrun_01ABC") }),
+    );
+  });
+
+  it("delivers a hook wake while a replay of its run is still running in this process", async () => {
+    let finishReplay = (): void => {};
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            finishReplay = () => resolve(Response.json({ ok: true }));
+          }),
+      )
+      .mockImplementation(async () => Response.json({ ok: true }));
+    vi.mocked(nodeHttpFetch).mockImplementation(fetchMock as any);
+    const port = await getUnusedLoopbackPort();
+    await startWorkflowHttpServer([], port);
+    process.env.PORT = String(port);
+
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+    const task = getTaskHandler(EMBEDDED_JOB_NAME);
+    const replay = buildMessageData("__wkf_workflow_greet", { runId: "wrun_01ABC" });
+    const duplicate = buildMessageData("__wkf_workflow_greet", { runId: "wrun_01ABC" });
+    const wake = buildMessageData("__wkf_workflow_greet", {
+      runId: "wrun_01ABC",
+      hookResumeTiming: { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 },
+    });
+
+    const running = task(replay, {} as any);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const waiting = task(duplicate, {} as any);
+    await expect(task(wake, {} as any)).resolves.toBeUndefined();
+    // The wake got through; the duplicate replay still waits for the running one.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    finishReplay();
+    await Promise.all([running, waiting]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("enqueues a hook wake for an idle run in its run's queue", async () => {
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+    vi.mocked(pool.query).mockResolvedValueOnce({ rows: [] } as never);
+
+    await queue.queue("__wkf_workflow_greet", {
+      runId: "wrun_01ABC",
+      hookResumeTiming: { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 },
+    });
+
+    expect(vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2]).toEqual(
+      expect.objectContaining({ queueName: runQueueName(TENANT, "wrun_01ABC") }),
+    );
+  });
+
   it("addresses a cross-deployment start to the target, not to the deployment that enqueued it", async () => {
     // `start(workflow, args, { deploymentId })` -- what eve's deployment
     // handoff does -- writes `run_created` and this queue message in parallel.
@@ -594,6 +756,33 @@ describe("postgres queue http execution", () => {
       expect.anything(),
       expect.objectContaining({ queueName: runQueueName(TENANT, "wrun_01SLEEP") }),
     );
+  });
+
+  it("reschedules a hook wake into its run's queue under the tenant's delivery cap", async () => {
+    const fetchMock = vi.fn(async () => Response.json({ timeoutSeconds: 30 }));
+    vi.mocked(nodeHttpFetch).mockImplementation(fetchMock as any);
+    process.env.WORKFLOW_LOCAL_BASE_URL = "https://workflow.example.test";
+
+    const queue = buildQueue(buildConfig(), pool);
+    try {
+      await queue.start();
+      const task = getTaskHandler(EMBEDDED_JOB_NAME);
+      const wake = buildMessageData("__wkf_workflow_greet", {
+        runId: "wrun_01ABC",
+        hookResumeTiming: { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 },
+      });
+
+      await expect(task(wake, { job: { attempts: 1 } })).resolves.toBeUndefined();
+
+      expect(vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2]).toEqual(
+        expect.objectContaining({
+          queueName: runQueueName(TENANT, "wrun_01ABC"),
+          flags: [`project:${TENANT}`],
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("does not re-execute a redelivered message that already completed", async () => {

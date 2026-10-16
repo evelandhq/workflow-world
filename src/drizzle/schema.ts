@@ -232,6 +232,8 @@ export const steps = schema.table(
       .notNull(),
     retryAfter: timestamp("retry_after"),
     specVersion: integer("spec_version"),
+    /** The delivery whose `step_started` started the step; null when queue-owned. */
+    ownerMessageId: varchar("owner_message_id"),
   },
   (tb) => [
     primaryKey({ columns: [tb.tenantId, tb.stepId] }),

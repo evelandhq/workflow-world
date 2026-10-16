@@ -1,3 +1,5 @@
+import type { WorkflowInvokePayload } from "@workflow/world";
+
 /**
  * The dispatcher→agent contract, shared by both ends so they cannot drift.
  *
@@ -39,16 +41,18 @@ export const FLOW_JOB_NAME = "eveland_wf_flows";
  * timeout re-arms every 23 hours for a week — and with a few hundred sessions
  * every claim locked a few hundred rows (evelandhq/workflow-world#115).
  *
- * The dispatcher alone owns this name. It moves far-future flow jobs here (see
- * `dispatcher/timers.ts`), and when one comes due it re-adds it as a flow job on
- * the run's queue, so per-run serialization still covers the delivery itself.
- * Deployments keep enqueueing flow jobs exactly as before: their world is baked
- * at build time, and none of them would ever learn a new name.
+ * Far-future flow jobs move here (see `timers.ts`), and when one comes due it is
+ * re-added as a flow job on the run's queue, so per-run serialization still
+ * covers the delivery itself. In `external` mode only the dispatcher writes this
+ * name: deployments keep enqueueing flow jobs exactly as before, because their
+ * world is baked at build time and an older dispatcher would never claim it. An
+ * `embedded` runner uses its own per-tenant suffix of it.
  */
 export const TIMER_JOB_NAME = "eveland_wf_timers";
 
 /**
- * graphile queue name that serializes every delivery for one run.
+ * graphile queue name that serializes the deliveries for one run. A hook wake
+ * that arrives while the queue is held is the one exception; see `isHookWake`.
  *
  * graphile executes jobs sharing a `queueName` strictly one at a time, which is
  * exactly the guarantee `external` mode otherwise loses. In `embedded` mode the
@@ -77,6 +81,37 @@ export const TIMER_JOB_NAME = "eveland_wf_timers";
  */
 export function runQueueName(tenantId: string, runId: string): string {
   return `wfrun:${tenantId}:${runId}`;
+}
+
+/**
+ * Whether a message wakes its run for new hook input. Such a wake may pass a run
+ * queue that a delivery holds, so a cancel reaches a running step; the reasoning
+ * is in docs/design.md, "Delivery and failure semantics".
+ *
+ * `@workflow/core` marks a wake from `resumeHook` with `hookResumeTiming`
+ * (`hookInput` from older producers, which core still honours) and keeps both when it re-routes the
+ * wake. A step message can carry the resume's timing too, so `stepId` rules it
+ * out. A force-claim victim's wake carries neither marker.
+ */
+export function isHookWake(
+  payload: Pick<WorkflowInvokePayload, "stepId" | "hookInput" | "hookResumeTiming">,
+): boolean {
+  const { stepId, hookInput, hookResumeTiming } = payload;
+  return stepId === undefined && (hookInput !== undefined || hookResumeTiming !== undefined);
+}
+
+/**
+ * graphile job flags the dispatcher's per-tenant caps forbid (`createFairness`).
+ * The World stamps one on every flow job, so both ends must spell them the same.
+ * A hook wake that bypasses its run's queue carries the wake flag and counts
+ * against a cap of its own.
+ */
+export function tenantFlag(tenantId: string): string {
+  return `project:${tenantId}`;
+}
+
+export function wakeFlag(tenantId: string): string {
+  return `wake:${tenantId}`;
 }
 
 export const DISPATCH_VERSION_HEADER = "x-eveland-dispatch-version";

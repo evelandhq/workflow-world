@@ -125,7 +125,21 @@ that differ from a platform host:
 
 - **Raise `WORKFLOW_DISPATCHER_MAX_INFLIGHT_PER_TENANT`.** Its default is a
   fairness ceiling derived from the dispatcher's cores (2–16). With one tenant
-  it is the cap on the whole service; set it to the concurrency.
+  it is the cap on the whole service; set it to the concurrency. A hook wake
+  that has to reach a running step, such as a cancel, has a cap of its own but
+  still needs a free dispatcher slot, so keep the concurrency above the
+  deliveries you expect in flight at once.
+- **Upgrade the dispatcher before the agents** when moving to a World that sends
+  hook wakes past held run queues. An older dispatcher has no wake cap, so it
+  never holds those wakes back, and its boot recovery does not release a dead
+  worker's lock on one. The upgraded dispatcher also applies migration 0019 at
+  start, which that World needs: every `step_started` it writes sets
+  `workflow_steps.owner_message_id`. Without a dispatcher (embedded mode), run
+  `workflow-world-setup` before the agents start.
+- **Leave `WORKFLOW_OPTIMISTIC_INLINE_START` unset on the agents.** With it on,
+  a step's body starts before its claim resolves, and a hook wake running beside
+  another delivery can then run a step a second time (design.md, "Delivery and
+  failure semantics").
 - **Keep the flow route private.** `/.well-known/workflow/` receives dispatches
   carrying the runtime secret. Only the dispatcher should reach it; do not
   publish it through the ingress.
@@ -146,8 +160,9 @@ The dispatcher binds no port. Readiness is the literal line
 and by the conformance harness.
 
 The current dispatcher is deliberately single-instance. On startup it holds a
-PostgreSQL advisory lock for its whole lifetime, reclaims only the old Graphile
-worker ids found on active runs' exact `wfrun:<tenant>:<run>` queues, re-enqueues
+PostgreSQL advisory lock for its whole lifetime, reclaims the old Graphile
+worker ids found on active runs' exact `wfrun:<tenant>:<run>` queues and on jobs
+in no queue (hook wakes that bypassed one, held timers), re-enqueues
 the active runs that have no job left on their queue, and only then starts its
 worker pool and reports ready. A run whose job is still queued — a pending
 delivery, a sleep's timer (on its queue or held as an `eveland_wf_timers` job),
