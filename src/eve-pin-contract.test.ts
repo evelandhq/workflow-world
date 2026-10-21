@@ -126,13 +126,14 @@ describe("@workflow/* pins track the installed eve", () => {
     // actually matters and the one that survives the harness drifting again and
     // re-nesting its own @workflow/world in the tree. Bumping the harness is the
     // move when it stops accepting what we declare (beta.42 read only through
-    // spec 6; beta.51 reads 7, which is what this World now stamps).
-    // It is held on beta.55 even though eve (0.75.1 through 0.79.0) pins the stable 5.2 family:
-    // from beta.56 on (every stable 5.x included) the harness requires every run to be
-    // stamped at least `mintedSpecVersion()`, which is 8, and this World
-    // deliberately declares 7 (see `specVersion` in src/index.ts). The harness
-    // moves when that cap comes off; until then the real-eve e2e is what
-    // exercises the pinned core.
+    // spec 6; beta.51 read 7).
+    // It was held on beta.55 while this World capped its declaration at 7: from
+    // beta.56 on (every stable 5.x included) the harness requires every run to be
+    // stamped at least `mintedSpecVersion()`, which is 8. With force-claim
+    // implemented the World declares 8 (see `specVersion` in src/index.ts), and
+    // the harness tracks the newest stable release, 5.0.6, whose bundled core
+    // 5.2.3 / world 5.0.5 run ahead of eve's 5.2.0 / 5.0.3 -- fine for the reason
+    // above. The real-eve e2e is what exercises the pinned core.
     "@workflow/world-testing": "test-only harness; ships its own runtime bundle",
   };
 

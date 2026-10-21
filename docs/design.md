@@ -131,30 +131,36 @@ Ranked by how expensive they are to violate.
 the reference implementation with a tenant predicate added. The remaining
 optional members carry decisions worth stating.
 
-**`specVersion` is `mintedSpecVersion()`: the sealed log, `7`, unless
+**`specVersion` is `mintedSpecVersion()`: hook force-claim, `8`, unless
 `WORKFLOW_SEALED_LOG=0` opts the deployment back to slot identity, `6`.** eve
 compiles the runtime protocol check into every release. Through core beta.40
 that was literal equality; beta.41 uses an inclusive range. In beta.42 both the
 floor and ceiling are 6 and slot identity is mandatory rather than a capability.
-`@workflow/world` beta.32 (eve 0.49) minted spec 7, the "sealed log": the
-runtime's floor stays at 6 while `SPEC_VERSION_CURRENT` and the ceiling move to
-7, and the runtime stamps each new run with whatever the World declares.
-Declaring 7 gives nothing up and changes nothing in storage: spec 7's reader
-contract exists for backends that pre-assign event positions and must seal
-abandoned ones with `noop` events, and this World allocates each position
-inside the INSERT that occupies it, so it never has a hole to seal. It buys not
-being left behind, since upstream intends v5 stable to ship on 7 and a runtime
-whose floor moves to 7 rejects a World declaring 6 at startup.
+`@workflow/world` beta.32 (eve 0.49) minted spec 7, the "sealed log", and
+beta.38 (eve 0.66.3) minted 8, the hook force-claim reader contract; the
+runtime's floor stays at 6, and the runtime stamps each new run with whatever
+the World declares. Both are reader contracts. Spec 7's exists for backends
+that pre-assign event positions and must seal abandoned ones with `noop`
+events; this World allocates each position inside the INSERT that occupies it,
+so it never has a hole to seal. Spec 8's is the `hook_disposed{forceClaimedBy}`
+row another run's takeover writes into a run's log (see
+[Hook force-claim](#hook-force-claim)): a run stamped 8 reads it as "your hook
+was taken", a run below it would read it as its own `dispose()` and wait on the
+hook forever, so the stamped version is what a takeover consults before it
+writes one.
 
-Through 0.17.0 this World pinned 6 so a Release built against a v6-only eve
-(0.47.x and older) could never meet a run it cannot read. Every line in the
-supported window has read 7 since eve 0.49, and an in-flight run is pinned to
-the deployment that created it, so a 7 stamped by a new Release is never
-replayed by an older one. The env var is the fallback if a v6-only executor
-ever has to be served again. The declared value is read once per
-`createWorld()` and handed to storage, so the run-creation fallback and legacy
-event stamps agree with what the runtime was told. A conformance test verifies
-that the installed runtime and this World agree.
+Through 0.17.0 this World pinned 6, and through 0.26 it capped the declaration
+at 7: it never took a token over, and declaring 8 would have shut out every
+runtime before core beta.56 (eve 0.66.2 and older). Every line in Eveland's
+window has read 8 since, and eve 0.81 needs force-claim for its session
+handoffs, so the cap came off together with `capabilities.hookForceClaim`. An
+in-flight run is pinned to the deployment that created it, so a version stamped
+by a new Release is never replayed by an older one. The env var is the fallback
+if a v6-only executor ever has to be served again; its runs can force-claim but
+can never be claimed from. The declared value is read once per `createWorld()`
+and handed to storage, so the run-creation fallback and legacy event stamps
+agree with what the runtime was told. A conformance test verifies that the
+installed runtime and this World agree.
 The package must also declare `@workflow/world` (or `@workflow/core`) on a
 matching version line, because eve checks the manifest's major and prerelease
 tag before it ever loads the world.
@@ -170,8 +176,11 @@ rather than to their hook.
 
 Capabilities are declared rather than assumed. Hook token retention is
 announced through `capabilities.hookRetention`, because a World that stays silent
-is treated as not supporting it. Deployment affinity is announced through
-`capabilities.deploymentAffinity` (see below). And `events.create` reports `maxEvents` on every
+is treated as not supporting it. Hook force-claim is announced through
+`capabilities.hookForceClaim` (see [Hook force-claim](#hook-force-claim)), and
+eve 0.81 moves a session to a fresh run only when both of those are declared.
+Deployment affinity is announced through `capabilities.deploymentAffinity` (see
+below). And `events.create` reports `maxEvents` on every
 response that carries a run, because the runtime enforces the ceiling and a World
 that omits the field leaves a runaway workflow with no bound at all.
 
@@ -269,6 +278,64 @@ them. The event key is therefore
 `(tenant_id, run_id, id)`. Runs with no marker predate the migration and continue
 minting `wevt_` ULIDs, preserving v5 replay order without a backfill.
 
+### Hook force-claim
+
+`createHook({ experimental_force: true })` asks for a token another run holds
+and expects to get it rather than a `hook_conflict`. eve 0.81 is built on it: a
+session moves to a fresh `workflowEntry` run (after a compaction, or onto a
+newer deployment) by starting the successor, which force-claims every session
+hook from the current owner. Without the capability eve logs `session handoff
+unavailable: the Workflow world cannot force-claim hooks` and the session never
+leaves its first run, so its event log grows until `WORKFLOW_MAX_EVENTS`
+(25,000 by default) fails the run with `MAX_EVENTS_EXCEEDED`.
+
+The takeover is one transaction, ported from `@workflow/world-postgres` 5.0.5
+with the tenant predicate in every statement:
+
+1. Resolve the owner by token, lock the owner's **run** row, then the token's
+   **hook** row, in that order -- the order `hook_received` takes, so a
+   delivery racing the takeover queues behind it rather than deadlocking. If
+   the locked row names a different owner than the unlocked read did, the
+   token moved in between and the transaction restarts (at most five times,
+   then a 503 the runtime retries). Re-resolving by token is what turns two
+   concurrent claimers into a chain `v -> c1 -> c2` instead of a lost claim.
+2. Decide. A running owner stamped below 8 is not taken from: the claimer gets
+   `hook_conflict{forceRefusedReason: 'victim-spec-version'}` and nothing is
+   written. A finished owner holding a retained token (`hookRetention`) is
+   taken at any version and gets no row, since it has no reader to strand. A
+   finished owner whose retention has lapsed does not hold the token at all,
+   so the claim is an ordinary creation. Upstream treats that last case as a
+   takeover and records a `claimedFrom`; this World reads it the way every
+   by-token lookup already does.
+3. Write, in this order: the victim's `hook_disposed{token, forceClaimedBy}`
+   (only for a running victim), delete the victim's hook row, insert the
+   claimer's with `claimed_from` (migration 0020), and journal the claimer's
+   `hook_created{force, forceClaimedFrom}`. `claimedFrom` carries the victim's
+   run and hook and, for a running victim, the workflow name, deployment and
+   stamped version the claimer's runtime wakes it with; every hook read returns
+   it.
+
+Two orderings make this safe, and both rest on row locks held to commit:
+
+- **No delivery is journaled behind its hook's disposal.** `hook_received`
+  re-reads its hook `FOR UPDATE` after locking the run, and `hook_disposed`
+  (the run's own) now deletes the row and appends its event in one transaction.
+  A delivery either commits before the disposal or finds the row gone. Gone
+  because of a takeover is a redirect, not a drop: the World answers
+  `HookForceClaimedError` naming the token's current owner, read from the
+  victim's own disposal row and the token, and `resumeHook()` follows it with
+  the same payload. Gone for any other reason is `HookNotFoundError`, as before.
+  A delivery to a finished victim is refused as before (terminal run or missing
+  hook), and the runtime re-resolves the token from the claimer's `claimedFrom`.
+- **No disposal is journaled ahead of its hook's creation.** `hook_created`
+  writes its hook row and its event in one transaction (they were two
+  statements; the orphaned-row recovery stays for rows an older World left),
+  so a takeover that can see the row also sees the creation already journaled.
+
+The World cannot publish the victim's wake -- the claimer's runtime does that
+from `claimedFrom`, through the ordinary queue, with an idempotency key per
+claimer hook.
+
 ## Data model
 
 ### The tenancy column is `tenant_id`
@@ -285,7 +352,7 @@ meaning and is not read here.
 | ----------------------------- | ----------- | --------------------------------------------------------------- |
 | `workflow_runs`               | no          | the dispatcher's index: tenant, deployment, status, attributes  |
 | `workflow_steps`              | no          | promote to partitioned if it outgrows runs — same recipe        |
-| `workflow_hooks`              | no          | plus `token_retention_until` for retained tokens                |
+| `workflow_hooks`              | no          | plus `token_retention_until`, and `claimed_from` for a takeover |
 | `workflow_waits`              | no          | `resume_at` is the sleeping timer; graphile's `run_at` fires it |
 | `workflow_events`             | LIST        | append-heavy, and the only write path for run state             |
 | `workflow_stream_chunks`      | LIST        | legacy logical rows plus v2 packed physical blocks              |
@@ -582,6 +649,13 @@ per-run job key, so a burst of input during a long step leaves one pending wake
 rather than one per message. That is safe because `resumeHook` commits the input
 to the event log before it publishes such a wake; a wake that carries its input
 (`hookInput`) or a producer key keeps a key of its own.
+
+The wake a force-claim sends its victim is not a hook wake. The claimer's
+runtime publishes it from `Hook.claimedFrom` with an idempotency key of
+`hook-force-claim-<claimer hookId>` and neither `hookResumeTiming` nor
+`hookInput`, so it queues on the victim's run like any other delivery. Nothing
+is lost by waiting: the `hook_disposed{forceClaimedBy}` it announces committed
+before it was sent, and whichever replay of the victim runs next reads it.
 
 A wake running beside its owner does not weaken the exclusion a step had
 before. A replay executes inline

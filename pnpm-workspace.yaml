@@ -10,41 +10,34 @@ allowBuilds:
   fsevents: true
 
 # Already pinned and verified by the existing Eve compatibility matrix.
+#
+# pnpm applies only the FIRST entry whose name matches a package, so a package
+# needed at two versions takes one entry with a version union (`a || b`): a
+# second `@workflow/world@...` line would be silently ignored.
 minimumReleaseAgeExclude:
-  - eve@0.79.0
-  # The @workflow/* set eve 0.75.1 introduced and 0.79.0 still bundles
-  # (src/eve-pin-contract.test.ts pins this package to it), published the same
-  # day eve 0.75.1 was.
-  - "@workflow/core@5.2.0"
-  - "@workflow/world@5.0.3"
-  - "@workflow/world-local@5.1.0"
-  - "@workflow/world-vercel@5.2.0"
-  # The conformance harness and the @workflow/* set it pins. The harness is
-  # exempt from eve's pins (src/eve-pin-contract.test.ts) and was bumped to the
-  # first release whose bundled runtime reads spec 7, which this World now
-  # stamps; conformance/spec.test.mts asserts the two agree. It stays on
-  # beta.55 although the runtime pins are stable 5.0.1: later harnesses demand
-  # spec 8, and this World caps at 7 (src/index.ts).
-  - "@workflow/astro@5.0.0-beta.55"
-  - "@workflow/builders@5.0.0-beta.55"
-  - "@workflow/cli@5.0.0-beta.55"
-  - "@workflow/core@5.0.0-beta.55"
-  - "@workflow/nest@5.0.0-beta.55"
-  - "@workflow/next@5.0.0-beta.55"
-  - "@workflow/nitro@5.0.0-beta.55"
-  - "@workflow/nuxt@5.0.0-beta.55"
-  - "@workflow/rollup@5.0.0-beta.55"
-  - "@workflow/sveltekit@5.0.0-beta.55"
-  - "@workflow/swc-plugin@5.0.0-beta.7"
-  - "@workflow/vite@5.0.0-beta.55"
-  - "@workflow/web@5.0.0-beta.55"
-  - "@workflow/world-local@5.0.0-beta.46"
-  - "@workflow/world-testing@5.0.0-beta.55"
-  - "@workflow/world-vercel@5.0.0-beta.50"
-  - "@workflow/world@5.0.0-beta.37"
-  - workflow@5.0.0-beta.55
-  - "@workflow/core@5.2.0"
-  - "@workflow/errors@5.0.3"
-  - "@workflow/world-local@5.1.0"
-  - "@workflow/world-vercel@5.2.0"
-  - "@workflow/world@5.0.3"
+  - eve@0.81.1
+  # Two @workflow/* sets meet in this tree. The first of each union is the set
+  # eve 0.75.1 introduced and every release through 0.81.1 still bundles
+  # (src/eve-pin-contract.test.ts pins this package to it). The second is what
+  # the conformance harness, @workflow/world-testing 5.0.6, pins for its own
+  # runtime bundle; the harness is exempt from eve's pins and moved off beta.55
+  # once this World declared spec 8, which every harness from beta.56 on
+  # demands (conformance/spec.test.mts asserts the two agree).
+  - "@workflow/core@5.2.0 || 5.2.3"
+  - "@workflow/errors@5.0.3 || 5.0.5"
+  - "@workflow/world@5.0.3 || 5.0.5"
+  - "@workflow/world-local@5.1.0 || 5.1.2"
+  - "@workflow/world-vercel@5.2.0 || 5.2.3"
+  - "@workflow/astro@5.0.6"
+  - "@workflow/builders@5.0.6"
+  - "@workflow/cli@5.0.6"
+  - "@workflow/nest@5.1.4"
+  - "@workflow/next@5.0.6"
+  - "@workflow/nitro@5.0.6"
+  - "@workflow/nuxt@5.0.6"
+  - "@workflow/rollup@5.0.6"
+  - "@workflow/sveltekit@5.0.6"
+  - "@workflow/vite@5.0.6"
+  - "@workflow/web@5.0.6"
+  - "@workflow/world-testing@5.0.6"
+  - workflow@5.2.3

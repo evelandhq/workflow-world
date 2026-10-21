@@ -17,6 +17,15 @@ than a loud one.
 | `WORKFLOW_WORLD_RUNTIME_SECRET`    | `EVELAND_SCHEDULER_RUNTIME_SECRET`   | authenticates platform dispatch                                                                                                              |
 | `WORKFLOW_WORLD_STREAM_COMPACTION` | `EVELAND_WORKFLOW_STREAM_COMPACTION` | `on` (default); `off` is the emergency switch for write-side snapshot stripping                                                              |
 
+Upstream's own names are also read on the deployment side, with upstream's
+meaning:
+
+| variable                                      | default | meaning                                                                                                                                                                                                    |
+| --------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORKFLOW_SEALED_LOG`                         | on      | `0` declares and stamps spec 6 instead of 8. A fallback for serving a v6-only executor: such runs can still force-claim a hook token but can never be claimed from, which eve 0.81's session handoff needs |
+| `WORKFLOW_MAX_EVENTS`                         | `25000` | per-run event ceiling reported on run-lifecycle responses; the runtime fails a run that reaches it with `MAX_EVENTS_EXCEEDED`                                                                              |
+| `WORKFLOW_POSTGRES_HOOK_RETENTION_LIMIT_DAYS` | `30`    | the longest `tokenRetentionUntil` a hook may ask for                                                                                                                                                       |
+
 ## Host side (read by the dispatcher)
 
 | variable                                                 | default            | meaning                                                                                                                                                                                                             |
