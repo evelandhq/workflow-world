@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.26.1...workflow-world-v0.27.0) (2026-10-21)
+
+
+### Features
+
+* support hook force-claim and declare World spec 8 for eve 0.81 session handoff ([#120](https://github.com/evelandhq/workflow-world/issues/120)) ([4c36bfe](https://github.com/evelandhq/workflow-world/commit/4c36bfea5a773564024abe85ee5f6a11685f2939))
+
 ## [0.26.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.26.0...workflow-world-v0.26.1) (2026-10-16)
 
 
