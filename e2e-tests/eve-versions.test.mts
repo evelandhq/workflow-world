@@ -19,3 +19,14 @@ test("an unknown matrix version fails instead of silently running no tests", asy
     'EVE_VERSION "9.9.9" is not enabled',
   );
 });
+
+test("only eve 0.81.1 and later hand a session over by force-claiming its hooks", async () => {
+  const { handsOffByForceClaim } = await import("./eve-versions.mts?handoff");
+
+  expect(handsOffByForceClaim("0.79.0")).toBe(false);
+  expect(handsOffByForceClaim("0.81.0")).toBe(false);
+  expect(handsOffByForceClaim("0.81.1")).toBe(true);
+  expect(handsOffByForceClaim("0.82.0")).toBe(true);
+  expect(handsOffByForceClaim("1.0.0")).toBe(true);
+  expect(() => handsOffByForceClaim("0.81")).toThrow("unrecognized eve version");
+});

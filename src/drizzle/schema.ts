@@ -1,6 +1,7 @@
 import {
   type Event,
   type Hook,
+  type HookClaimedFrom,
   type SerializedData,
   type Step,
   StepStatusSchema,
@@ -270,6 +271,14 @@ export const hooks = schema.table(
     specVersion: integer("spec_version"),
     isWebhook: boolean("is_webhook").default(true),
     isSystem: boolean("is_system").default(false),
+    /**
+     * Set only on a hook that took its token over from another run
+     * (`createHook({ experimental_force: true })`), in the transaction that
+     * re-pointed the token: the victim's run and hook and, for a victim that was
+     * still running, the coordinates the claimer's runtime wakes it with. NULL
+     * for every ordinary hook. See the hook_created branch of storage.ts.
+     */
+    claimedFrom: Cbor<HookClaimedFrom>()("claimed_from"),
   },
   (tb) => [
     primaryKey({ columns: [tb.tenantId, tb.hookId] }),

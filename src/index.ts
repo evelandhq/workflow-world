@@ -1,9 +1,5 @@
 import type { Storage, World } from "@workflow/world";
-import {
-  mintedSpecVersion,
-  resolveQueueNamespace,
-  SPEC_VERSION_SUPPORTS_SEALED_LOG,
-} from "@workflow/world";
+import { mintedSpecVersion, resolveQueueNamespace } from "@workflow/world";
 import { Pool } from "pg";
 import {
   type EvelandWorldConfig,
@@ -176,8 +172,8 @@ export function createWorld(
   let closed = false;
   const drizzle = createClient(pool);
   const queue = createQueue(resolved, pool);
-  // Capped at the sealed log: see the note on `specVersion` below.
-  const specVersion = Math.min(mintedSpecVersion(), SPEC_VERSION_SUPPORTS_SEALED_LOG);
+  // See the note on `specVersion` below.
+  const specVersion = mintedSpecVersion();
   const storage = createStorage(drizzle, resolved.tenantId, resolved.queueNamespace, specVersion);
   const streamer = createStreamer(pool, drizzle, resolved.tenantId, {
     compactSnapshots: resolved.compactStreamSnapshots,
@@ -185,44 +181,42 @@ export function createWorld(
 
   return {
     /**
-     * The sealed-log version (7), or slot identity (6) when
-     * `WORKFLOW_SEALED_LOG=0` opts a deployment out. The runtime stamps every
-     * run it creates with whatever is declared here (`run_created` carries
-     * `world.specVersion`) and admits any value in
+     * The hook force-claim version (8), or slot identity (6) when
+     * `WORKFLOW_SEALED_LOG=0` opts a deployment out: exactly
+     * `mintedSpecVersion()`, as upstream tells a World to declare. The runtime
+     * stamps every run it creates with whatever is declared here (`run_created`
+     * carries `world.specVersion`) and admits any value in
      * `[SPEC_VERSION_SUPPORTS_SLOT_IDENTITY, SPEC_VERSION_MAX_SUPPORTED]`.
      *
-     * Upstream tells a World to declare `mintedSpecVersion()`, and through
-     * @workflow/world beta.37 that was 7. beta.38 (eve 0.66.3) moved it to 8,
-     * the hook force-claim reader contract, and this World deliberately stays
-     * one below. Declaring 8 would shut out every runtime before core beta.56
-     * -- eve 0.66.2 and older -- since a runtime refuses a World above its
-     * ceiling at startup, and it would buy nothing: 8 is a reader contract for
-     * the `hook_disposed{forceClaimedBy}` row another run's
-     * `createHook({ experimental_force: true })` writes into a victim's log,
-     * and this World never takes a token over. A forced
-     * creation meets the same claim check as any other and is answered with an
-     * ordinary `hook_conflict`, so no run it stamps is ever stranded by one.
-     * Every line in Eveland's current window ({0.76.x, 0.79.x}: core 5.2.0)
-     * reads 8, so the cap is no longer forced by the window; it
-     * comes off when the runtime's floor reaches 8, exactly as 6 gave way to 7,
-     * or earlier by deliberate choice -- and the conformance harness moves with
-     * it: world-testing from beta.56 on (5.0.1 included) asserts every run is
-     * stamped at least what its own runtime mints (8), so it stays on beta.55
-     * until then (docs/maintainers/eve-compatibility.md).
+     * 8 is a READER contract, and this World now keeps both halves of it. A
+     * run stamped 8 understands the `hook_disposed{forceClaimedBy}` row another
+     * run's `createHook({ experimental_force: true })` writes into its log, and
+     * the version is what the takeover reads to decide whether it may write
+     * one: a token is only taken from a running victim stamped at or above
+     * `SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM` (storage.ts, hook_created).
+     * Declaring 8 is therefore what makes runs eligible to BE claimed from;
+     * claiming itself is gated by `capabilities.hookForceClaim` below.
      *
-     * Declaring 7 changes nothing in storage. Its only reader obligation is the
-     * `noop` filler a backend emits when it pre-assigns event positions and a
-     * writer dies before committing; this World allocates each position inside
-     * the INSERT that occupies it (`insertEventRow`), so there is never a hole
-     * to seal and it never writes one. It is spec-7 compliant by construction.
+     * Through 0.26 this World capped the declaration at 7, because it never
+     * took a token over and 8 would have shut out runtimes before core
+     * beta.56 (eve 0.66.2 and older), which refuse a World above their
+     * ceiling at startup. Every line in Eveland's window has read 8 since
+     * (eve 0.76.0, 0.79.0 and 0.81.1 all admit 6..8, and none before 0.81
+     * ever passes `experimental_force`), and eve 0.81 needs the takeover for
+     * its session handoffs, so the cap came off.
      *
-     * Through 0.17.0 this World pinned 6 so a Release built against a v6-only
-     * eve (0.47.x and older) could never meet a run it cannot read. Every line
-     * in the supported window has read 7 since eve 0.49, and an in-flight run
-     * is pinned to the deployment that created it, so a 7 stamped by a new
-     * Release is never replayed by an older one. If a v6-only executor ever has
-     * to be served again, `WORKFLOW_SEALED_LOG=0` puts that deployment back on
-     * 6 without a release.
+     * 7 is implied: its only reader obligation is the `noop` filler a backend
+     * emits when it pre-assigns event positions and a writer dies before
+     * committing. This World allocates each position inside the INSERT that
+     * occupies it (`insertEventRow`), so there is never a hole to seal and it
+     * never writes one.
+     *
+     * `WORKFLOW_SEALED_LOG=0` puts a deployment back on 6 without a release,
+     * if a v6-only executor ever has to be served again. Versions are linear,
+     * so its runs can still force-claim but can never be claimed from: a
+     * takeover answers them with `hook_conflict{forceRefusedReason}`. An
+     * in-flight run is pinned to the deployment that created it, so a version
+     * stamped by a newer Release is never replayed by an older one.
      *
      * Read once per `createWorld()`, and the same value is handed to storage so
      * its run-creation fallback and legacy event stamps agree with what the
@@ -237,6 +231,23 @@ export function createWorld(
        * previous state — and worse than that, the field was accepted and dropped.
        */
       hookRetention: { active: true },
+      /**
+       * `createHook({ experimental_force: true })` takes a token over from the
+       * run that holds it instead of answering `hook_conflict`
+       * (storage.ts, hook_created): the victim's `hook_disposed{forceClaimedBy}`,
+       * the re-pointed token with `Hook.claimedFrom`, and the claimer's
+       * `hook_created{forceClaimedFrom}` commit in one transaction, and a
+       * delivery that resolved the victim is refused with
+       * `HookForceClaimedError` so `resumeHook()` follows the token.
+       *
+       * eve 0.81 moves a session to a fresh workflow run (compaction and
+       * deployment handoffs) only when the World declares this AND
+       * `hookRetention.active`; without it a session never leaves its first
+       * run, and its event log grows until `WORKFLOW_MAX_EVENTS` fails the run.
+       * Without the flag the runtime rejects `experimental_force` at
+       * `createHook()` time. See docs/design.md.
+       */
+      hookForceClaim: true,
       /**
        * An Eveland Deployment is one immutable build under a real id, and the
        * dispatcher delivers every run to the deployment on its row. Since 0.76.1

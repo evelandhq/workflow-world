@@ -4,14 +4,28 @@ An eve release is almost never a reason to do anything here. What matters is not
 that eve shipped, but whether the `@workflow/*` set it installs moved. The pins
 here follow eve 0.75.1: world 5.0.3, world-local 5.1.0, errors 5.0.3, core
 5.2.0 and utils 5.0.1, the stable Workflow 5.2 family eve 0.75.1 moved to and
-every release since, through 0.79.0, still bundles. Eveland's supported window
-is {0.76.x, 0.79.x}, verified at 0.76.0 and 0.79.0, so it carries that one set;
+every release since, through 0.81.1, still bundles. Eveland's supported window
+is {0.79.x, 0.81.x}, verified at 0.79.0 and 0.81.1, so it carries that one set;
 the e2e matrix runs both lines because eve's own reading of the World differs
-between them (0.76.1 added the stranded-session guard that
-`capabilities.deploymentAffinity` turns off; see `docs/design.md`). `e2e-tests/eve-versions.mts` is the table of record.
+between them. `e2e-tests/eve-versions.mts` is the table of record.
 Exact patches still matter: Workflow pins have moved within an eve minor line
 before (0.66.3, 0.67.2, 0.70.2 and 0.75.1 are the latest examples), so a minor
 is not a set.
+
+eve 0.81.1 is the release where an eve change, not a Workflow one, made work
+here: it moves a session to a fresh workflow run (after a compaction, or onto a
+newer deployment) only when the World declares both
+`capabilities.hookForceClaim` and `capabilities.hookRetention.active`, because
+the successor takes the session's hook tokens over with
+`createHook({ experimental_force: true })`. A World without the capability
+gets `session handoff unavailable: the Workflow world cannot force-claim hooks`
+and a session that never leaves its first run, whose event log then grows
+until `WORKFLOW_MAX_EVENTS` (25,000) fails it with `MAX_EVENTS_EXCEEDED`. eve
+0.79.0 still hands a session over with its older release-then-claim protocol
+and never passes `experimental_force`; 0.76.0 and 0.79.0 accept World spec 6
+through 8, like 0.81.1. The force-claim takeover is described in
+`docs/design.md` (Hook force-claim), and `e2e-tests/session-handoff.test.mts`
+proves the handoff on the real eve.
 
 The one contract change in that stretch is on the read side. `@workflow/world`
 widened event-log reads to `EventsResolveData`, which adds `'skip-step-inputs'`:
@@ -26,19 +40,24 @@ members a World may ignore: a stream writer's `release()`, an advisory
 `afterStepBody` mark on step writes, and a hook's `nodeVersion`.
 
 World beta.38 also moved `SPEC_VERSION_CURRENT` to 8, the hook force-claim
-reader contract, and 5.0.1 keeps it there. This World keeps declaring and
-stamping 7: a runtime refuses a World above its ceiling, so 8 would shut out
-eve 0.66.2 and older, for a contract this World never exercises (it never takes
-a hook token over). Every line in Eveland's current window reads 8, so the cap
-is no longer forced by the window, but lifting it is a separate change. The note
-on `specVersion` in `src/index.ts` says why 7 holds by construction and when
-the cap comes off; the runtime's accepted range starts at slot identity (6) and
-ends at 8, so 7 is inside it on every line in the matrix. The conformance
-harness is the one thing that minds: `@workflow/world-testing` from beta.56 on,
-5.0.1 included, asserts every run is stamped at least what its own runtime
-mints (8), so the harness stays on beta.55 -- which reads 7 -- until the cap
-comes off, even though the runtime pins are now stable. The e2e matrix, which
-runs real eve builds, is what covers the pinned core.
+reader contract, and 5.0.1 keeps it there. This World declares and stamps 8
+since it implements the takeover; through 0.26 it capped the declaration at 7,
+because 8 would have shut out eve 0.66.2 and older, for a contract it never
+exercised. The note on `specVersion` in `src/index.ts` says what each version
+obliges a World to; the runtime's accepted range starts at slot identity (6)
+and ends at 8 on every line in the matrix.
+
+The conformance harness moved with it. `@workflow/world-testing` from beta.56
+on asserts every run is stamped at least what its own runtime mints (8), so
+while this World declared 7 the harness was held on beta.55. It now tracks the
+newest stable harness, 5.0.6, which ships its own runtime bundle on core 5.2.3
+/ world 5.0.5 -- deliberately not eve's set, see the exemption in
+`src/eve-pin-contract.test.ts`. 5.0.6 adds two families: `resolveData` (this
+World's `'skip-step-inputs'` reading, which passes) and `inBandFence`, which is
+skipped because this World does not declare `capabilities.inBandFence`. It has
+no force-claim cases; those live in `src/storage.hook-force-claim.test.ts`
+and, end to end, in the e2e suite. The e2e matrix, which runs real eve builds,
+is still what covers the pinned core.
 
 The other axis an eve release can move is the message stream, which the World
 touches through write-side snapshot stripping. eve 0.50.0 took it to v25, where
@@ -94,8 +113,9 @@ pinned by a per-run scheme marker rather than by rewriting their event ids.
 runtime floor stays at slot identity (v6) while `SPEC_VERSION_CURRENT` moves to
 v7, the "sealed log", and the runtime stamps each new run with whatever the
 World declares. This World declares `mintedSpecVersion()` (`src/index.ts`), as
-upstream recommends: v7 by default, or v6 when `WORKFLOW_SEALED_LOG=0` opts a
-deployment out. Declaring v7 changes nothing in storage. Its reader contract is
+upstream recommends: v8, which it has returned since beta.38 (this World capped
+it at v7 until it implemented force-claim), or v6 when `WORKFLOW_SEALED_LOG=0`
+opts a deployment out. Declaring v7 changed nothing in storage. Its reader contract is
 the `noop` filler a backend emits when it pre-assigns event positions, and this
 World allocates each position inside the INSERT that occupies it, so it never
 has a hole to seal and never writes one. What the declaration buys is not being

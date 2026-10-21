@@ -4,7 +4,7 @@ import {
   slotToEventId,
   SPEC_VERSION_CURRENT,
   SPEC_VERSION_MAX_SUPPORTED,
-  SPEC_VERSION_SUPPORTS_SEALED_LOG,
+  SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM,
   SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
 } from "@workflow/world";
 import { Pool } from "pg";
@@ -171,21 +171,23 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
     expect(await beta.streams.list(alphaRunId)).toEqual([]);
   });
 
-  test("specVersion is the sealed log, one below what upstream now mints", () => {
+  test("specVersion is what upstream mints: hook force-claim, 8", () => {
     // @workflow/world beta.38 (eve 0.66.3) minted spec 8, the hook force-claim
     // reader contract, while the runtime floor stayed at slot identity (6).
-    // The World declares 7 on purpose -- 8 would be refused by every runtime
-    // before core beta.56 (eve 0.66.2 and older), though core 5.0.1 still
-    // admits 7 -- unless WORKFLOW_SEALED_LOG opts the process out;
-    // see the note on `specVersion` in src/index.ts. The run created above is
-    // stamped with it, so the suite exercises writing and reading 7.
+    // The World declares exactly `mintedSpecVersion()` -- unless
+    // WORKFLOW_SEALED_LOG opts the process out -- and pairs it with
+    // `capabilities.hookForceClaim`; see the note on `specVersion` in
+    // src/index.ts. The run created above is stamped with it, so the suite
+    // exercises writing and reading 8.
     expect(SPEC_VERSION_SUPPORTS_SLOT_IDENTITY).toBe(6);
-    expect(SPEC_VERSION_SUPPORTS_SEALED_LOG).toBe(7);
+    expect(SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM).toBe(8);
     expect(SPEC_VERSION_CURRENT).toBe(8);
     expect(process.env.WORKFLOW_SEALED_LOG).toBeUndefined();
-    expect(alpha.specVersion).toBe(SPEC_VERSION_SUPPORTS_SEALED_LOG);
-    expect(alpha.specVersion).toBeLessThan(mintedSpecVersion());
+    expect(alpha.specVersion).toBe(mintedSpecVersion());
+    expect(alpha.specVersion).toBe(SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM);
     expect(alpha.specVersion).toBeLessThanOrEqual(SPEC_VERSION_MAX_SUPPORTED);
+    expect(alpha.capabilities?.hookForceClaim).toBe(true);
+    expect(alpha.capabilities?.hookRetention?.active).toBe(true);
   });
 
   test("WORKFLOW_SEALED_LOG=0 puts a deployment back on slot identity", async () => {
@@ -208,7 +210,7 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
     } finally {
       delete process.env.WORKFLOW_SEALED_LOG;
     }
-    expect(alpha.specVersion).toBe(SPEC_VERSION_SUPPORTS_SEALED_LOG);
+    expect(alpha.specVersion).toBe(SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM);
   });
 
   test("writing for an unprovisioned tenant fails loudly", async () => {

@@ -28,18 +28,21 @@ test("the harness is really configured for external mode", () => {
  * different pin, so nothing forces the two to agree -- several versions of
  * `@workflow/world` coexist in this tree.
  *
- * This World declares `mintedSpecVersion()` capped at the sealed log (see
- * `src/index.ts`): 7, unless `WORKFLOW_SEALED_LOG=0` opts the process back to
- * slot identity, and never the 8 upstream mints since @workflow/world beta.38.
- * Assert that the declaration is exactly that, and that it sits inside the
- * range the harness's own `@workflow/world` accepts, resolved from the harness
- * rather than from us so a harness that has not learned the version we stamp
- * fails here rather than twelve tests later.
+ * This World declares exactly `mintedSpecVersion()` (see `src/index.ts`): 8,
+ * the hook force-claim version, unless `WORKFLOW_SEALED_LOG=0` opts the process
+ * back to slot identity. Assert that the declaration is exactly that, that it
+ * comes with `capabilities.hookForceClaim`, and that it sits inside the range
+ * the harness's own `@workflow/world` accepts, resolved from the harness rather
+ * than from us so a harness that has not learned the version we stamp fails
+ * here rather than twelve tests later. The harness asserts the other half
+ * itself: from world-testing beta.56 on, every run must be stamped at least
+ * what its own runtime mints.
  */
 test("this World's specVersion matches what the test runtime demands", async () => {
   const world = createWorld({ tenantId: TENANT_ID, deploymentId: DEPLOYMENT_ID });
-  const { mintedSpecVersion, SPEC_VERSION_SUPPORTS_SEALED_LOG } = await import("@workflow/world");
-  expect(world.specVersion).toBe(Math.min(mintedSpecVersion(), SPEC_VERSION_SUPPORTS_SEALED_LOG));
+  const { mintedSpecVersion } = await import("@workflow/world");
+  expect(world.specVersion).toBe(mintedSpecVersion());
+  expect(world.capabilities?.hookForceClaim).toBe(true);
 
   const harnessRequire = createRequire(require.resolve("@workflow/world-testing/package.json"));
   const harnessWorld = harnessRequire("@workflow/world") as typeof import("@workflow/world");

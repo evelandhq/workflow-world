@@ -1,0 +1,14 @@
+-- Hook force-claim (`createHook({ experimental_force: true })`, World spec 8).
+--
+-- A hook that took its token over from another run records who it took it
+-- from: the victim's run and hook id and, for a victim that was still running,
+-- its workflow name, deployment and stamped spec version. The claimer's runtime
+-- reads it back off the `hook_created` response and every later hook read
+-- (`Hook.claimedFrom`), wakes the victim from it, and `resumeHook()` uses it to
+-- follow a token that changed hands while a delivery was in flight. Written in
+-- the same transaction that re-points the token (storage.ts, hook_created).
+--
+-- CBOR like the other structured hook columns, and nullable: NULL means the
+-- hook was created normally, which is every row that exists today. Upstream's
+-- world-postgres added the same column in its 0023.
+alter table workflow.workflow_hooks add column if not exists claimed_from bytea;
