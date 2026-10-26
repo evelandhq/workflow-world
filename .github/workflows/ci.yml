@@ -130,15 +130,15 @@ jobs:
       matrix:
         # Mirrors the enabled entries in e2e-tests/eve-versions.mts. Keep them in
         # step — the file is what the suite reads; this list is only what CI
-        # pays for. Every entry writes delta-only message appends (stream v26)
-        # and shares one execution model, so the axis left is the bundled
-        # Workflow set. Eveland's window is {0.79.x, 0.81.x}, and both lines
-        # bundle the stable 5.2 family the pins here follow, so the axis this
-        # matrix still samples is eve's own handling of the World: 0.79.0, the
-        # floor, hands a session over by release-then-claim; 0.81.1, Eveland's
-        # verified release on the newest line, force-claims its hook tokens
-        # (`capabilities.hookForceClaim`, e2e-tests/session-handoff.test.mts).
-        eve: ["0.79.0", "0.81.1"]
+        # pays for. Every entry writes delta-only message appends (stream v26),
+        # shares one execution model, and force-claims a session's hook tokens
+        # on handoff (`capabilities.hookForceClaim`,
+        # e2e-tests/session-handoff.test.mts), so the axis left is the bundled
+        # Workflow set. Eveland's window is {0.81.x, 0.83.x}: 0.81.1, the floor,
+        # bundles core 5.2.0 / world 5.0.3, and 0.83.3, Eveland's verified
+        # release on the newest line, bundles core 5.2.3 / world 5.0.5, the set
+        # the pins here follow.
+        eve: ["0.81.1", "0.83.3"]
     services:
       postgres:
         image: postgres:17-alpine

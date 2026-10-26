@@ -15,7 +15,7 @@ allowBuilds:
 # needed at two versions takes one entry with a version union (`a || b`): a
 # second `@workflow/world@...` line would be silently ignored.
 minimumReleaseAgeExclude:
-  - eve@0.81.1
+  - eve@0.83.3
   # Two @workflow/* sets meet in this tree. The first of each union is the set
   # eve 0.75.1 introduced and every release through 0.81.1 still bundles
   # (src/eve-pin-contract.test.ts pins this package to it). The second is what
