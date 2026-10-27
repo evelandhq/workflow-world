@@ -2,28 +2,38 @@
 
 An eve release is almost never a reason to do anything here. What matters is not
 that eve shipped, but whether the `@workflow/*` set it installs moved. The pins
-here follow eve 0.75.1: world 5.0.3, world-local 5.1.0, errors 5.0.3, core
-5.2.0 and utils 5.0.1, the stable Workflow 5.2 family eve 0.75.1 moved to and
-every release since, through 0.81.1, still bundles. Eveland's supported window
-is {0.79.x, 0.81.x}, verified at 0.79.0 and 0.81.1, so it carries that one set;
-the e2e matrix runs both lines because eve's own reading of the World differs
-between them. `e2e-tests/eve-versions.mts` is the table of record.
+here follow eve 0.83.0: world 5.0.5, world-local 5.1.2, errors 5.0.5, core
+5.2.3 and utils 5.0.2, patch releases of the stable Workflow 5.2 family that eve
+0.83.0 moved to and 0.84.0 still bundles. eve 0.75.1 through 0.82.0 bundle the
+earlier patches (world 5.0.3, world-local 5.1.0, errors 5.0.3, core 5.2.0, utils
+5.0.1); eve compares only a World's major line, so one World serves both.
+Eveland's supported window is {0.81.x, 0.83.x}, verified at 0.81.1 and 0.83.3,
+so it straddles that move; the e2e matrix runs both lines, one per set.
+`e2e-tests/eve-versions.mts` is the table of record.
 Exact patches still matter: Workflow pins have moved within an eve minor line
 before (0.66.3, 0.67.2, 0.70.2 and 0.75.1 are the latest examples), so a minor
 is not a set.
 
-eve 0.81.1 is the release where an eve change, not a Workflow one, made work
-here: it moves a session to a fresh workflow run (after a compaction, or onto a
+World 5.0.5 adds only optional members: `regionForRunId`, an `inBandFence`
+capability with in-band event writes, queue route and handler registration,
+delivery-count and creation-time message metadata, and an `eventCursor` on
+event writes; `events.list` may also return a `snapshot` beside its page. This
+World declares none of them. Core 5.2.3 calls only `regionForRunId`, guarded,
+and without an `eventCursor` its concurrent hook registration reloads history
+in full instead of skipping ahead (`missing_event_cursor`): slower, not wrong.
+
+eve 0.81.1 is the release where an eve change, not a Workflow one, last made
+work here, and 0.83.3 keeps it unchanged: it moves a session to a fresh workflow run (after a compaction, or onto a
 newer deployment) only when the World declares both
 `capabilities.hookForceClaim` and `capabilities.hookRetention.active`, because
 the successor takes the session's hook tokens over with
 `createHook({ experimental_force: true })`. A World without the capability
 gets `session handoff unavailable: the Workflow world cannot force-claim hooks`
 and a session that never leaves its first run, whose event log then grows
-until `WORKFLOW_MAX_EVENTS` (25,000) fails it with `MAX_EVENTS_EXCEEDED`. eve
-0.79.0 still hands a session over with its older release-then-claim protocol
-and never passes `experimental_force`; 0.76.0 and 0.79.0 accept World spec 6
-through 8, like 0.81.1. The force-claim takeover is described in
+until `WORKFLOW_MAX_EVENTS` (25,000) fails it with `MAX_EVENTS_EXCEEDED`.
+Releases before 0.81.1 hand a session over with an older release-then-claim
+protocol and never pass `experimental_force`; every line from 0.76.0 through
+0.84.0 accepts World spec 6 through 8. The force-claim takeover is described in
 `docs/design.md` (Hook force-claim), and `e2e-tests/session-handoff.test.mts`
 proves the handoff on the real eve.
 
