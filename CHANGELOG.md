@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.27.0...workflow-world-v0.28.0) (2026-10-27)
+
+
+### Features
+
+* follow eve 0.83's [@workflow](https://github.com/workflow) 5.2 patch set ([#123](https://github.com/evelandhq/workflow-world/issues/123)) ([2d72055](https://github.com/evelandhq/workflow-world/commit/2d720555f21719ec2687fbdb305d4be5913ea877))
+
 ## [0.27.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.26.1...workflow-world-v0.27.0) (2026-10-21)
 
 
