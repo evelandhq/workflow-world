@@ -91,6 +91,14 @@ jobs:
             renew_interval: "100"
             renew_fail: "1"
             lease_ttl: "300"
+          # Every case on single-orchestrator runs, through the in-band writer
+          # fence and the spec 9 queue rules. The others run spec 8, which runs
+          # created before the switch still finish on. eve 1.0 asks for 9.
+          - name: spec-9
+            renew_interval: ""
+            renew_fail: ""
+            lease_ttl: ""
+            spec_version: "9"
     services:
       postgres:
         image: postgres:17-alpine
@@ -120,6 +128,8 @@ jobs:
           WORKFLOW_DISPATCHER_LEASE_RENEW_INTERVAL_MS: ${{ matrix.renew_interval }}
           WORKFLOW_DISPATCHER_ACTIVATION_LEASE_TTL_MS: ${{ matrix.lease_ttl }}
           STUB_RENEW_FAIL: ${{ matrix.renew_fail }}
+          # Empty reads as unset: spec 8.
+          WORKFLOW_SPEC_VERSION: ${{ matrix.spec_version }}
 
   e2e:
     name: Real eve agent (${{ matrix.eve }})
