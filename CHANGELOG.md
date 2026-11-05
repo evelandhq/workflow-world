@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.29.0...workflow-world-v0.30.0) (2026-11-05)
+
+
+### Features
+
+* serve single-orchestrator (spec 9) runs with the in-band writer fence ([#127](https://github.com/evelandhq/workflow-world/issues/127)) ([90714f0](https://github.com/evelandhq/workflow-world/commit/90714f0d54ce059728fef86992fceadfe54907dc))
+
 ## [0.29.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.28.0...workflow-world-v0.29.0) (2026-11-05)
 
 
