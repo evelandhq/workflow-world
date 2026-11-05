@@ -8,9 +8,8 @@
  * when the answer is no.
  *
  * Quiet is the point. eve ships often and almost none of it reaches this
- * package — the currently supported {0.81.x, 0.83.x} window spans two patch
- * releases of one family, and the newer one, which 0.83.0 introduced, is
- * pinned here.
+ * package — Eveland's window is the single line 1.0.x, and the Workflow set its
+ * verified release bundles is pinned here.
  * A check that fired on every eve release would be noise nobody reads; this one
  * fires roughly once per eve minor line, which is the real cadence of work here.
  *
@@ -42,6 +41,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 
 const REGISTRY_URL = "https://registry.npmjs.org/eve";
 
@@ -75,15 +75,84 @@ function workflowPinsFrom(manifest) {
   return merged;
 }
 
-/** Stable releases only. A prerelease is not something the platform can verify. */
-function isStable(version) {
-  return /^\d+\.\d+\.\d+$/.test(version);
+/**
+ * An exact release: stable, or a numbered release candidate. Eveland verifies
+ * eve 1.0 release candidates, so an rc is a version the platform can pin; other
+ * prereleases (betas, canaries) are not.
+ */
+const EXACT_VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$/;
+
+function isExact(version) {
+  return EXACT_VERSION.test(version);
 }
 
+/** Semver order for exact versions: a release candidate sorts before its release. */
 function compareVersions(a, b) {
-  const [aMajor, aMinor, aPatch] = a.split(".").map(Number);
-  const [bMajor, bMinor, bPatch] = b.split(".").map(Number);
-  return aMajor - bMajor || aMinor - bMinor || aPatch - bPatch;
+  const [, ...aParts] = EXACT_VERSION.exec(a);
+  const [, ...bParts] = EXACT_VERSION.exec(b);
+  for (let index = 0; index < 3; index += 1) {
+    const delta = Number(aParts[index]) - Number(bParts[index]);
+    if (delta !== 0) return delta;
+  }
+  const aRc = aParts[3] === undefined ? Infinity : Number(aParts[3]);
+  const bRc = bParts[3] === undefined ? Infinity : Number(bParts[3]);
+  return aRc === bRc ? 0 : aRc < bRc ? -1 : 1;
+}
+
+/**
+ * The `@workflow/*` versions an eve 1.0 tarball bundles. eve 1.0 vendors the
+ * Workflow runtime into `dist/src/compiled/@workflow` and declares none of it
+ * in its manifest, so the registry metadata alone is blind to it: the set is in
+ * `dist/src/compiled/.vendor-stamp.json` inside the tarball. Returns an empty
+ * set for a tarball without a stamp (every release before 1.0).
+ */
+async function bundledWorkflowPins(manifest) {
+  const tarballUrl = manifest?.dist?.tarball;
+  if (!tarballUrl) fail(`eve ${manifest?.version} has no tarball URL`);
+  const response = await fetch(tarballUrl).catch((error) =>
+    fail(`tarball request failed: ${error.message}`),
+  );
+  if (!response.ok) fail(`tarball returned ${response.status} ${response.statusText}`);
+  const archive = gunzipSync(Buffer.from(await response.arrayBuffer()));
+  const stamp = readTarEntry(archive, "package/dist/src/compiled/.vendor-stamp.json");
+  if (stamp === undefined) return {};
+  let moduleVersions;
+  try {
+    moduleVersions = JSON.parse(stamp.toString("utf8")).moduleVersions;
+  } catch (error) {
+    fail(`eve ${manifest.version} has a malformed vendor stamp: ${error.message}`);
+  }
+  return Object.fromEntries(
+    Object.entries(moduleVersions ?? {}).filter(([name]) => name.startsWith("@workflow/")),
+  );
+}
+
+/** One file out of an uncompressed ustar archive, or undefined if absent. */
+function readTarEntry(archive, wanted) {
+  let offset = 0;
+  while (offset + 512 <= archive.length) {
+    const header = archive.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) return undefined;
+    const field = (start, length) => {
+      const raw = header.subarray(start, start + length);
+      const end = raw.indexOf(0);
+      return raw.subarray(0, end === -1 ? raw.length : end).toString("utf8");
+    };
+    const prefix = field(345, 155);
+    const name = prefix ? `${prefix}/${field(0, 100)}` : field(0, 100);
+    const size = Number.parseInt(field(124, 12).trim() || "0", 8);
+    const body = offset + 512;
+    if (name === wanted) return archive.subarray(body, body + size);
+    offset = body + Math.ceil(size / 512) * 512;
+  }
+  return undefined;
+}
+
+/** The `@workflow/*` set one eve release installs or bundles. */
+async function eveWorkflowPins(manifest) {
+  const declared = workflowPinsFrom(manifest);
+  if (Object.keys(declared).length > 0) return declared;
+  return await bundledWorkflowPins(manifest);
 }
 
 /**
@@ -129,14 +198,16 @@ const ourPins = workflowPinsFrom(ourManifest);
 const ourEve = ourManifest.devDependencies?.eve;
 
 if (!ourEve) fail("this package does not declare an `eve` devDependency");
-if (!isStable(ourEve)) fail(`the pinned eve is not an exact stable version: ${ourEve}`);
+if (!isExact(ourEve)) fail(`the pinned eve is not an exact release: ${ourEve}`);
 if (Object.keys(ourPins).length === 0) fail("this package declares no @workflow/* dependencies");
 
 /**
- * The full packument, not the abbreviated one: eve declares `@workflow/*` in
- * `devDependencies`, which the `install-v1` document omits entirely. Asking for
- * the abbreviated form would silently produce an empty set for every version
- * and report a clean run forever.
+ * The full packument, not the abbreviated one: eve before 1.0 declares
+ * `@workflow/*` in `devDependencies`, which the `install-v1` document omits
+ * entirely, and the full document is also where each version's tarball URL is
+ * read from for eve 1.0's vendor stamp. Asking for the abbreviated form would
+ * silently produce an empty set for every version and report a clean run
+ * forever.
  */
 const response = await fetch(REGISTRY_URL, { headers: { accept: "application/json" } }).catch(
   (error) => fail(`registry request failed: ${error.message}`),
@@ -156,13 +227,13 @@ if (allVersions.length === 0) fail("packument carried no versions");
  */
 const baseManifest = packument.versions[ourEve];
 if (!baseManifest) fail(`the pinned eve ${ourEve} is not on the registry`);
-const basePins = workflowPinsFrom(baseManifest);
+const basePins = await eveWorkflowPins(baseManifest);
 if (Object.keys(basePins).length === 0) {
-  fail(`eve ${ourEve} declares no @workflow/* packages; the comparison would be vacuous`);
+  fail(`eve ${ourEve} names no @workflow/* packages; the comparison would be vacuous`);
 }
 
 const newer = allVersions
-  .filter(isStable)
+  .filter(isExact)
   .filter((version) => compareVersions(version, ourEve) > 0)
   .sort(compareVersions);
 
@@ -182,7 +253,7 @@ for (const version of newer) {
   const { moved, dropped } = diffAgainstBase(
     ourPins,
     basePins,
-    workflowPinsFrom(packument.versions[version]),
+    await eveWorkflowPins(packument.versions[version]),
   );
   if (moved.length > 0 || dropped.length > 0) {
     firstMoved = { version, moved, dropped };

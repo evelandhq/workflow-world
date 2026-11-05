@@ -107,31 +107,35 @@ describe.skipIf(!baseUrl)("cancelling a running tool through a real eve agent", 
       });
 
       test("the tool sees the abort and never sends", async () => {
-        const { EveAgentStore, defaultMessageReducer } = (await import(
+        const { SessionStore } = (await import(
           pathToFileURL(createRequire(path.join(dir, "package.json")).resolve("eve/client")).href
         )) as typeof import("eve/client");
-        const store = new EveAgentStore({
-          host: `http://127.0.0.1:${String(port)}`,
-          reducer: defaultMessageReducer(),
-        });
+        const store = new SessionStore({ baseUrl: `http://127.0.0.1:${String(port)}` });
+        const stopObserving = store.observe();
         const marks = () =>
           [...agent!.log().matchAll(/\[e2e-cancel\] (\w+)/g)].map((match) => match[1]);
 
-        await store.prewarm();
-        const turn = store.send({ message: "Send the newsletter." });
-        await waitFor(() => marks().includes("started"), 60_000, "the tool to start").catch(
-          (error: Error) => {
-            const events = store.snapshot.events.map((event) => event.type).join(", ");
-            throw new Error(
-              `${error.message}. Session events: ${events}. Agent output:\n${agent!.log().slice(-4000)}`,
-            );
-          },
-        );
+        try {
+          await store.prewarm();
+          const turn = await store.send({ message: "Send the newsletter." });
+          await waitFor(() => marks().includes("started"), 60_000, "the tool to start").catch(
+            (error: Error) => {
+              const events = store.snapshot.events.map((event) => event.type).join(", ");
+              throw new Error(
+                `${error.message}. Session events: ${events}. Agent output:\n${agent!.log().slice(-4000)}`,
+              );
+            },
+          );
 
-        await new Promise((resolve) => setTimeout(resolve, 1_500));
-        expect((await store.cancel()).status).toBe("accepted");
-        await waitFor(() => marks().includes("aborted"), 5_000, "the abort to reach the tool");
-        await turn;
+          await new Promise((resolve) => setTimeout(resolve, 1_500));
+          // Resolves once the session accepts the cancel.
+          const cancel = await store.cancel();
+          expect(cancel.deliveryId).toEqual(expect.any(String));
+          await waitFor(() => marks().includes("aborted"), 5_000, "the abort to reach the tool");
+          await turn.result();
+        } finally {
+          stopObserving();
+        }
 
         // Past the point the tool would have sent, had it run on.
         await new Promise((resolve) => setTimeout(resolve, 8_000));

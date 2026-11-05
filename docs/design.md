@@ -152,7 +152,7 @@ writes one.
 Through 0.17.0 this World pinned 6, and through 0.26 it capped the declaration
 at 7: it never took a token over, and declaring 8 would have shut out every
 runtime before core beta.56 (eve 0.66.2 and older). Every line in Eveland's
-window has read 8 since, and eve 0.81 needs force-claim for its session
+window has read 8 since, and eve needs force-claim for its session
 handoffs, so the cap came off together with `capabilities.hookForceClaim`. An
 in-flight run is pinned to the deployment that created it, so a version stamped
 by a new Release is never replayed by an older one. The env var is the fallback
@@ -178,7 +178,7 @@ Capabilities are declared rather than assumed. Hook token retention is
 announced through `capabilities.hookRetention`, because a World that stays silent
 is treated as not supporting it. Hook force-claim is announced through
 `capabilities.hookForceClaim` (see [Hook force-claim](#hook-force-claim)), and
-eve 0.81 moves a session to a fresh run only when both of those are declared.
+eve moves a session to a fresh run only when both of those are declared.
 Deployment affinity is announced through `capabilities.deploymentAffinity` (see
 below). And `events.create` reports `maxEvents` on every
 response that carries a run, because the runtime enforces the ceiling and a World
@@ -281,7 +281,7 @@ minting `wevt_` ULIDs, preserving v5 replay order without a backfill.
 ### Hook force-claim
 
 `createHook({ experimental_force: true })` asks for a token another run holds
-and expects to get it rather than a `hook_conflict`. eve 0.81 is built on it: a
+and expects to get it rather than a `hook_conflict`. eve is built on it: a
 session moves to a fresh `workflowEntry` run (after a compaction, or onto a
 newer deployment) by starting the successor, which force-claims every session
 hook from the current owner. Without the capability eve logs `session handoff
@@ -664,7 +664,8 @@ only a step it claims itself, and the storage claim on a new step's
 
 That holds only while neither replay starts a step optimistically, that is,
 runs a new step's body before its claim resolves, which two racing replays can
-both do. `@workflow/core` 5.2 reaches optimistic start two ways, and both stay
+both do. `@workflow/core` reaches optimistic start two ways on the spec 8 runs
+this World creates (5.4 moved that runtime to `runtime/spec8`), and both stay
 away from a run that can receive a hook wake: a deployment opts in with
 `WORKFLOW_OPTIMISTIC_INLINE_START=1`, which must not be set where this World
 runs; and turbo forces it on a run's first delivery, but only until the run has

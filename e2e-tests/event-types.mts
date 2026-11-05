@@ -13,24 +13,14 @@ export const REQUIRED_TURN_EVENT_TYPES = [
 export type TurnEventType = (typeof REQUIRED_TURN_EVENT_TYPES)[number];
 
 /**
- * The event types one first turn has to leave behind, by eve line.
- *
- * Through 0.66 the fixture's `task` sessions end as soon as their turn settles,
- * completing the session run and disposing its address hook on the way out.
- * eve 0.67.0 removed the `conversation` / `task` run mode: every session parks
- * after each turn and only its timeout ends it, so nothing in this suite's
- * window completes a run or disposes a hook. Those two are asserted by the
+ * The event types one first turn has to leave behind. Every session parks
+ * after each turn and only its timeout ends it, so a first turn neither
+ * completes a run nor disposes a hook. Those two are asserted by the
  * conformance suite against `@workflow/world-testing` instead.
  */
-export function requiredTurnEventTypes(eveVersion: string): readonly TurnEventType[] {
-  const minor = Number(/^0\.(\d+)\./.exec(eveVersion)?.[1]);
-  if (!Number.isInteger(minor)) throw new Error(`unrecognized eve version ${eveVersion}`);
-  return minor >= 67
-    ? REQUIRED_TURN_EVENT_TYPES.filter(
-        (type) => type !== "run_completed" && type !== "hook_disposed",
-      )
-    : REQUIRED_TURN_EVENT_TYPES;
-}
+export const FIRST_TURN_EVENT_TYPES: readonly TurnEventType[] = REQUIRED_TURN_EVENT_TYPES.filter(
+  (type) => type !== "run_completed" && type !== "hook_disposed",
+);
 
 type EventCount = { type: string; count: string };
 type EventCountQuery = () => Promise<readonly EventCount[]>;

@@ -194,13 +194,10 @@ describe.skipIf(!baseUrl)("a long step started by a bypassing wake", () => {
       });
 
       test("the other replica does not start the step again while it runs", async () => {
-        const { EveAgentStore, defaultMessageReducer } = (await import(
+        const { SessionStore } = (await import(
           pathToFileURL(createRequire(path.join(dir, "package.json")).resolve("eve/client")).href
         )) as typeof import("eve/client");
-        const store = new EveAgentStore({
-          host: `http://127.0.0.1:${String(portA)}`,
-          reducer: defaultMessageReducer(),
-        });
+        const store = new SessionStore({ baseUrl: `http://127.0.0.1:${String(portA)}` });
         const starts = () =>
           [replicaA!.log(), replicaB!.log()].map(
             (log) => [...log.matchAll(/\[e2e-cancel\] started/g)].length,

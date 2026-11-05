@@ -47,7 +47,7 @@ assertion about _this_ package.
 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
 
 # Run one enabled version, as each CI matrix job does.
-EVE_VERSION=0.81.1 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
+EVE_VERSION=1.0.0-rc.5 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
 ```
 
 The URL is used both to create the per-version database and, rewritten, to connect
@@ -58,16 +58,15 @@ release. An unknown or disabled value fails instead of silently running nothing.
 Each enabled eve version costs an `npm install` plus a full `eve build`, so
 `eve-versions.mts` enables them deliberately rather than all at once. Eveland's
 supported window comes from its `packages/core/src/eve-compatibility.ts`; it is
-currently {0.79.x, 0.81.x}, and this package pins the `@workflow/*` set both
-lines bundle, the stable 5.2 family (world 5.0.3, world-local 5.1.0, core
-5.2.0) eve 0.75.1 moved to. A minor does not reliably identify a `@workflow/*`
-set, so the entries name exact patches. With one set in the window, the two
-enabled entries (0.79.0 and 0.81.1) sample eve's two session handoffs
-instead: 0.81.1 moves a session to a fresh run by force-claiming its hook tokens
-(`capabilities.hookForceClaim`), which `session-handoff.test.mts` drives through
-two compactions, and 0.79.0 releases and re-claims them; `eve-versions.mts`
-records why each one earns its install. This is especially
-worth proving for `@workflow/world-local`, because this package wraps its
-`createQueueHandler`.
+currently the single line 1.0.x, and this package pins the `@workflow/*` set
+1.0.0-rc.5 bundles, the Workflow 5.4 runtime (core 5.4.0, world 5.1.0,
+world-local 5.2.1). A minor does not reliably identify a `@workflow/*` set, so
+the entries name exact patches; `eve-versions.mts` records why each one earns
+its install. eve moves a session to a fresh run by force-claiming its hook
+tokens (`capabilities.hookForceClaim`), which `session-handoff.test.mts` drives
+through two compactions. The suites drive the agent through `eve/client`, the
+same client a frontend uses, rather than the session wire protocol. This is
+especially worth proving for `@workflow/world-local`, because this package wraps
+its `createQueueHandler`.
 
 `.work/` holds the per-version scratch builds and is gitignored.
