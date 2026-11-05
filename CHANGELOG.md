@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.28.0...workflow-world-v0.29.0) (2026-11-05)
+
+
+### Features
+
+* follow eve 1.0.0-rc.5's Workflow 5.4 runtime ([#125](https://github.com/evelandhq/workflow-world/issues/125)) ([81443a6](https://github.com/evelandhq/workflow-world/commit/81443a6957ba56d12d26aba492038083f06938d0))
+
 ## [0.28.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.27.0...workflow-world-v0.28.0) (2026-10-27)
 
 
