@@ -183,6 +183,7 @@ describe("dispatch outcomes", () => {
     expect(seen["x-vqs-queue-name"]).toBe("__wkf_workflow_greet");
     expect(seen["x-vqs-message-id"]).toBe("msg_1");
     expect(seen["x-vqs-message-attempt"]).toBe("1");
+    expect(seen["x-vqs-message-delivery-count"]).toBe("1");
     expect(seen[DISPATCH_VERSION_HEADER]).toBe("1");
     expect(seen[RUNTIME_SECRET_HEADER]).toBe("s3cret");
     // The internal service token must never reach a tenant process: it
@@ -212,6 +213,49 @@ describe("dispatch outcomes", () => {
       expect.objectContaining({
         delaySeconds: 30,
         message: expect.objectContaining({ messageId: "msg_1", attempt: 2 }),
+      }),
+    );
+  });
+
+  test("a spec 9 handoff re-enqueues the message with its attempt and every delivery so far", async () => {
+    let seen: Record<string, string> = {};
+    const port = await startFakeAgent(({ headers }) => {
+      seen = headers as Record<string, string>;
+      return { status: 200, body: JSON.stringify({ timeoutSeconds: 0 }) };
+    });
+    const reenqueue = vi.fn(async () => {});
+    const d = deps({
+      activation: activationClient(
+        { type: "activated", activation: { leaseId: "l", endpointPort: port } },
+        port,
+      ),
+      reenqueue,
+    });
+    const spec9 = message({
+      data: Buffer.from(JSON.stringify({ runId: "wrun_1", runSpecVersion: 9 })),
+    });
+
+    await dispatchMessage(
+      {
+        message: spec9,
+        jobName: "eveland_wf_flows",
+        queueName: fullQueueName(spec9),
+        attempt: 2,
+        deliveryCount: 5,
+      },
+      d,
+    );
+
+    expect(seen["x-vqs-message-delivery-count"]).toBe("5");
+    expect(reenqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delaySeconds: 0,
+        message: expect.objectContaining({
+          messageId: "msg_1",
+          attempt: 2,
+          attemptOffset: 1,
+          deliveryOffset: 5,
+        }),
       }),
     );
   });

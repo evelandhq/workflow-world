@@ -131,8 +131,11 @@ Ranked by how expensive they are to violate.
 the reference implementation with a tenant predicate added. The remaining
 optional members carry decisions worth stating.
 
-**`specVersion` is `mintedSpecVersion()`: hook force-claim, `8`, unless
-`WORKFLOW_SEALED_LOG=0` opts the deployment back to slot identity, `6`.** eve
+**`specVersion` is `mintedSpecVersion(env, { inBandFence: true })`: single
+orchestrator, `9`, when `WORKFLOW_SPEC_VERSION=9` asks for it (eve 1.0's
+default; see [In-band writer fence](#in-band-writer-fence)), else hook
+force-claim, `8`, unless `WORKFLOW_SEALED_LOG=0` opts the deployment back to
+slot identity, `6`.** eve
 compiles the runtime protocol check into every release. Through core beta.40
 that was literal equality; beta.41 uses an inclusive range. In beta.42 both the
 floor and ceiling are 6 and slot identity is mandatory rather than a capability.
@@ -335,6 +338,46 @@ Two orderings make this safe, and both rest on row locks held to commit:
 The World cannot publish the victim's wake -- the claimer's runtime does that
 from `claimedFrom`, through the ordinary queue, with an idempotency key per
 claimer hook.
+
+### In-band writer fence
+
+A spec 9 run is driven by one orchestrator invocation at a time, and declares
+`capabilities.inBandFence`. `workflow_event_slots.seq_in_band` (migration 0021)
+counts the positions accepted from the run's in-band writes -- everything its
+orchestrator writes -- with `run_created` as the first. An in-band create
+carries the count its writer expects (`expectedSeqInBand`), and storage runs it
+in one transaction that first locks the run's slots row and compares: a stale
+writer is refused with `InBandSupersededError` (412) before it touches any row,
+and of concurrent writers holding the same count only the first through the
+lock writes anything. The write's first slot-allocating insert advances the
+count inside the same transaction, so a reader never sees the count include an
+event it cannot list, and a write that appends nothing (a duplicate answered
+with the existing event) leaves it alone. Out-of-band writes (a background
+step, `resumeHook()`, `cancel()`) never take the lock and never move the count.
+`events.list` reads `{ seq, seqInBand }` in one statement before the page, which
+is where an orchestrator takes its count from.
+
+Two smaller spec 9 rules ride with it. An inline step's creation is its first
+`step_started`, which keeps its input, and no synthetic `step_created` is
+written for it: that would take a second position the orchestrator never
+counted. And an in-band write is stored at the `occurredAt` it was sent with,
+because the runtime hands an inline step's outcome to the workflow before the
+write commits and reads the stored time back on replay.
+
+Delivery accounting follows the runtime's queue contract
+(`deliveryAccounting`, `continuationOf`). Every delivery reports
+`x-vqs-message-delivery-count`, counted across retries, reschedules and
+handoffs, because a spec 9 orchestrator re-sends a background step's message
+from any delivery counted above 1. `x-vqs-message-attempt` starts over on a
+`{ timeoutSeconds: n }` reschedule, as it always has, and carries over a spec 9
+handoff (`{ timeoutSeconds: 0 }`). A spec 9 run's keyed message is enqueued
+with graphile's `unsafe_dedupe`, so a re-send while the step's message lives is
+a no-op rather than a second owner of its body.
+
+Upstream's `@workflow/world-postgres` 5.1 implements the same contract with a
+CTE on the event insert; holding the slots row lock through the insert makes a
+plain conditional update enough here. `src/storage.in-band-fence.test.ts` runs
+upstream's own conformance module against it.
 
 ## Data model
 
@@ -630,7 +673,18 @@ jobs sharing a queue name strictly one at a time. Without it, two claimed jobs
 replay one run's event log concurrently. All three enqueue paths — the World's
 own send, the dispatcher's reschedule, and boot recovery — must derive the name
 identically or the serialization is silently partial, so it has exactly one
-definition.
+definition (`runQueueFor` in `src/dispatch-contract.ts`).
+
+**On a spec 9 (single-orchestrator) run only the orchestrator's deliveries wait
+in the run queue, and nothing bypasses it.** Its step messages and a long
+wait's intermediate timer hops take no queue name: a spec 9 orchestrator that
+waits on a background step stays live for a while (eve's linger), and a step
+queued behind it would wait that out before it could start. Its hook wakes never
+bypass: the running orchestrator tails the run's log, so a resume or a cancel
+reaches it without a second delivery, and a second orchestrator would run an
+inline step the first is still running again. What the queue still lets through
+(a delivery that outlives its dispatch timeout) the in-band writer fence refuses.
+Everything below about hook wakes applies to spec 8 runs.
 
 **A hook wake sent while its run's queue is held is the one exception.** It is
 new input for the run, not a duplicate, and it is the only way a cancel reaches

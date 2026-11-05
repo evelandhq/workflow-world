@@ -1,4 +1,10 @@
-import type { WorkflowInvokePayload } from "@workflow/world";
+import {
+  isSingleOrchestratorMessage,
+  messageRunSpecVersion,
+  SPEC_VERSION_SINGLE_ORCHESTRATOR,
+  singleOrchestratorRunIdOf,
+  type WorkflowInvokePayload,
+} from "@workflow/world";
 
 /**
  * The dispatcher→agent contract, shared by both ends so they cannot drift.
@@ -124,6 +130,12 @@ export const RUN_HEADER = "x-eveland-run-id";
 export const VQS_QUEUE_NAME_HEADER = "x-vqs-queue-name";
 export const VQS_MESSAGE_ID_HEADER = "x-vqs-message-id";
 export const VQS_MESSAGE_ATTEMPT_HEADER = "x-vqs-message-attempt";
+/**
+ * How many times this message has been delivered, this delivery included,
+ * across reschedules and retries. An optional addition to the contract: a
+ * runtime that does not read it falls back to the attempt.
+ */
+export const VQS_MESSAGE_DELIVERY_COUNT_HEADER = "x-vqs-message-delivery-count";
 
 /**
  * Route segment under `/.well-known/workflow/v1/`.
@@ -199,4 +211,135 @@ export function secretMatches(expected: string, received: string | null | undefi
     mismatch |= expected.charCodeAt(i) ^ received.charCodeAt(i);
   }
   return mismatch === 0;
+}
+
+/*
+ * Single-orchestrator runs (World spec 9).
+ *
+ * A spec 9 run is driven by one orchestrator invocation at a time, and the
+ * in-band fence (storage.ts) refuses the writes of a second one that overlaps
+ * it. The queue is the half that keeps overlaps rare
+ * (`capabilities.maxConcurrency`): a spec 9 run's orchestrator messages wait
+ * in its run queue, one delivery at a time, and nothing bypasses it. A hook
+ * wake has no reason to: the running orchestrator tails the run's log, so a
+ * resume or a cancel reaches it without a second delivery, and a second
+ * orchestrator would run an inline step the first is still running again.
+ *
+ * A spec 9 run's step messages and a long wait's intermediate timer hops are
+ * not orchestrator deliveries and wait in no run queue (upstream's
+ * `singleOrchestratorRunIdOf`): an orchestrator that waits on a background step
+ * stays live for a while, and a step queued behind it would wait out that
+ * linger before it could even start.
+ *
+ * Earlier runs (spec 8 and below, or an unstamped message) keep this World's
+ * own scheme: every delivery of the run waits in its run queue, and only a hook
+ * wake may pass a delivery that holds it.
+ */
+
+/** The run a queue message belongs to, as its body names it. */
+function bodyRunId(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const { runId, workflowRunId } = body as { runId?: unknown; workflowRunId?: unknown };
+  if (typeof runId === "string") return runId;
+  return typeof workflowRunId === "string" ? workflowRunId : undefined;
+}
+
+function isSingleOrchestratorRunMessage(body: unknown): boolean {
+  return (messageRunSpecVersion(body) ?? 0) >= SPEC_VERSION_SINGLE_ORCHESTRATOR;
+}
+
+/** The run queue a message waits in, or `undefined` when it waits in none. */
+export function runQueueFor(tenantId: string, body: unknown): string | undefined {
+  if (isSingleOrchestratorRunMessage(body)) {
+    const runId = singleOrchestratorRunIdOf(body);
+    return runId === undefined ? undefined : runQueueName(tenantId, runId);
+  }
+  const runId = bodyRunId(body);
+  return runId === undefined ? undefined : runQueueName(tenantId, runId);
+}
+
+/** Whether a message may pass a delivery that holds its run queue: an earlier run's hook wake. */
+export function mayBypassRunQueue(
+  payload: Pick<
+    WorkflowInvokePayload,
+    "stepId" | "hookInput" | "hookResumeTiming" | "runSpecVersion"
+  >,
+): boolean {
+  return isHookWake(payload) && !isSingleOrchestratorRunMessage(payload);
+}
+
+/**
+ * The graphile job-key mode of a send. A spec 9 run's keyed message (a step's
+ * execution message, a wait's timer hop) is sent with a key only to be
+ * deduplicated: the runtime sends it again from later deliveries, and a
+ * second job would be a second owner of the step's body. `unsafe_dedupe` makes
+ * the send a no-op while any job holds the key -- locked, delayed, or in
+ * retry backoff -- which covers `QUEUE_MIN_STEP_KEY_DEDUPE_WINDOW_MS` for as
+ * long as the step's message lives. Anything else keeps graphile's default.
+ */
+export function jobKeyModeFor(
+  body: unknown,
+  idempotencyKey: string | undefined,
+): "unsafe_dedupe" | undefined {
+  return idempotencyKey !== undefined && isSingleOrchestratorMessage(body)
+    ? "unsafe_dedupe"
+    : undefined;
+}
+
+/** What a stored message carries about the deliveries before its current job. */
+export type DeliveryOffsets = {
+  attempt: number;
+  /** Deliveries of this message before its current job. */
+  deliveryOffset?: number;
+  /** Attempts a handoff carried over into the current job. */
+  attemptOffset?: number;
+};
+
+/**
+ * One delivery's `attempt` and `deliveryCount`, from the job's own attempt
+ * count (graphile's `job.attempts`, 1 on a job's first claim).
+ *
+ * `deliveryCount` counts every delivery of the message, whatever caused it: a
+ * retry of the job, a reschedule, a handoff. A spec 9 orchestrator re-sends a
+ * background step's message from any delivery counted above 1, and a queue
+ * that reported 1 for a redelivery would break the at-most-once guarantee of
+ * a `maxRetries: 0` step. `attempt`, which the runtime's delivery cap counts,
+ * starts over on a `{ timeoutSeconds: n }` reschedule (as it always has here,
+ * so a run that sleeps by rescheduling is never failed by the cap) and carries
+ * over a spec 9 handoff.
+ */
+export function deliveryAccounting(
+  message: DeliveryOffsets,
+  jobAttempts: number | undefined,
+): { attempt: number; deliveryCount: number } {
+  if (jobAttempts === undefined) {
+    return { attempt: message.attempt, deliveryCount: message.attempt };
+  }
+  return {
+    attempt: jobAttempts + (message.attemptOffset ?? 0),
+    deliveryCount: jobAttempts + (message.deliveryOffset ?? message.attemptOffset ?? 0),
+  };
+}
+
+/**
+ * The stored message that continues one after a `{ timeoutSeconds }` answer.
+ * The same message on a fresh job: its id carries over, and so do the
+ * deliveries so far. On a spec 9 run `{ timeoutSeconds: 0 }` is a handoff,
+ * which the next delivery continues under the same attempt.
+ */
+export function continuationOf<T extends DeliveryOffsets>(
+  message: T,
+  delivery: { attempt: number; deliveryCount: number },
+  timeoutSeconds: number,
+  body: unknown,
+): T {
+  const handoff = timeoutSeconds === 0 && isSingleOrchestratorMessage(body);
+  const { attemptOffset: _previous, ...rest } = message;
+  const attemptOffset = handoff ? delivery.attempt - 1 : message.attemptOffset;
+  return {
+    ...rest,
+    attempt: handoff ? delivery.attempt : delivery.attempt + 1,
+    ...(attemptOffset ? { attemptOffset } : {}),
+    deliveryOffset: delivery.deliveryCount,
+  } as T;
 }

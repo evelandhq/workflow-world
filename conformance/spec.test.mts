@@ -28,10 +28,13 @@ test("the harness is really configured for external mode", () => {
  * different pin, so nothing forces the two to agree -- several versions of
  * `@workflow/world` coexist in this tree.
  *
- * This World declares exactly `mintedSpecVersion()` (see `src/index.ts`): 8,
- * the hook force-claim version, unless `WORKFLOW_SEALED_LOG=0` opts the process
- * back to slot identity. Assert that the declaration is exactly that, that it
- * comes with `capabilities.hookForceClaim`, and that it sits inside the range
+ * This World declares exactly `mintedSpecVersion(env, { inBandFence: true })`
+ * (see `src/index.ts`): 9 when `WORKFLOW_SPEC_VERSION=9` asks for
+ * single-orchestrator runs, else 8, the hook force-claim version, unless
+ * `WORKFLOW_SEALED_LOG=0` opts the process back to slot identity. Assert that
+ * the declaration is exactly that, that it comes with
+ * `capabilities.hookForceClaim` and `capabilities.inBandFence`, and that it
+ * sits inside the range
  * the harness's own `@workflow/world` accepts, resolved from the harness rather
  * than from us so a harness that has not learned the version we stamp fails
  * here rather than twelve tests later. The harness asserts the other half
@@ -41,8 +44,9 @@ test("the harness is really configured for external mode", () => {
 test("this World's specVersion matches what the test runtime demands", async () => {
   const world = createWorld({ tenantId: TENANT_ID, deploymentId: DEPLOYMENT_ID });
   const { mintedSpecVersion } = await import("@workflow/world");
-  expect(world.specVersion).toBe(mintedSpecVersion());
+  expect(world.specVersion).toBe(mintedSpecVersion(process.env, { inBandFence: true }));
   expect(world.capabilities?.hookForceClaim).toBe(true);
+  expect(world.capabilities?.inBandFence).toBe(true);
 
   const harnessRequire = createRequire(require.resolve("@workflow/world-testing/package.json"));
   const harnessWorld = harnessRequire("@workflow/world") as typeof import("@workflow/world");

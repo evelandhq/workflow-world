@@ -1,8 +1,8 @@
 import type { Job, TaskSpec } from "graphile-worker";
 import type { Pool } from "pg";
 import { z } from "zod/v4";
-import { FLOW_JOB_NAME, runQueueName, tenantFlag, TIMER_JOB_NAME } from "./dispatch-contract.js";
-import { MessageData, readRunId } from "./message.js";
+import { FLOW_JOB_NAME, runQueueFor, tenantFlag, TIMER_JOB_NAME } from "./dispatch-contract.js";
+import { MessageData, readBody } from "./message.js";
 import { MAX_GRAPHILE_JOB_ATTEMPTS } from "./queue-policy.js";
 
 /**
@@ -58,8 +58,20 @@ type AddJob = (identifier: string, payload: unknown, spec: TaskSpec) => Promise<
 const TimerTarget = z.object({ runQueue: z.string().min(1).optional() });
 
 /** Whether a delivery should wait as a timer rather than on its run's queue. */
-export function holdsAsTimer(runId: string | undefined, delaySeconds: number | undefined): boolean {
-  return runId !== undefined && delaySeconds !== undefined && delaySeconds >= TIMER_HORIZON_SECONDS;
+export function holdsAsTimer(
+  runQueue: string | undefined,
+  delaySeconds: number | undefined,
+): boolean {
+  return (
+    runQueue !== undefined && delaySeconds !== undefined && delaySeconds >= TIMER_HORIZON_SECONDS
+  );
+}
+
+/** The run queue a stored message waits in (`runQueueFor`), read off its body. */
+export function runQueueOfMessage(message: MessageData): string | undefined {
+  // A body that cannot be read waits in no run queue; affinity falls back to
+  // the message's deployment hint.
+  return runQueueFor(message.tenantId, readBody(message));
 }
 
 /** A timer's payload: the message exactly as enqueued, plus the queue it returns to. */
@@ -82,23 +94,23 @@ export async function addDelayedDelivery(
   },
 ): Promise<void> {
   const { message, delaySeconds } = input;
-  const runId = readRunId(message);
+  const runQueue = runQueueOfMessage(message);
   const runAt = new Date(Date.now() + delaySeconds * 1000);
-  if (runId && input.jobName === FLOW_JOB_NAME && holdsAsTimer(runId, delaySeconds)) {
-    await addJob(
-      TIMER_JOB_NAME,
-      timerPayload(MessageData.encode(message), runQueueName(message.tenantId, runId)),
-      { jobKey: input.jobKey, runAt, maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS },
-    );
+  if (runQueue && input.jobName === FLOW_JOB_NAME && holdsAsTimer(runQueue, delaySeconds)) {
+    await addJob(TIMER_JOB_NAME, timerPayload(MessageData.encode(message), runQueue), {
+      jobKey: input.jobKey,
+      runAt,
+      maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
+    });
     return;
   }
   await addJob(input.jobName, MessageData.encode(message), {
     jobKey: input.jobKey,
     runAt,
-    // Same per-run serialization the World applies on the first delivery. A
-    // reschedule that omitted it would be concurrently claimable against the
-    // run it belongs to.
-    ...(runId ? { queueName: runQueueName(message.tenantId, runId) } : {}),
+    // Same per-run serialization the World applies on the first delivery
+    // (`runQueueFor`). A reschedule that omitted it would be concurrently
+    // claimable against the run it belongs to.
+    ...(runQueue ? { queueName: runQueue } : {}),
     maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
     flags: [tenantFlag(message.tenantId)],
   });
@@ -120,10 +132,7 @@ export async function addDelayedDelivery(
 export function createTimerHandler(input: { addJob: AddJob; flowJobName: string }) {
   return async (payload: unknown, helpers: unknown): Promise<void> => {
     const message = MessageData.parse(payload);
-    const runId = readRunId(message);
-    const runQueue =
-      TimerTarget.parse(payload).runQueue ??
-      (runId ? runQueueName(message.tenantId, runId) : undefined);
+    const runQueue = TimerTarget.parse(payload).runQueue ?? runQueueOfMessage(message);
     const jobKey = readJobKey(helpers);
     await input.addJob(input.flowJobName, MessageData.encode(message), {
       ...(jobKey ? { jobKey } : {}),

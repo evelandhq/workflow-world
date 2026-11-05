@@ -22,7 +22,12 @@ import {
  * mode. Embedded-mode jobs carry a per-tenant suffix and are deliberately not
  * claimed here — they belong to that deployment's own in-process runner.
  */
-import { FLOW_JOB_NAME, TIMER_JOB_NAME, wakeFlag } from "../dispatch-contract.js";
+import {
+  deliveryAccounting,
+  FLOW_JOB_NAME,
+  TIMER_JOB_NAME,
+  wakeFlag,
+} from "../dispatch-contract.js";
 import {
   addDelayedDelivery,
   createTimerHandler,
@@ -127,7 +132,9 @@ export async function startDispatcher(input: {
 
   const makeHandler = (jobName: string) => async (payload: unknown, helpers: unknown) => {
     const message = MessageData.parse(payload);
-    const attempt = readAttempt(helpers) ?? message.attempt;
+    // See `deliveryAccounting`: the attempt the runtime's cap counts, and every
+    // delivery of the message so far, reschedules and handoffs included.
+    const { attempt, deliveryCount } = deliveryAccounting(message, readAttempt(helpers));
     const isFinalAttempt = readIsFinalAttempt(helpers);
     // `MessageData.id` is only the sub-queue id: the enqueue path ran it
     // through `parseQueueName`, which strips the `__wkf_<kind>_` prefix. eve's
@@ -151,7 +158,7 @@ export async function startDispatcher(input: {
         // concurrent delivery of the same message that we waited on. Either way
         // there is nothing left to do and nothing to report.
         const deduped = await dedup.run(message.idempotencyKey, () =>
-          dispatchMessage({ message, jobName, queueName, attempt }, deps),
+          dispatchMessage({ message, jobName, queueName, attempt, deliveryCount }, deps),
         );
         if (!deduped) return;
         outcome = deduped;

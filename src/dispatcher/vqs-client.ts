@@ -7,6 +7,7 @@ import {
   RUNTIME_SECRET_HEADER,
   TENANT_HEADER,
   VQS_MESSAGE_ATTEMPT_HEADER,
+  VQS_MESSAGE_DELIVERY_COUNT_HEADER,
   VQS_MESSAGE_ID_HEADER,
   VQS_QUEUE_NAME_HEADER,
 } from "../dispatch-contract.js";
@@ -41,6 +42,8 @@ export type VqsRequest = {
   queueName: string;
   messageId: string;
   attempt: number;
+  /** Every delivery of the message so far, this one included. */
+  deliveryCount?: number;
   body: Uint8Array;
   headers?: Record<string, string>;
   tenantId: string;
@@ -107,6 +110,7 @@ export async function postVqsMessage(request: VqsRequest): Promise<VqsResult> {
     [VQS_QUEUE_NAME_HEADER]: request.queueName,
     [VQS_MESSAGE_ID_HEADER]: request.messageId,
     [VQS_MESSAGE_ATTEMPT_HEADER]: String(request.attempt),
+    [VQS_MESSAGE_DELIVERY_COUNT_HEADER]: String(request.deliveryCount ?? request.attempt),
     // Eveland's. The runtime secret is what distinguishes platform dispatch
     // from a request that merely reached the same route.
     //

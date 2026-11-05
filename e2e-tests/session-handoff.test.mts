@@ -237,13 +237,14 @@ describe.skipIf(!baseUrl)("an eve session moves to a fresh run through hook forc
             const rows = await successors(sessionId);
             return rows.length >= 1 ? rows : undefined;
           });
-          expect(first!.spec_version).toBe(8);
+          // eve 1.0 asks for single-orchestrator runs, which this World creates.
+          expect(first!.spec_version).toBe(9);
           const firstInbox = await inboxHeldBy(sessionId, first!.id);
           expect(firstInbox.claimedFrom).toMatchObject({
             runId: sessionId,
             workflowName: "workflow//eve//workflowEntry",
             deploymentId,
-            runSpecVersion: 8,
+            runSpecVersion: 9,
           });
           const takenFromAnchor = await forcedDisposals(sessionId);
           expect(takenFromAnchor.length).toBeGreaterThan(0);

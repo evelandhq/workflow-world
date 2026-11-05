@@ -202,6 +202,11 @@ export const eventSlots = schema.table(
   {
     tenantId: varchar("tenant_id").notNull(),
     runId: varchar("run_id").notNull(),
+    /**
+     * Positions accepted from in-band (orchestrator) writes, `run_created`
+     * included; see the in-band writer fence in `storage.ts`.
+     */
+    seqInBand: integer("seq_in_band").notNull().default(1),
   },
   (tb) => [primaryKey({ columns: [tb.tenantId, tb.runId] })],
 );

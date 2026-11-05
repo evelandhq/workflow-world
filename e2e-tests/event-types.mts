@@ -17,9 +17,13 @@ export type TurnEventType = (typeof REQUIRED_TURN_EVENT_TYPES)[number];
  * after each turn and only its timeout ends it, so a first turn neither
  * completes a run nor disposes a hook. Those two are asserted by the
  * conformance suite against `@workflow/world-testing` instead.
+ *
+ * eve 1.0 runs a session on a spec 9 (single-orchestrator) run, where an
+ * inline step's creation is its first `step_started`: a turn whose steps all
+ * run inline writes no `step_created`.
  */
 export const FIRST_TURN_EVENT_TYPES: readonly TurnEventType[] = REQUIRED_TURN_EVENT_TYPES.filter(
-  (type) => type !== "run_completed" && type !== "hook_disposed",
+  (type) => type !== "run_completed" && type !== "hook_disposed" && type !== "step_created",
 );
 
 type EventCount = { type: string; count: string };
