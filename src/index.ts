@@ -200,10 +200,15 @@ export function createWorld(
      * Through 0.26 this World capped the declaration at 7, because it never
      * took a token over and 8 would have shut out runtimes before core
      * beta.56 (eve 0.66.2 and older), which refuse a World above their
-     * ceiling at startup. Every line in Eveland's window has read 8 since
-     * (eve 0.76.0, 0.79.0 and 0.81.1 all admit 6..8, and none before 0.81
-     * ever passes `experimental_force`), and eve 0.81 needs the takeover for
-     * its session handoffs, so the cap came off.
+     * ceiling at startup. eve needs the takeover for its session handoffs,
+     * so the cap came off.
+     *
+     * 9 (single orchestrator) is not declared: it needs the in-band writer
+     * fence (`capabilities.inBandFence`), which this World does not implement
+     * yet. eve 1.0 sets `WORKFLOW_SPEC_VERSION=9` by default, and
+     * `mintedSpecVersion()` called without `{ inBandFence: true }` ignores it
+     * with a warning and returns the default, 8. Any other
+     * `WORKFLOW_SPEC_VERSION` from 6 to 8 is honoured.
      *
      * 7 is implied: its only reader obligation is the `noop` filler a backend
      * emits when it pre-assigns event positions and a writer dies before
@@ -240,7 +245,7 @@ export function createWorld(
        * delivery that resolved the victim is refused with
        * `HookForceClaimedError` so `resumeHook()` follows the token.
        *
-       * eve 0.81 moves a session to a fresh workflow run (compaction and
+       * eve moves a session to a fresh workflow run (compaction and
        * deployment handoffs) only when the World declares this AND
        * `hookRetention.active`; without it a session never leaves its first
        * run, and its event log grows until `WORKFLOW_MAX_EVENTS` fails the run.

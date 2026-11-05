@@ -1,39 +1,48 @@
 # Following Eve
 
 An eve release is almost never a reason to do anything here. What matters is not
-that eve shipped, but whether the `@workflow/*` set it installs moved. The pins
-here follow eve 0.83.0: world 5.0.5, world-local 5.1.2, errors 5.0.5, core
-5.2.3 and utils 5.0.2, patch releases of the stable Workflow 5.2 family that eve
-0.83.0 moved to and 0.84.0 still bundles. eve 0.75.1 through 0.82.0 bundle the
-earlier patches (world 5.0.3, world-local 5.1.0, errors 5.0.3, core 5.2.0, utils
-5.0.1); eve compares only a World's major line, so one World serves both.
-Eveland's supported window is {0.81.x, 0.83.x}, verified at 0.81.1 and 0.83.3,
-so it straddles that move; the e2e matrix runs both lines, one per set.
-`e2e-tests/eve-versions.mts` is the table of record.
-Exact patches still matter: Workflow pins have moved within an eve minor line
-before (0.66.3, 0.67.2, 0.70.2 and 0.75.1 are the latest examples), so a minor
-is not a set.
+that eve shipped, but whether the `@workflow/*` set it bundles moved. Eveland's
+supported window is the single line 1.0.x, verified at 1.0.0-rc.5, and the pins
+here follow the set that release bundles: core 5.4.0, world 5.1.0, world-local
+5.2.1, errors 5.1.0 and utils 5.0.2. eve 1.0 no longer installs that set as
+dependencies. It bundles it under `dist/src/compiled/@workflow` and records each
+version in `dist/src/compiled/.vendor-stamp.json`, which is what
+`src/eve-pin-contract.test.ts` and `scripts/eve-pin-drift.mjs` read.
+`e2e-tests/eve-versions.mts` is the table of record. Exact patches still matter:
+Workflow pins have moved within an eve line before (1.0.0-rc.3 and rc.5 are the
+latest examples), so a line is not a set.
 
-World 5.0.5 adds only optional members: `regionForRunId`, an `inBandFence`
-capability with in-band event writes, queue route and handler registration,
-delivery-count and creation-time message metadata, and an `eventCursor` on
-event writes; `events.list` may also return a `snapshot` beside its page. This
-World declares none of them. Core 5.2.3 calls only `regionForRunId`, guarded,
-and without an `eventCursor` its concurrent hook registration reloads history
-in full instead of skipping ahead (`missing_event_cursor`): slower, not wrong.
+World 5.1.0 adds only optional members, each behind a capability that fails
+closed when a World leaves it unset:
 
-eve 0.81.1 is the release where an eve change, not a Workflow one, last made
-work here, and 0.83.3 keeps it unchanged: it moves a session to a fresh workflow run (after a compaction, or onto a
-newer deployment) only when the World declares both
-`capabilities.hookForceClaim` and `capabilities.hookRetention.active`, because
-the successor takes the session's hook tokens over with
-`createHook({ experimental_force: true })`. A World without the capability
-gets `session handoff unavailable: the Workflow world cannot force-claim hooks`
-and a session that never leaves its first run, whose event log then grows
-until `WORKFLOW_MAX_EVENTS` (25,000) fails it with `MAX_EVENTS_EXCEEDED`.
-Releases before 0.81.1 hand a session over with an older release-then-claim
-protocol and never pass `experimental_force`; every line from 0.76.0 through
-0.84.0 accepts World spec 6 through 8. The force-claim takeover is described in
+- `inBandFence`, which spec 9 (single-orchestrator) runs require: a per-run
+  in-band position count, a `snapshot` on `events.list`, and refusal of a stale
+  in-band write with `InBandSupersededError`. This World does not declare it
+  yet, so it creates spec 8 runs. eve 1.0 sets `WORKFLOW_SPEC_VERSION=9` by
+  default; without the fence `mintedSpecVersion()` logs `Ignoring
+WORKFLOW_SPEC_VERSION=9` once and returns 8.
+- `maxConcurrency`, a queue that delivers a spec 9 run's orchestrator messages
+  one at a time. Meaningful only with the fence.
+- `atomicStartHook`, `start({ hook })` admission. eve does not use it.
+- `hookResumeDedup` and `resolvedHookResume`, deduplicated and cached hook
+  resumes. eve uses them only for signed inbox handles
+  (`EVE_INBOX_HANDLE_SECRET`); without them it resolves the hook by token.
+- `dynamicWorkflowCode`, storing a dynamic run's code. eve does not use it.
+
+Core 5.4 drives a run with one of two runtimes, picked by the run's stamped
+version: `runtime/spec8` for the spec 8 runs this World creates, and
+`runtime/spec9` for single-orchestrator runs. The hook-wake bypass relies on how
+both start step bodies, which `src/core-concurrency-contract.test.ts` pins
+against the installed dist.
+
+eve moves a session to a fresh workflow run (after a compaction, or onto a newer
+deployment) only when the World declares both `capabilities.hookForceClaim` and
+`capabilities.hookRetention.active`, because the successor takes the session's
+hook tokens over with `createHook({ experimental_force: true })`. A World
+without the capability gets `session handoff unavailable: the Workflow world
+cannot force-claim hooks` and a session that never leaves its first run, whose
+event log then grows until `WORKFLOW_MAX_EVENTS` (25,000) fails it with
+`MAX_EVENTS_EXCEEDED`. The force-claim takeover is described in
 `docs/design.md` (Hook force-claim), and `e2e-tests/session-handoff.test.mts`
 proves the handoff on the real eve.
 
@@ -60,11 +69,12 @@ and ends at 8 on every line in the matrix.
 The conformance harness moved with it. `@workflow/world-testing` from beta.56
 on asserts every run is stamped at least what its own runtime mints (8), so
 while this World declared 7 the harness was held on beta.55. It now tracks the
-newest stable harness, 5.0.6, which ships its own runtime bundle on core 5.2.3
-/ world 5.0.5 -- deliberately not eve's set, see the exemption in
-`src/eve-pin-contract.test.ts`. 5.0.6 adds two families: `resolveData` (this
-World's `'skip-step-inputs'` reading, which passes) and `inBandFence`, which is
-skipped because this World does not declare `capabilities.inBandFence`. It has
+newest stable harness, 5.0.8, which ships its own runtime bundle on core 5.4.0
+/ world 5.1.0 -- the same set eve 1.0.0-rc.5 bundles, by timing rather than by
+constraint; see the exemption in `src/eve-pin-contract.test.ts`. Its
+`resolveData` family (this World's `'skip-step-inputs'` reading) passes, and its
+`inBandFence` and atomic start Hook families are skipped because this World
+declares neither capability. It has
 no force-claim cases; those live in `src/storage.hook-force-claim.test.ts`
 and, end to end, in the e2e suite. The e2e matrix, which runs real eve builds,
 is still what covers the pinned core.

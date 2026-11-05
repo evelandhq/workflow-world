@@ -14,17 +14,25 @@ export function agentDir(eveVersion: string, fixture = "fixture"): string {
   );
 }
 
+/**
+ * A version as an identifier: tenant ids are validated, and the database name
+ * is interpolated into DDL, so both stay in `[0-9a-z_]` (`1.0.0-rc.5` becomes
+ * `1_0_0_rc_5`).
+ */
+function versionSlug(eveVersion: string): string {
+  return eveVersion.toLowerCase().replace(/[^0-9a-z]/g, "_");
+}
+
 export function tenantFor(eveVersion: string): string {
-  // Tenant ids are validated; keep it to the safe alphabet.
-  return `prj_e2e_${eveVersion.replace(/\./g, "_")}`;
+  return `prj_e2e_${versionSlug(eveVersion)}`;
 }
 
 export function databaseFor(eveVersion: string): string {
-  return `wfw_e2e_${eveVersion.replace(/\./g, "_")}`;
+  return `wfw_e2e_${versionSlug(eveVersion)}`;
 }
 
 export function deploymentFor(eveVersion: string): string {
-  return `dep_e2e_${eveVersion.replace(/\./g, "_")}`;
+  return `dep_e2e_${versionSlug(eveVersion)}`;
 }
 
 function run(command: string, cwd: string, extraEnv: Record<string, string> = {}): void {
@@ -146,8 +154,11 @@ export async function startAgent(input: {
   env?: Record<string, string>;
 }): Promise<StartedAgent> {
   let output = "";
+  // Its own process group: `eve start` runs the built server as a child, and a
+  // signal to `npx` alone leaves that server running and holding the database.
   const proc = cp.spawn("npx", ["eve", "start", "--port", String(input.port)], {
     cwd: input.dir,
+    detached: true,
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
@@ -160,6 +171,14 @@ export async function startAgent(input: {
       ...input.env,
     },
   });
+
+  const signalGroup = (signal: NodeJS.Signals) => {
+    try {
+      process.kill(-proc.pid!, signal);
+    } catch {
+      // Already gone.
+    }
+  };
 
   const collect = (chunk: Buffer) => {
     output += chunk.toString();
@@ -178,7 +197,7 @@ export async function startAgent(input: {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   if (!listening) {
-    proc.kill("SIGKILL");
+    signalGroup("SIGKILL");
     throw new Error(`agent for ${input.dir} never listened. Output:\n${output.slice(-3000)}`);
   }
 
@@ -186,15 +205,20 @@ export async function startAgent(input: {
     port: input.port,
     log: () => output,
     async stop() {
-      if (proc.exitCode !== null) return;
-      proc.kill("SIGTERM");
+      if (proc.exitCode !== null) {
+        signalGroup("SIGKILL");
+        return;
+      }
+      signalGroup("SIGTERM");
       await new Promise<void>((resolve) => {
         proc.once("exit", () => resolve());
         setTimeout(() => {
-          proc.kill("SIGKILL");
+          signalGroup("SIGKILL");
           resolve();
         }, 8_000).unref();
       });
+      // The server child may outlive `npx` on SIGTERM.
+      signalGroup("SIGKILL");
     },
   };
 }

@@ -3,7 +3,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { ensureTenantPartitions, runMigrations } from "../src/index.js";
 import { dropTenantPartitions } from "../src/migrate.js";
-import { requiredTurnEventTypes, waitForRequiredEventTypes } from "./event-types.mts";
+import { FIRST_TURN_EVENT_TYPES, waitForRequiredEventTypes } from "./event-types.mts";
 import { ENABLED_EVE_VERSIONS } from "./eve-versions.mts";
 import {
   buildAgent,
@@ -39,10 +39,9 @@ import {
  * compiled from eve's own execution module — and user-authored `"use workflow"`
  * functions are not part of eve's compile surface in this version. So driving a
  * turn is not a convenience, it is the way a real agent uses a World. One turn
- * produces the run graph in `expectedRunGraph` -- three runs through eve 0.56,
- * two from 0.57, which executes the turn as steps inside the session's own run
- * instead of a child run per message -- plus steps, hooks, a wait, and a
- * cancellation.
+ * produces the run graph in `RUN_GRAPH` -- the session's own run, which
+ * executes the turn as steps, and its timeout -- plus steps, hooks, a wait, and
+ * a cancellation.
  *
  * ## Why no model credentials
  *
@@ -58,24 +57,15 @@ const thisPackageVersion = (
 ).version;
 
 /**
- * The runs one first turn leaves in the World, by eve line. Through 0.56 the
- * session's own `workflowEntry` run dispatches a child `turnWorkflow` run per
- * message; from 0.57 it executes the turn itself, so the per-turn run is gone
- * (`turnWorkflow` survives only to import sessions from the older driver model
- * and is never started for a fresh session). Asserting names rather than a
- * count keeps a change in eve's turn shape visible rather than absorbed.
+ * The runs one first turn leaves in the World: the session's own
+ * `workflowEntry` run, which executes the turn as steps, and its timeout.
+ * Asserting names rather than a count keeps a change in eve's turn shape
+ * visible rather than absorbed.
  */
-function expectedRunGraph(eveVersion: string): readonly string[] {
-  const minor = Number(/^0\.(\d+)\./.exec(eveVersion)?.[1]);
-  if (!Number.isInteger(minor)) throw new Error(`unrecognized eve version ${eveVersion}`);
-  return minor >= 57
-    ? ["workflow//eve//workflowEntry", "workflow//eve//sessionTimeoutWorkflow"]
-    : [
-        "workflow//eve//workflowEntry",
-        "workflow//eve//turnWorkflow",
-        "workflow//eve//sessionTimeoutWorkflow",
-      ];
-}
+const RUN_GRAPH = [
+  "workflow//eve//workflowEntry",
+  "workflow//eve//sessionTimeoutWorkflow",
+] as const;
 
 const baseUrl = process.env.WORKFLOW_WORLD_E2E_URL;
 const adminUrl = process.env.WORKFLOW_WORLD_E2E_ADMIN_URL ?? baseUrl;
@@ -92,7 +82,7 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
       const tenantId = tenantFor(entry.version);
       const deploymentId = deploymentFor(entry.version);
       const database = databaseFor(entry.version);
-      const runGraph = expectedRunGraph(entry.version);
+      const runGraph = RUN_GRAPH;
       const port = 41900 + index;
 
       let pool: Pool;
@@ -150,7 +140,7 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
 
-        // eve's own workflows, by name (see expectedRunGraph).
+        // eve's own workflows, by name (see RUN_GRAPH).
         expect(names).toEqual(expect.arrayContaining([...runGraph]));
 
         const graph = await pool.query<{ retention_class: string }>(
@@ -235,7 +225,7 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
             );
             return rows;
           },
-          { required: requiredTurnEventTypes(entry.version) },
+          { required: FIRST_TURN_EVENT_TYPES },
         );
       });
 

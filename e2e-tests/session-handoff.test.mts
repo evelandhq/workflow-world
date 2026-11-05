@@ -1,23 +1,25 @@
+import { createRequire } from "node:module";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createWorld, ensureTenantPartitions, runMigrations } from "../src/index.js";
 import { dropTenantPartitions } from "../src/migrate.js";
-import { ENABLED_EVE_VERSIONS, handsOffByForceClaim } from "./eve-versions.mts";
+import { ENABLED_EVE_VERSIONS } from "./eve-versions.mts";
 import {
   buildAgent,
   databaseFor,
   deploymentFor,
   packWorld,
   startAgent,
-  startSession,
   tenantFor,
   type StartedAgent,
 } from "./harness.mts";
 
 /**
- * A real eve 0.81 session moves to a fresh workflow run through this World.
+ * A real eve session moves to a fresh workflow run through this World.
  *
- * eve 0.81.1 hands a session over -- after a compaction, or onto a newer
+ * eve hands a session over -- after a compaction, or onto a newer
  * deployment -- by starting a successor `workflowEntry` run that takes every
  * session hook token over with `createHook({ experimental_force: true })`. It
  * does so only when the World declares `capabilities.hookForceClaim` and
@@ -27,9 +29,9 @@ import {
  * force-claim takeover (`docs/design.md`, Hook force-claim): eve's own
  * compaction, eve's own successor, eve's own messages, this World in between.
  *
- * Compaction is triggered by hand (`POST /eve/v1/session/:id/compact`), which
- * runs the same compaction turn the context-window threshold would and arms
- * the same handoff. The fixture runs on eve's mock model (vitest's
+ * Compaction is triggered by hand (the client's `compact()`), which runs the
+ * same compaction turn the context-window threshold would and arms the same
+ * handoff. The fixture runs on eve's mock model (vitest's
  * `NODE_ENV=test`, made explicit below), whose summaries are never empty, so no
  * credentials and no threshold tuning are needed.
  *
@@ -57,7 +59,7 @@ describe.skipIf(!baseUrl)("an eve session moves to a fresh run through hook forc
   });
 
   for (const [index, entry] of ENABLED_EVE_VERSIONS.entries()) {
-    describe.skipIf(!handsOffByForceClaim(entry.version))(`eve ${entry.version}`, () => {
+    describe(`eve ${entry.version}`, () => {
       const tenantId = `${tenantFor(entry.version)}_handoff`;
       const deploymentId = `${deploymentFor(entry.version)}_handoff`;
       const database = `${databaseFor(entry.version)}_handoff`;
@@ -66,6 +68,7 @@ describe.skipIf(!baseUrl)("an eve session moves to a fresh run through hook forc
       let pool: Pool;
       let agent: StartedAgent | undefined;
       let world: ReturnType<typeof createWorld> | undefined;
+      let dir: string;
 
       beforeAll(async () => {
         const admin = new Pool({ connectionString: adminUrl, max: 1 });
@@ -89,7 +92,7 @@ describe.skipIf(!baseUrl)("an eve session moves to a fresh run through hook forc
           runner: "external",
         });
 
-        const dir = buildAgent({ eveVersion: entry.version, worldTarball });
+        dir = buildAgent({ eveVersion: entry.version, worldTarball });
         agent = await startAgent({
           dir,
           port,
@@ -125,77 +128,37 @@ describe.skipIf(!baseUrl)("an eve session moves to a fresh run through hook forc
         }
       }
 
-      type StreamEvent = { type?: string; data?: Record<string, unknown> };
+      type Delivery = import("eve/client").Delivery;
+
+      /** A client store for one session, from the eve the agent was built with. */
+      async function openStore() {
+        const { SessionStore } = (await import(
+          pathToFileURL(createRequire(path.join(dir, "package.json")).resolve("eve/client")).href
+        )) as typeof import("eve/client");
+        return new SessionStore({ baseUrl: `http://127.0.0.1:${String(port)}` });
+      }
 
       /**
-       * Reads the session's NDJSON stream from its start until `done` holds for
-       * everything seen so far. The stream belongs to the session, not to a run:
-       * every owner writes to the first run's stream, so this keeps working
+       * Waits for an accepted command to settle and asserts it completed. A
+       * delivery belongs to the session, not to a run, so this keeps working
        * across handoffs.
        */
-      async function waitForStream(
-        sessionId: string,
-        what: string,
-        done: (events: StreamEvent[]) => boolean,
-        timeoutMs = 90_000,
-      ): Promise<StreamEvent[]> {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-        const seen: StreamEvent[] = [];
-        let buffered = "";
-        try {
-          const response = await fetch(
-            `http://127.0.0.1:${String(port)}/eve/v1/session/${sessionId}/stream`,
-            { signal: controller.signal },
+      async function settled(delivery: Delivery, what: string, timeoutMs = 90_000) {
+        let timer: NodeJS.Timeout | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(new Error(`${what} never settled. Agent log:\n${agent!.log().slice(-4000)}`)),
+            timeoutMs,
           );
-          expect(response.status).toBe(200);
-          const reader = response.body!.getReader();
-          const decoder = new TextDecoder();
-          for (;;) {
-            const { value, done: ended } = await reader.read();
-            if (ended) break;
-            buffered += decoder.decode(value, { stream: true });
-            const lines = buffered.split("\n");
-            buffered = lines.pop() ?? "";
-            for (const line of lines.filter(Boolean)) {
-              seen.push(JSON.parse(line) as StreamEvent);
-            }
-            if (done(seen)) {
-              controller.abort();
-              return seen;
-            }
-          }
-        } catch (error) {
-          if (!controller.signal.aborted) throw error;
+        });
+        try {
+          const result = await Promise.race([delivery.result(), timeout]);
+          expect(result.status, `${what}: ${JSON.stringify(result.error)}`).toBe("completed");
+          return result;
         } finally {
           clearTimeout(timer);
         }
-        throw new Error(
-          `stream never showed ${what}; saw ${seen.map((e) => e.type).join(", ")}. Agent log:\n${agent!.log().slice(-4000)}`,
-        );
-      }
-
-      const count = (events: StreamEvent[], type: string) =>
-        events.filter((event) => event.type === type).length;
-
-      /** Waits until the session has settled `compactions` compaction turns. */
-      async function compacted(sessionId: string, compactions: number): Promise<void> {
-        await waitForStream(sessionId, `${String(compactions)} settled compaction(s)`, (events) => {
-          const completed = events.findLastIndex((e) => e.type === "compaction.completed");
-          return (
-            count(events, "compaction.completed") >= compactions &&
-            events.slice(completed).some((e) => e.type === "session.waiting")
-          );
-        });
-      }
-
-      async function post(path: string, body: unknown): Promise<void> {
-        const response = await fetch(`http://127.0.0.1:${String(port)}${path}`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        expect(response.status, await response.clone().text()).toBeLessThan(300);
       }
 
       /** The session's owner runs other than its first, oldest first. */
@@ -251,89 +214,94 @@ describe.skipIf(!baseUrl)("an eve session moves to a fresh run through hook forc
         return Number(rows[0]!.count);
       }
 
-      /** Sends one message and waits for the mock model's reply to it on the stream. */
-      async function converse(sessionId: string, message: string): Promise<void> {
-        await post(`/eve/v1/session/${sessionId}`, { message });
-        await waitForStream(sessionId, `a reply to "${message}"`, (events) =>
-          events.some(
-            (event) =>
-              event.type === "message.completed" &&
-              String(event.data?.message ?? "").includes(message),
-          ),
-        );
+      /** Sends one message and waits for its turn to settle. */
+      async function converse(
+        store: Awaited<ReturnType<typeof openStore>>,
+        message: string,
+      ): Promise<void> {
+        await settled(await store.send({ message }), `a reply to "${message}"`);
       }
 
       test("compaction hands the session to a new run, twice, and messages keep flowing", async () => {
-        const { sessionId } = await startSession(port);
-        await waitForStream(sessionId, "the first turn parked", (events) =>
-          events.some((event) => event.type === "session.waiting"),
-        );
-        expect(await successors(sessionId)).toEqual([]);
+        const store = await openStore();
+        const stopObserving = store.observe();
+        try {
+          const opening = await store.send({ message: "hello from the e2e harness" });
+          const { sessionId } = opening;
+          await settled(opening, "the first turn");
+          expect(await successors(sessionId)).toEqual([]);
 
-        // First compaction: the first run hands over and stays as the anchor.
-        await post(`/eve/v1/session/${sessionId}/compact`, {});
-        const [first] = await waitFor("a successor run", async () => {
-          const rows = await successors(sessionId);
-          return rows.length >= 1 ? rows : undefined;
-        });
-        expect(first!.spec_version).toBe(8);
-        const firstInbox = await inboxHeldBy(sessionId, first!.id);
-        expect(firstInbox.claimedFrom).toMatchObject({
-          runId: sessionId,
-          workflowName: "workflow//eve//workflowEntry",
-          deploymentId,
-          runSpecVersion: 8,
-        });
-        const takenFromAnchor = await forcedDisposals(sessionId);
-        expect(takenFromAnchor.length).toBeGreaterThan(0);
-        for (const disposal of takenFromAnchor) {
-          expect(
-            (disposal as { eventData?: { forceClaimedBy?: { runId: string } } }).eventData
-              ?.forceClaimedBy?.runId,
-          ).toBe(first!.id);
-        }
-        await compacted(sessionId, 1);
-        expect(await runStatus(sessionId)).toBe("running");
-
-        // The same session id keeps working, and the new owner answers.
-        const beforeFirst = await inboxDeliveries(first!.id, firstInbox.hookId);
-        await converse(sessionId, "message for the first successor");
-        expect(await inboxDeliveries(first!.id, firstInbox.hookId)).toBeGreaterThan(beforeFirst);
-
-        // Second compaction: the first successor hands over and finishes.
-        await post(`/eve/v1/session/${sessionId}/compact`, {});
-        const second = await waitFor("a second successor run", async () => {
-          const rows = await successors(sessionId);
-          return rows.length >= 2 ? rows[1] : undefined;
-        });
-        const secondInbox = await inboxHeldBy(sessionId, second.id);
-        expect(secondInbox.claimedFrom).toMatchObject({ runId: first!.id });
-        expect((await forcedDisposals(first!.id)).length).toBeGreaterThan(0);
-        await waitFor(`${first!.id} to complete`, async () =>
-          (await runStatus(first!.id)) === "completed" ? true : undefined,
-        );
-        await compacted(sessionId, 2);
-        const beforeSecond = await inboxDeliveries(second.id, secondInbox.hookId);
-        await converse(sessionId, "message for the second successor");
-        expect(await inboxDeliveries(second.id, secondInbox.hookId)).toBeGreaterThan(beforeSecond);
-
-        // No message was ever journaled behind the disposal that retired its hook.
-        for (const runId of [sessionId, first!.id]) {
-          const page = await world!.events.list({ runId, pagination: { limit: 1000 } });
-          const disposedAt = new Map<string, number>();
-          page.data.forEach((event, position) => {
-            if (event.eventType === "hook_disposed") {
-              disposedAt.set(event.correlationId!, position);
-            }
-            if (event.eventType === "hook_received") {
-              expect(disposedAt.has(event.correlationId!), `${runId} ${event.eventId}`).toBe(false);
-            }
+          // First compaction: the first run hands over and stays as the anchor.
+          const firstCompaction = await store.compact();
+          const [first] = await waitFor("a successor run", async () => {
+            const rows = await successors(sessionId);
+            return rows.length >= 1 ? rows : undefined;
           });
-        }
+          expect(first!.spec_version).toBe(8);
+          const firstInbox = await inboxHeldBy(sessionId, first!.id);
+          expect(firstInbox.claimedFrom).toMatchObject({
+            runId: sessionId,
+            workflowName: "workflow//eve//workflowEntry",
+            deploymentId,
+            runSpecVersion: 8,
+          });
+          const takenFromAnchor = await forcedDisposals(sessionId);
+          expect(takenFromAnchor.length).toBeGreaterThan(0);
+          for (const disposal of takenFromAnchor) {
+            expect(
+              (disposal as { eventData?: { forceClaimedBy?: { runId: string } } }).eventData
+                ?.forceClaimedBy?.runId,
+            ).toBe(first!.id);
+          }
+          await settled(firstCompaction, "the first compaction");
+          expect(await runStatus(sessionId)).toBe("running");
 
-        const log = agent!.log();
-        expect(log).not.toContain("session handoff unavailable");
-        expect(log).not.toContain("session handoff failed");
+          // The same session id keeps working, and the new owner answers.
+          const beforeFirst = await inboxDeliveries(first!.id, firstInbox.hookId);
+          await converse(store, "message for the first successor");
+          expect(await inboxDeliveries(first!.id, firstInbox.hookId)).toBeGreaterThan(beforeFirst);
+
+          // Second compaction: the first successor hands over and finishes.
+          const secondCompaction = await store.compact();
+          const second = await waitFor("a second successor run", async () => {
+            const rows = await successors(sessionId);
+            return rows.length >= 2 ? rows[1] : undefined;
+          });
+          const secondInbox = await inboxHeldBy(sessionId, second.id);
+          expect(secondInbox.claimedFrom).toMatchObject({ runId: first!.id });
+          expect((await forcedDisposals(first!.id)).length).toBeGreaterThan(0);
+          await waitFor(`${first!.id} to complete`, async () =>
+            (await runStatus(first!.id)) === "completed" ? true : undefined,
+          );
+          await settled(secondCompaction, "the second compaction");
+          const beforeSecond = await inboxDeliveries(second.id, secondInbox.hookId);
+          await converse(store, "message for the second successor");
+          expect(await inboxDeliveries(second.id, secondInbox.hookId)).toBeGreaterThan(
+            beforeSecond,
+          );
+
+          // No message was ever journaled behind the disposal that retired its hook.
+          for (const runId of [sessionId, first!.id]) {
+            const page = await world!.events.list({ runId, pagination: { limit: 1000 } });
+            const disposedAt = new Map<string, number>();
+            page.data.forEach((event, position) => {
+              if (event.eventType === "hook_disposed") {
+                disposedAt.set(event.correlationId!, position);
+              }
+              if (event.eventType === "hook_received") {
+                expect(disposedAt.has(event.correlationId!), `${runId} ${event.eventId}`).toBe(
+                  false,
+                );
+              }
+            });
+          }
+
+          const log = agent!.log();
+          expect(log).not.toContain("session handoff unavailable");
+          expect(log).not.toContain("session handoff failed");
+        } finally {
+          stopObserving();
+        }
       });
     });
   }

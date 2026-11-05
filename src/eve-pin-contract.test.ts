@@ -14,7 +14,10 @@ import { describe, expect, test } from "vitest";
  * here.
  *
  * The rule is "follow what eve installs", so the expected values are read out of
- * the installed `eve` package rather than written down. That way an eve bump is a
+ * the installed `eve` package rather than written down. eve 1.0 no longer
+ * installs them as dependencies: it bundles the Workflow runtime into
+ * `dist/src/compiled/@workflow` and records each bundled version in
+ * `dist/src/compiled/.vendor-stamp.json`, so that stamp is what is read. That way an eve bump is a
  * one-line devDependency change and this test tells us exactly which packages
  * have to move with it — and it cannot be satisfied by copying numbers from
  * `vercel/eve@main`, which runs ahead of the released tarball.
@@ -65,19 +68,40 @@ function withBundledRuntimePins(pins: Record<string, string>): Record<string, st
   return merged;
 }
 
+/**
+ * The `@workflow/*` versions eve 1.0 bundles, from its vendor stamp. A bundled
+ * package is not installed, so nothing resolves it one level down: the stamp
+ * names every package in the set, `@workflow/utils` included.
+ */
+function bundledWorkflowVersions(eveRoot: string): Record<string, string> {
+  const stampPath = path.join(eveRoot, "dist", "src", "compiled", ".vendor-stamp.json");
+  if (!existsSync(stampPath)) return {};
+  const moduleVersions = readJson(stampPath).moduleVersions;
+  if (!moduleVersions || typeof moduleVersions !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(moduleVersions as Record<string, string>).filter(([name]) =>
+      name.startsWith("@workflow/"),
+    ),
+  );
+}
+
 describe("@workflow/* pins track the installed eve", () => {
   // Resolved from the package that declares it. pnpm and npm both nest, and
   // resolving from the repo root can walk out of the checkout entirely.
   const evePath = require.resolve("eve/package.json", { paths: [repoRoot] });
   const eve = readJson(evePath);
-  const eveWorkflowPins = withBundledRuntimePins(versionsFrom(eve));
+  const eveWorkflowPins = {
+    ...withBundledRuntimePins(versionsFrom(eve)),
+    ...bundledWorkflowVersions(path.dirname(evePath)),
+  };
   const manifest = readJson(path.join(repoRoot, "package.json"));
   const ours = versionsFrom(manifest);
 
   test("the installed eve is the one this package claims to target", () => {
     const evePin = (manifest.devDependencies as Record<string, unknown>).eve;
-    // The registry drift check needs an exact stable version as its baseline.
-    expect(evePin).toMatch(/^\d+\.\d+\.\d+$/);
+    // The registry drift check needs an exact version as its baseline. Eveland
+    // verifies 1.0 release candidates, so a prerelease is exact enough.
+    expect(evePin).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/);
     expect(eve.version).toBe(evePin);
     // Sanity: if eve stopped declaring @workflow/* at all, every assertion below
     // would vacuously pass.
@@ -131,9 +155,9 @@ describe("@workflow/* pins track the installed eve", () => {
     // beta.56 on (every stable 5.x included) the harness requires every run to be
     // stamped at least `mintedSpecVersion()`, which is 8. With force-claim
     // implemented the World declares 8 (see `specVersion` in src/index.ts), and
-    // the harness tracks the newest stable release, 5.0.6, whose bundled core
-    // 5.2.3 / world 5.0.5 run ahead of eve's 5.2.0 / 5.0.3 -- fine for the reason
-    // above. The real-eve e2e is what exercises the pinned core.
+    // the harness tracks the newest stable release. 5.0.8 bundles core 5.4.0 /
+    // world 5.1.0, the same set eve 1.0.0-rc.5 bundles, but that is timing, not
+    // a constraint. The real-eve e2e is what exercises the pinned core.
     "@workflow/world-testing": "test-only harness; ships its own runtime bundle",
   };
 
