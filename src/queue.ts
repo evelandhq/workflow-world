@@ -57,7 +57,12 @@ import {
   DEPLOYMENT_HEADER,
   DISPATCH_VERSION_HEADER,
   FLOW_JOB_NAME,
-  isHookWake,
+  continuationOf,
+  deliveryAccounting,
+  VQS_MESSAGE_DELIVERY_COUNT_HEADER,
+  jobKeyModeFor,
+  mayBypassRunQueue,
+  runQueueFor,
   readRuntimeSecretFromEnv,
   runQueueName,
   RUNTIME_SECRET_HEADER,
@@ -302,7 +307,8 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
    */
   let warnedLockReadFailure = false;
   async function bypassesRunQueue(invoke: WorkflowInvokePayload): Promise<boolean> {
-    if (!isHookWake(invoke)) return false;
+    // A spec 9 run's hook wake never bypasses: see `mayBypassRunQueue`.
+    if (!mayBypassRunQueue(invoke)) return false;
     try {
       const { rows } = await pool.query(
         `select 1
@@ -342,16 +348,28 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     message: unknown,
     messageId: MessageId,
     opts: { idempotencyKey?: string; delaySeconds?: number } | undefined,
-  ): Promise<{ jobKey: string; runId?: string; bypassingWake: boolean }> {
+  ): Promise<{
+    jobKey: string;
+    runQueue?: string;
+    bypassingWake: boolean;
+    jobKeyMode?: "unsafe_dedupe";
+  }> {
     const idempotencyKey = opts?.idempotencyKey;
+    const runQueue = runQueueFor(tenantId, message);
+    const jobKeyMode = jobKeyModeFor(message, idempotencyKey);
+    const placed = {
+      jobKey: idempotencyKey ?? messageId,
+      ...(runQueue ? { runQueue } : {}),
+      ...(jobKeyMode ? { jobKeyMode } : {}),
+    };
     const invoke = WorkflowInvokePayloadSchema.safeParse(message);
-    if (!invoke.success) return { jobKey: idempotencyKey ?? messageId, bypassingWake: false };
+    if (!invoke.success) return { ...placed, bypassingWake: false };
     const { runId, hookInput } = invoke.data;
     // A delayed wake (core re-routing one) is not urgent, and under the run's
     // wake key it would push a pending cancel back by its delay.
     const delayed = (opts?.delaySeconds ?? 0) > 0;
     if (delayed || !(await bypassesRunQueue(invoke.data))) {
-      return { jobKey: idempotencyKey ?? messageId, runId, bypassingWake: false };
+      return { ...placed, bypassingWake: false };
     }
     const wakeKey = hookInput === undefined ? `wfwake:${tenantId}:${runId}` : messageId;
     return { jobKey: idempotencyKey ?? wakeKey, bypassingWake: true };
@@ -366,7 +384,10 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     headers,
     delaySeconds,
     jobKey,
-    runId,
+    jobKeyMode,
+    runQueue,
+    deliveryOffset,
+    attemptOffset,
     deploymentId,
     bypassingWake = false,
   }: {
@@ -378,8 +399,13 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     headers?: Record<string, string>;
     delaySeconds?: number;
     jobKey?: string;
-    /** The run whose queue this job waits in; absent when it waits in none. */
-    runId?: string;
+    /** Graphile's job-key mode; its default when absent (see `jobKeyModeFor`). */
+    jobKeyMode?: "unsafe_dedupe";
+    /** The run queue this job waits in (`runQueueFor`); absent when it waits in none. */
+    runQueue?: string;
+    /** Carried from the message this job continues; see `deliveryAccounting`. */
+    deliveryOffset?: number;
+    attemptOffset?: number;
     /** The deployment this message is addressed to; this one when omitted. */
     deploymentId?: string;
     /** Counted against the tenant's wake cap rather than its delivery cap. */
@@ -395,11 +421,13 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
         ? new Date(Date.now() + delaySeconds * 1000)
         : undefined;
 
-    const holdAsTimer = config.runner === "embedded" && holdsAsTimer(runId, delaySeconds);
+    const holdAsTimer = config.runner === "embedded" && holdsAsTimer(runQueue, delaySeconds);
     const encoded = MessageData.encode({
       id: queueId,
       data: Buffer.from(body),
       attempt,
+      ...(deliveryOffset ? { deliveryOffset } : {}),
+      ...(attemptOffset ? { attemptOffset } : {}),
       messageId,
       idempotencyKey,
       headers,
@@ -410,11 +438,11 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       ...(queueNamespace !== undefined ? { queueNamespace } : {}),
     });
 
-    if (holdAsTimer && runId) {
+    if (holdAsTimer && runQueue) {
       // Not due for a while: wait off the run's queue, so it costs this
       // tenant's claims nothing until then. The timer task puts it back.
-      await utils.addJob(getTimerJobName(), timerPayload(encoded, runQueueName(tenantId, runId)), {
-        ...(jobKey ? { jobKey } : {}),
+      await utils.addJob(getTimerJobName(), timerPayload(encoded, runQueue), {
+        ...(jobKey ? { jobKey, ...(jobKeyMode ? { jobKeyMode } : {}) } : {}),
         ...(runAt ? { runAt } : {}),
         maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
       });
@@ -422,11 +450,11 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     }
 
     await utils.addJob(getJobQueueName(), encoded, {
-      ...(jobKey ? { jobKey } : {}),
+      ...(jobKey ? { jobKey, ...(jobKeyMode ? { jobKeyMode } : {}) } : {}),
       ...(runAt ? { runAt } : {}),
       // Serializes concurrent deliveries for one run. Without it two claimed
       // jobs replay the same run's event log at the same time.
-      ...(runId ? { queueName: runQueueName(tenantId, runId) } : {}),
+      ...(runQueue ? { queueName: runQueue } : {}),
       maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
       // Read by the dispatcher's `forbiddenFlags` callback to throttle a
       // tenant that is already at its in-flight cap, without starving others.
@@ -557,6 +585,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     queueName,
     messageId,
     attempt,
+    deliveryCount,
     body,
     headers: extraHeaders,
     abortSignal,
@@ -564,6 +593,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     queueName: ValidQueueName;
     messageId: MessageId;
     attempt: number;
+    deliveryCount: number;
     body: Uint8Array;
     headers?: Record<string, string>;
     abortSignal?: AbortSignal;
@@ -574,6 +604,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       "x-vqs-queue-name": queueName,
       "x-vqs-message-id": messageId,
       "x-vqs-message-attempt": String(attempt),
+      [VQS_MESSAGE_DELIVERY_COUNT_HEADER]: String(deliveryCount),
     };
     const baseUrl = await getExecutionBaseUrl();
     if (!baseUrl) {
@@ -720,27 +751,30 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     return async (payload: unknown, helpers: unknown) => {
       const messageData = MessageData.parse(payload);
       const graphileHelpers = GraphileHelpers.safeParse(helpers);
-      const attempt = graphileHelpers.success
-        ? graphileHelpers.data.job.attempts
-        : messageData.attempt;
+      const delivery = deliveryAccounting(
+        messageData,
+        graphileHelpers.success ? graphileHelpers.data.job.attempts : undefined,
+      );
       const queueName = `${queue}${messageData.id}` as ValidQueueName;
       const bodyStream = Stream.Readable.toWeb(Stream.Readable.from([messageData.data]));
       const body = await transport.deserialize(bodyStream as ReadableStream<Uint8Array>);
       QueuePayloadSchema.parse(body);
-      // There is only the workflow queue kind, so every message that parses as a
-      // workflow invoke has a run. A hook wake takes no in-process serialization
-      // key, for the reason it may bypass the run queue (`bypassesRunQueue`).
+      // The in-process serialization follows the run queue (`runQueueFor`): a
+      // spec 9 run's orchestrator messages, and every delivery of an earlier
+      // run except a hook wake, for the reason it may bypass the run queue
+      // (`bypassesRunQueue`).
       const parsedInvoke = WorkflowInvokePayloadSchema.safeParse(body);
-      const runId = parsedInvoke.success ? parsedInvoke.data.runId : undefined;
+      const runQueue = runQueueFor(tenantId, body);
       const workflowRunSerializationKey =
-        parsedInvoke.success && !isHookWake(parsedInvoke.data)
-          ? `workflow:${parsedInvoke.data.runId}`
+        runQueue !== undefined && !(parsedInvoke.success && mayBypassRunQueue(parsedInvoke.data))
+          ? runQueue
           : undefined;
       const executeTask = async (): Promise<"completed" | "rescheduled"> => {
         const result = await executeMessageOverHttp({
           queueName,
           messageId: messageData.messageId,
-          attempt,
+          attempt: delivery.attempt,
+          deliveryCount: delivery.deliveryCount,
           body: messageData.data,
           headers: messageData.headers,
           abortSignal: graphileHelpers.success ? graphileHelpers.data.abortSignal : undefined,
@@ -752,17 +786,21 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
 
         if (result.type === "reschedule") {
           // Schedule the follow-up job before we return so a crash cannot
-          // lose the wake-up request.
+          // lose the wake-up request. The same message on a fresh job; on a
+          // spec 9 run `{ timeoutSeconds: 0 }` is a handoff (`continuationOf`).
+          const next = continuationOf(messageData, delivery, result.timeoutSeconds, body);
           await addGraphileJob({
             queueId: messageData.id,
             body: messageData.data,
             messageId: messageData.messageId,
-            attempt: attempt + 1,
+            attempt: next.attempt,
+            ...(next.deliveryOffset ? { deliveryOffset: next.deliveryOffset } : {}),
+            ...(next.attemptOffset ? { attemptOffset: next.attemptOffset } : {}),
             idempotencyKey: messageData.idempotencyKey,
             headers: messageData.headers,
             delaySeconds: result.timeoutSeconds,
             jobKey: messageData.idempotencyKey ?? messageData.messageId,
-            ...(runId ? { runId } : {}),
+            ...(runQueue ? { runQueue } : {}),
             // A reschedule is the same message: it keeps its address.
             deploymentId: messageData.deploymentId,
           });

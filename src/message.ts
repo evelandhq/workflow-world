@@ -16,6 +16,14 @@ import { Base64Buffer } from "./zod.js";
  */
 export const MessageData = z.object({
   attempt: z.number().describe("The attempt number of the message"),
+  /**
+   * Deliveries of this message before its current job, and the attempts a
+   * spec 9 handoff carried over into it; see `deliveryAccounting` in
+   * `dispatch-contract.ts`. Absent on a message's first job, and on every job
+   * enqueued before these existed, which then counts from its own attempts.
+   */
+  deliveryOffset: z.number().int().nonnegative().optional(),
+  attemptOffset: z.number().int().nonnegative().optional(),
   messageId: MessageId.describe("The unique ID of the message"),
   idempotencyKey: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
@@ -59,6 +67,15 @@ export const MessageData = z.object({
     .describe("eve queue namespace resolved by the enqueuing deployment"),
 });
 export type MessageData = z.infer<typeof MessageData>;
+
+/** The vqs payload, parsed, or `undefined` when it is not JSON. */
+export function readBody(message: MessageData): unknown {
+  try {
+    return JSON.parse(Buffer.from(message.data).toString("utf8")) as unknown;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Extracts the run id from a vqs payload without interpreting the rest of it. */
 export function readRunId(message: MessageData): string | undefined {

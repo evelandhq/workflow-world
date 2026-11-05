@@ -143,6 +143,19 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
         // eve's own workflows, by name (see RUN_GRAPH).
         expect(names).toEqual(expect.arrayContaining([...runGraph]));
 
+        // eve 1.0 asks for single-orchestrator runs, and this World declares the
+        // in-band fence they need, so the session's run is spec 9 and its
+        // orchestrator writes advanced the fence count past `run_created`.
+        const fenced = await pool.query<{ spec_version: number; seq_in_band: number }>(
+          `select r.spec_version, s.seq_in_band
+             from workflow.workflow_runs r
+             join workflow.workflow_event_slots s using (tenant_id)
+            where r.tenant_id = $1 and r.id = $2 and s.run_id = r.id`,
+          [tenantId, sessionId],
+        );
+        expect(fenced.rows[0]?.spec_version).toBe(9);
+        expect(fenced.rows[0]?.seq_in_band).toBeGreaterThan(1);
+
         const graph = await pool.query<{ retention_class: string }>(
           `select retention_class
              from workflow.workflow_runs

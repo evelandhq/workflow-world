@@ -1,5 +1,5 @@
-import { tenantFlag, wakeFlag } from "../dispatch-contract.js";
-import { MessageData, readRunId } from "../message.js";
+import { continuationOf, tenantFlag, wakeFlag } from "../dispatch-contract.js";
+import { MessageData, readBody, readRunId } from "../message.js";
 import type { Pool } from "pg";
 import type { ActivationClient } from "./activation-client.js";
 import { withRenewedLease } from "./lease.js";
@@ -117,6 +117,8 @@ export async function dispatchMessage(
     jobName: string;
     queueName: string;
     attempt: number;
+    /** Every delivery of the message so far, this one included; `attempt` when absent. */
+    deliveryCount?: number;
   },
   deps: DispatcherDeps,
 ): Promise<DispatchOutcome> {
@@ -186,6 +188,7 @@ export async function dispatchMessage(
         queueName: input.queueName,
         messageId: message.messageId,
         attempt: input.attempt,
+        deliveryCount: input.deliveryCount ?? input.attempt,
         body: message.data,
         ...(message.headers ? { headers: message.headers } : {}),
         tenantId: message.tenantId,
@@ -208,10 +211,17 @@ export async function dispatchMessage(
     if (failureKey !== undefined) deps.executorFailures?.reset(failureKey);
     // Enqueued before returning, so a dispatcher crash between the two cannot
     // lose the wake-up. The message id is preserved deliberately: the runtime
-    // uses it as the step-ownership lease.
+    // uses it as the step-ownership lease, and on a spec 9 run as the creator of
+    // the steps and waits a delivery writes. On a spec 9 run
+    // `{ timeoutSeconds: 0 }` is a handoff (`continuationOf`).
     await deps.reenqueue({
       jobName: input.jobName,
-      message: { ...message, attempt: input.attempt + 1 },
+      message: continuationOf(
+        message,
+        { attempt: input.attempt, deliveryCount: input.deliveryCount ?? input.attempt },
+        result.timeoutSeconds,
+        readBody(message),
+      ),
       delaySeconds: result.timeoutSeconds,
     });
     return { type: "rescheduled", timeoutSeconds: result.timeoutSeconds };

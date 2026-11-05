@@ -17,12 +17,15 @@ closed when a World leaves it unset:
 
 - `inBandFence`, which spec 9 (single-orchestrator) runs require: a per-run
   in-band position count, a `snapshot` on `events.list`, and refusal of a stale
-  in-band write with `InBandSupersededError`. This World does not declare it
-  yet, so it creates spec 8 runs. eve 1.0 sets `WORKFLOW_SPEC_VERSION=9` by
-  default; without the fence `mintedSpecVersion()` logs `Ignoring
-WORKFLOW_SPEC_VERSION=9` once and returns 8.
+  in-band write with `InBandSupersededError`. Declared since 0.30.0
+  (`docs/design.md`, In-band writer fence), so `WORKFLOW_SPEC_VERSION=9`, eve
+  1.0's default, creates spec 9 runs; 0.29.0 created spec 8 runs and logged
+  `Ignoring WORKFLOW_SPEC_VERSION=9`. `src/storage.in-band-fence.test.ts` runs
+  upstream's own conformance module for it.
 - `maxConcurrency`, a queue that delivers a spec 9 run's orchestrator messages
-  one at a time. Meaningful only with the fence.
+  one at a time. Declared with the fence: a spec 9 run's orchestrator messages
+  wait in its run queue and none bypasses it, while its step messages keep full
+  parallelism (`runQueueFor` in `src/dispatch-contract.ts`).
 - `atomicStartHook`, `start({ hook })` admission. eve does not use it.
 - `hookResumeDedup` and `resolvedHookResume`, deduplicated and cached hook
   resumes. eve uses them only for signed inbox handles
@@ -30,10 +33,11 @@ WORKFLOW_SPEC_VERSION=9` once and returns 8.
 - `dynamicWorkflowCode`, storing a dynamic run's code. eve does not use it.
 
 Core 5.4 drives a run with one of two runtimes, picked by the run's stamped
-version: `runtime/spec8` for the spec 8 runs this World creates, and
-`runtime/spec9` for single-orchestrator runs. The hook-wake bypass relies on how
-both start step bodies, which `src/core-concurrency-contract.test.ts` pins
-against the installed dist.
+version: `runtime/spec8` for spec 8 runs, and `runtime/spec9` for
+single-orchestrator runs. Runs keep the version they were stamped with, so spec 8
+runs created before 0.30.0 finish on spec 8. The hook-wake bypass applies to
+spec 8 runs only, and relies on how both runtimes start step bodies, which
+`src/core-concurrency-contract.test.ts` pins against the installed dist.
 
 eve moves a session to a fresh workflow run (after a compaction, or onto a newer
 deployment) only when the World declares both `capabilities.hookForceClaim` and
@@ -72,9 +76,9 @@ while this World declared 7 the harness was held on beta.55. It now tracks the
 newest stable harness, 5.0.8, which ships its own runtime bundle on core 5.4.0
 / world 5.1.0 -- the same set eve 1.0.0-rc.5 bundles, by timing rather than by
 constraint; see the exemption in `src/eve-pin-contract.test.ts`. Its
-`resolveData` family (this World's `'skip-step-inputs'` reading) passes, and its
-`inBandFence` and atomic start Hook families are skipped because this World
-declares neither capability. It has
+`resolveData` family (this World's `'skip-step-inputs'` reading) passes, and so
+does its `inBandFence` family since 0.30.0. Run the suite with
+`WORKFLOW_SPEC_VERSION=9` as well, which drives every case on spec 9 runs.
 no force-claim cases; those live in `src/storage.hook-force-claim.test.ts`
 and, end to end, in the e2e suite. The e2e matrix, which runs real eve builds,
 is still what covers the pinned core.

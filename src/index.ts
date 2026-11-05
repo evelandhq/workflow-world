@@ -1,5 +1,5 @@
 import type { Storage, World } from "@workflow/world";
-import { mintedSpecVersion, resolveQueueNamespace } from "@workflow/world";
+import { resolveQueueNamespace } from "@workflow/world";
 import { Pool } from "pg";
 import {
   type EvelandWorldConfig,
@@ -11,6 +11,7 @@ import {
 import { createClient, type Drizzle } from "./drizzle/index.js";
 import { createQueue } from "./queue.js";
 import {
+  worldSpecVersion,
   createEventsStorage,
   createHooksStorage,
   createRunsStorage,
@@ -173,7 +174,7 @@ export function createWorld(
   const drizzle = createClient(pool);
   const queue = createQueue(resolved, pool);
   // See the note on `specVersion` below.
-  const specVersion = mintedSpecVersion();
+  const specVersion = worldSpecVersion();
   const storage = createStorage(drizzle, resolved.tenantId, resolved.queueNamespace, specVersion);
   const streamer = createStreamer(pool, drizzle, resolved.tenantId, {
     compactSnapshots: resolved.compactStreamSnapshots,
@@ -181,9 +182,12 @@ export function createWorld(
 
   return {
     /**
-     * The hook force-claim version (8), or slot identity (6) when
-     * `WORKFLOW_SEALED_LOG=0` opts a deployment out: exactly
-     * `mintedSpecVersion()`, as upstream tells a World to declare. The runtime
+     * The single-orchestrator version (9) when `WORKFLOW_SPEC_VERSION=9` asks
+     * for it, as eve 1.0 does by default, else the hook force-claim version
+     * (8), or slot identity (6) when `WORKFLOW_SEALED_LOG=0` opts a deployment
+     * out: exactly `mintedSpecVersion(env, { inBandFence: true })`
+     * (`worldSpecVersion`), as upstream tells a World with the fence to
+     * declare. The runtime
      * stamps every run it creates with whatever is declared here (`run_created`
      * carries `world.specVersion`) and admits any value in
      * `[SPEC_VERSION_SUPPORTS_SLOT_IDENTITY, SPEC_VERSION_MAX_SUPPORTED]`.
@@ -203,12 +207,12 @@ export function createWorld(
      * ceiling at startup. eve needs the takeover for its session handoffs,
      * so the cap came off.
      *
-     * 9 (single orchestrator) is not declared: it needs the in-band writer
-     * fence (`capabilities.inBandFence`), which this World does not implement
-     * yet. eve 1.0 sets `WORKFLOW_SPEC_VERSION=9` by default, and
-     * `mintedSpecVersion()` called without `{ inBandFence: true }` ignores it
-     * with a warning and returns the default, 8. Any other
-     * `WORKFLOW_SPEC_VERSION` from 6 to 8 is honoured.
+     * 9 (single orchestrator) needs the in-band writer fence, which this World
+     * implements (`capabilities.inBandFence` below), and a queue that delivers
+     * a spec 9 run's orchestrator messages one at a time (`queue.ts`). The
+     * runtime drives runs of every version it admits, each by the version
+     * stamped on it, so spec 8 runs created before the switch finish on spec
+     * 8. Any other `WORKFLOW_SPEC_VERSION` from 6 to 8 is honoured.
      *
      * 7 is implied: its only reader obligation is the `noop` filler a backend
      * emits when it pre-assigns event positions and a writer dies before
@@ -265,6 +269,25 @@ export function createWorld(
        * dispatcher's routing. See docs/design.md.
        */
       deploymentAffinity: true,
+      /**
+       * The in-band writer fence spec 9 runs need (storage.ts, above
+       * `insertEventRow`): a per-run count of in-band positions beside the slot
+       * counter, a `snapshot` on `events.list`, and an in-band write refused
+       * with `InBandSupersededError` before it writes anything when its
+       * expected count is stale. It keeps a run to one writer when two of its
+       * orchestrator invocations overlap. Checked by upstream's own
+       * conformance module (`storage.in-band-fence.test.ts`).
+       */
+      inBandFence: true,
+      /**
+       * The queue half of a spec 9 run's single writer: its orchestrator
+       * messages wait in the run's graphile queue, one delivery at a time,
+       * and none bypasses it, while its step messages and a long wait's timer
+       * hops keep full parallelism (`runQueueFor` in `dispatch-contract.ts`).
+       * The fence above is what makes an overlap the queue still lets through
+       * (a delivery that outlived its dispatch timeout) safe.
+       */
+      maxConcurrency: true,
     },
     ...storage,
     ...streamer,

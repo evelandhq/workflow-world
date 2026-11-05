@@ -14,10 +14,12 @@
  * token. Guessing another tenant's token then resolves to nothing rather than
  * to their hook.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   EntityConflictError,
   HookForceClaimedError,
   HookNotFoundError,
+  InBandSupersededError,
   RunExpiredError,
   RunNotSupportedError,
   TooEarlyError,
@@ -67,6 +69,7 @@ import {
   requiresNewerWorld,
   SPEC_VERSION_LEGACY,
   SPEC_VERSION_MAX_SUPPORTED,
+  SPEC_VERSION_SINGLE_ORCHESTRATOR,
   SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM,
   StepSchema,
   slotToEventId,
@@ -238,6 +241,7 @@ function pgErrorOf(error: unknown): { code?: string; constraint?: string } {
 type EventInsert = typeof Schema.events.$inferInsert;
 type EventInsertDb = Pick<Drizzle, "insert">;
 type EventAllocateDb = Pick<Drizzle, "insert" | "select">;
+type EventFenceDb = Pick<Drizzle, "update" | "select">;
 
 /**
  * Computes the next dense slot inside the INSERT that will occupy it.
@@ -270,16 +274,101 @@ async function allocateEventId(
   return marker ? nextSlotId(tenantId, runId) : `wevt_${legacyEventUlid()}`;
 }
 
+/*
+ * The in-band writer fence (`capabilities.inBandFence`, World spec 9).
+ *
+ * `workflow_event_slots.seq_in_band` counts the positions accepted from
+ * in-band writes (writes by the run's orchestrator), `run_created` included,
+ * so a run starts at `IN_BAND_SEQ_AT_RUN_CREATION` (1). An in-band create is
+ * accepted only when its `expectedSeqInBand` equals the count.
+ *
+ * Several event types update an entity row (the run's status or attributes, a
+ * wait, a step, a hook) ahead of the event insert, so a fenced create runs in
+ * one transaction that first locks the run's slots row (`SELECT ... FOR
+ * UPDATE`) and compares the count: a stale writer is refused before it touches
+ * any row, and of concurrent writers holding the same count only the first
+ * through the lock writes anything; the others find the count moved. The
+ * write's first slot-allocating insert for the run then advances the count in
+ * the same transaction (`insertEventRow`), so a reader never sees the count
+ * include an event it cannot list, and a create that appends nothing (a
+ * duplicate answered with the existing event) leaves it alone. The lock is
+ * held until commit, so the advance cannot miss; it is still conditional on
+ * the expected count, which also covers a resilient `run_started` whose run,
+ * and slots row, the same transaction creates.
+ *
+ * Only in-band writers take the lock: out-of-band writes move only the slot
+ * counter and never wait on it. Upstream's world-postgres 5.1 does the same
+ * with a CTE on the insert; holding the lock through the insert makes the
+ * plain update enough here.
+ */
+type PendingFence = {
+  tenantId: string;
+  runId: string;
+  expected: number;
+  occurredAt?: Date;
+  consumed: boolean;
+};
+
+const pendingFence = new AsyncLocalStorage<PendingFence>();
+
+function supersededMessage(runId: string, expected: number, current: number | undefined) {
+  return `In-band write on run ${runId} expected seqInBand ${String(expected)}, but the run is at ${current === undefined ? "unknown" : String(current)}. Another orchestrator wrote in-band events this one has not seen; stop writing and redeliver.`;
+}
+
+/** Advances the count for a fenced write's first allocated slot. */
+async function advanceFence(db: EventFenceDb, fence: PendingFence): Promise<void> {
+  const advanced = await db
+    .update(Schema.eventSlots)
+    .set({ seqInBand: sql`${Schema.eventSlots.seqInBand} + 1` })
+    .where(
+      and(
+        eq(Schema.eventSlots.tenantId, fence.tenantId),
+        eq(Schema.eventSlots.runId, fence.runId),
+        eq(Schema.eventSlots.seqInBand, fence.expected),
+      ),
+    )
+    .returning({ seqInBand: Schema.eventSlots.seqInBand });
+  if (advanced.length > 0) return;
+  const [current] = await db
+    .select({ seqInBand: Schema.eventSlots.seqInBand })
+    .from(Schema.eventSlots)
+    .where(
+      and(eq(Schema.eventSlots.tenantId, fence.tenantId), eq(Schema.eventSlots.runId, fence.runId)),
+    )
+    .limit(1);
+  // No slots row: a run that predates slot-numbered ids, which the fence does
+  // not cover (its inserts allocate no slot, so this is not reached for it).
+  if (!current) return;
+  throw new InBandSupersededError(
+    supersededMessage(fence.runId, fence.expected, current.seqInBand),
+    { seqInBand: current.seqInBand },
+  );
+}
+
 /**
  * Inserts an event and retries only primary-key collisions from concurrent slot
  * allocation. Other unique violations still surface to the correlated-event
  * dedup translator.
+ *
+ * The first slot-allocating insert of a fenced write for its own run advances
+ * the run's in-band count (see the fence above) and takes the write's
+ * `occurredAt` as its `createdAt`.
  */
 async function insertEventRow(
   db: EventInsertDb,
   values: Omit<EventInsert, "eventId"> & { eventId: string | SQL<string> },
 ): Promise<{ eventId: string; createdAt: Date } | undefined> {
   const allocatesSlot = typeof values.eventId !== "string";
+  const store = pendingFence.getStore();
+  const fence =
+    allocatesSlot &&
+    store !== undefined &&
+    !store.consumed &&
+    store.tenantId === values.tenantId &&
+    store.runId === values.runId
+      ? store
+      : undefined;
+  if (fence?.occurredAt !== undefined) values = { ...values, createdAt: fence.occurredAt };
   for (let attempt = 0; ; attempt++) {
     const [row] = await db
       .insert(Schema.events)
@@ -291,7 +380,13 @@ async function insertEventRow(
         eventId: Schema.events.eventId,
         createdAt: Schema.events.createdAt,
       });
-    if (row) return row;
+    if (row) {
+      if (fence) {
+        fence.consumed = true;
+        await advanceFence(db as unknown as EventFenceDb, fence);
+      }
+      return row;
+    }
     if (!allocatesSlot || attempt >= SLOT_INSERT_MAX_ATTEMPTS) {
       if (!allocatesSlot) return undefined;
       throw new WorkflowWorldError(
@@ -803,6 +898,20 @@ async function handleLegacyEventPostgres(
   }
 }
 
+/**
+ * The spec version this World stamps on the runs it creates: upstream's
+ * `mintedSpecVersion()`, told that this World implements the in-band writer
+ * fence, so `WORKFLOW_SPEC_VERSION=9` (eve 1.0's default) creates spec 9
+ * runs. Unset, it is 8; `6` to `8` are honoured as well.
+ */
+export function worldSpecVersion(env: Record<string, string | undefined> = process.env): number {
+  return mintedSpecVersion(env, { inBandFence: true });
+}
+
+/**
+ * The events storage, with the in-band writer fence (see the note above
+ * `insertEventRow`) around `create` and the fence snapshot on `list`.
+ */
 export function createEventsStorage(
   drizzle: Drizzle,
   tenantId: string,
@@ -811,11 +920,116 @@ export function createEventsStorage(
    * The version the World declares to the runtime (`src/index.ts`). It is what
    * the runtime sends on `run_created`, so it is also the only honest fallback
    * when a caller omits `specVersion`, and what a legacy-run event is stamped
-   * with. Taking it as a parameter rather than re-reading `mintedSpecVersion()`
+   * with. Taking it as a parameter rather than re-reading the environment
    * keeps storage and the declaration from disagreeing when
-   * `WORKFLOW_SEALED_LOG` changes between the two reads.
+   * `WORKFLOW_SPEC_VERSION` changes between the two reads.
    */
-  specVersion: number = mintedSpecVersion(),
+  specVersion: number = worldSpecVersion(),
+): Storage["events"] {
+  const unfenced = createUnfencedEventsStorage(drizzle, tenantId, queueNamespace, specVersion);
+  return {
+    ...unfenced,
+    async create(
+      runId: string | null,
+      data: AnyEventRequest,
+      params?: CreateEventParams,
+    ): Promise<EventResult> {
+      // `run_created` opens the count and is never fenced itself.
+      if (!params?.inBand || !runId || data.eventType === "run_created") {
+        return (unfenced.create as Unfenced["create"])(runId, data, params);
+      }
+      const expected = params.expectedSeqInBand;
+      if (expected === undefined || !Number.isSafeInteger(expected) || expected < 0) {
+        throw new WorkflowWorldError(
+          `An in-band write to run ${runId} must carry a nonnegative integer expectedSeqInBand`,
+          { status: 400 },
+        );
+      }
+      const occurredAt =
+        params.occurredAt !== undefined && !Number.isNaN(+new Date(params.occurredAt))
+          ? new Date(params.occurredAt)
+          : undefined;
+      return drizzle.transaction(async (tx) => {
+        const [row] = await tx
+          .select({ seqInBand: Schema.eventSlots.seqInBand })
+          .from(Schema.eventSlots)
+          .where(and(eq(Schema.eventSlots.tenantId, tenantId), eq(Schema.eventSlots.runId, runId)))
+          .for("update")
+          .limit(1);
+        // No slots row: a run that predates slot-numbered ids (which the fence
+        // does not cover), or a resilient `run_started` whose run this
+        // transaction creates (whose advance checks `expected` itself).
+        if (row && row.seqInBand !== expected) {
+          throw new InBandSupersededError(supersededMessage(runId, expected, row.seqInBand), {
+            seqInBand: row.seqInBand,
+          });
+        }
+        const inTransaction = createUnfencedEventsStorage(
+          tx as unknown as Drizzle,
+          tenantId,
+          queueNamespace,
+          specVersion,
+        );
+        return pendingFence.run(
+          { tenantId, runId, expected, consumed: false, ...(occurredAt ? { occurredAt } : {}) },
+          () => (inTransaction.create as Unfenced["create"])(runId, data, params),
+        );
+      }, SLOT_INSERT_TRANSACTION);
+    },
+    async list(params) {
+      // Read before listing, in one statement: the count and the highest slot.
+      // Every in-band write the count includes committed with its event, so the
+      // listing that follows sees it.
+      const snapshot = await readEventLogSnapshot(drizzle, tenantId, params.runId);
+      const page = await unfenced.list(params);
+      return snapshot ? { ...page, snapshot } : page;
+    },
+  };
+}
+
+/** The overloads of `create`, collapsed: the fenced wrapper forwards whatever it received. */
+type Unfenced = {
+  create(
+    runId: string | null,
+    data: AnyEventRequest,
+    params?: CreateEventParams,
+  ): Promise<EventResult>;
+};
+
+/**
+ * The fence snapshot of a slot-numbered run, or `undefined` for one that
+ * predates slots (no `workflow_event_slots` row).
+ */
+async function readEventLogSnapshot(
+  drizzle: Drizzle,
+  tenantId: string,
+  runId: string,
+): Promise<{ seq: number; seqInBand: number } | undefined> {
+  const bodyFrom = sql.raw(String(EVENT_ID_PREFIX.length + 1));
+  const [row] = await drizzle
+    .select({
+      seqInBand: Schema.eventSlots.seqInBand,
+      seq: sql<string | null>`(
+        select cast(substring(e.id from ${bodyFrom}) as bigint)
+          from ${Schema.events} e
+         where e.tenant_id = ${tenantId} and e.run_id = ${runId}
+           and e.id like ${`${EVENT_ID_PREFIX}%`}
+         order by e.id desc
+         limit 1
+      )`,
+    })
+    .from(Schema.eventSlots)
+    .where(and(eq(Schema.eventSlots.tenantId, tenantId), eq(Schema.eventSlots.runId, runId)))
+    .limit(1);
+  if (!row) return undefined;
+  return { seq: row.seq === null ? 0 : Number(row.seq), seqInBand: row.seqInBand };
+}
+
+function createUnfencedEventsStorage(
+  drizzle: Drizzle,
+  tenantId: string,
+  queueNamespace: string | undefined,
+  specVersion: number,
 ): Storage["events"] {
   /**
    * Stamped on the run at creation and never rewritten, because the run rows are
@@ -1162,6 +1376,14 @@ export function createEventsStorage(
       // "step must exist" ordering guard below doesn't reject it.
       const createsChildEntity = isChildEntityCreationEvent(data);
       const lazyStepStart = createsChildEntity && data.eventType === "step_started";
+      // On a single-orchestrator run (spec 9) an inline step's creation IS its
+      // first `step_started`: the runtime reads the step's name and input off
+      // it and counts it as one position. So the lazy start keeps its input and
+      // writes no synthetic `step_created`, which would take a second position
+      // the orchestrator never accounted for. Spec 8 runs keep both.
+      const startCreatesStep =
+        lazyStepStart &&
+        (currentRun?.specVersion ?? effectiveSpecVersion) >= SPEC_VERSION_SINGLE_ORCHESTRATOR;
 
       // Run terminal state validation
       if (currentRun && isTerminalWorkflowRunStatus(currentRun.status)) {
@@ -1721,6 +1943,7 @@ export function createEventsStorage(
       } else if ("eventData" in data && data.eventData) {
         if (
           data.eventType === "step_started" &&
+          !startCreatesStep &&
           "input" in (data.eventData as Record<string, unknown>)
         ) {
           const { input: _strippedInput, ...rest } = data.eventData as {
@@ -1800,22 +2023,25 @@ export function createEventsStorage(
             // step_started. Because this synthetic event is in the same
             // transaction as the lazy step row and step_started event, we
             // cannot leave behind only one side of that materialization.
-            try {
-              await insertEventRow(tx, {
-                tenantId,
-                runId: effectiveRunId,
-                eventId: await allocateEventId(tx, tenantId, effectiveRunId),
-                correlationId: data.correlationId,
-                eventType: "step_created",
-                eventData: {
-                  stepName: lazyData.stepName,
-                  input: lazyData.input,
-                },
-                specVersion: effectiveSpecVersion,
-              });
-            } catch (error) {
-              if (!isCorrelatedEventUniqueViolation(pgErrorOf(error).constraint, tenantId)) {
-                throw error;
+            // Spec 9 replay reads the creation off the start itself.
+            if (!startCreatesStep) {
+              try {
+                await insertEventRow(tx, {
+                  tenantId,
+                  runId: effectiveRunId,
+                  eventId: await allocateEventId(tx, tenantId, effectiveRunId),
+                  correlationId: data.correlationId,
+                  eventType: "step_created",
+                  eventData: {
+                    stepName: lazyData.stepName,
+                    input: lazyData.input,
+                  },
+                  specVersion: effectiveSpecVersion,
+                });
+              } catch (error) {
+                if (!isCorrelatedEventUniqueViolation(pgErrorOf(error).constraint, tenantId)) {
+                  throw error;
+                }
               }
             }
             stepCreatedLazily = true;

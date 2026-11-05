@@ -374,6 +374,83 @@ describe("postgres queue http execution", () => {
     }
   });
 
+  it("keeps a spec 9 run's step messages out of its run queue and deduplicates them by key", async () => {
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+
+    await queue.queue(
+      "__wkf_workflow_greet",
+      { runId: "wrun_SPEC9", stepId: "step_1", runSpecVersion: 9 },
+      { idempotencyKey: "step-key" },
+    );
+
+    const options = vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2];
+    expect(options).not.toHaveProperty("queueName");
+    expect(options).toEqual(
+      expect.objectContaining({ jobKey: "step-key", jobKeyMode: "unsafe_dedupe" }),
+    );
+  });
+
+  it("serializes a spec 9 run's orchestrator messages, a hook wake included, in its run queue", async () => {
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+    vi.mocked(pool.query).mockClear();
+
+    await queue.queue("__wkf_workflow_greet", {
+      runId: "wrun_SPEC9",
+      runSpecVersion: 9,
+      hookResumeTiming: { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 },
+    });
+
+    // No lock lookup: a spec 9 hook wake never bypasses.
+    expect(vi.mocked(pool.query)).not.toHaveBeenCalled();
+    const options = vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2];
+    expect(options).toEqual(
+      expect.objectContaining({
+        queueName: runQueueName(TENANT, "wrun_SPEC9"),
+        flags: [`project:${TENANT}`],
+      }),
+    );
+  });
+
+  it("reports every delivery and continues a spec 9 handoff under the same attempt", async () => {
+    const seen: Record<string, string>[] = [];
+    vi.mocked(nodeHttpFetch).mockImplementation((async (_url: string, init: RequestInit) => {
+      seen.push(Object.fromEntries(new Headers(init.headers).entries()));
+      return Response.json({ timeoutSeconds: 0 });
+    }) as any);
+    process.env.WORKFLOW_LOCAL_BASE_URL = "https://workflow.example.test";
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+    const task = getTaskHandler(EMBEDDED_JOB_NAME);
+
+    const message = buildMessageData("__wkf_workflow_greet", {
+      runId: "wrun_SPEC9",
+      runSpecVersion: 9,
+    });
+    // The third delivery of this job: two earlier claims failed.
+    await task({ ...message, deliveryOffset: 4 }, { job: { attempts: 3 } } as any);
+
+    expect(seen[0]).toMatchObject({
+      "x-vqs-message-attempt": "3",
+      "x-vqs-message-delivery-count": "7",
+    });
+    const [, continued, options] = vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)!;
+    // The same message on a fresh job, in the run's queue, at once.
+    expect(continued).toEqual(
+      expect.objectContaining({
+        messageId: message.messageId,
+        attempt: 3,
+        attemptOffset: 2,
+        deliveryOffset: 7,
+      }),
+    );
+    expect(options).toEqual(
+      expect.objectContaining({ queueName: runQueueName(TENANT, "wrun_SPEC9") }),
+    );
+    expect(options).not.toHaveProperty("runAt");
+  });
+
   it("enqueues a hook wake past its run's queue while a delivery holds it", async () => {
     const queue = buildQueue(buildConfig(), pool);
     await queue.start();

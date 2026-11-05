@@ -41,6 +41,11 @@ import {
  *     gets to it depends on eve's timing, which no test should wait on.
  *  3. B claims it and runs the runtime's own queued-step path, which must not
  *     start the tool again while A still runs it.
+ *
+ * The scenario is a spec 8 one: on a spec 9 (single-orchestrator) run no hook
+ * wake bypasses the run queue, and the in-band fence is what keeps a second
+ * orchestrator from writing. eve 1.0 asks for spec 9 by default, so the agent
+ * here asks for 8, which this World still stamps on request and serves.
  */
 const baseUrl = process.env.WORKFLOW_WORLD_E2E_URL;
 const adminUrl = process.env.WORKFLOW_WORLD_E2E_ADMIN_URL ?? baseUrl;
@@ -102,6 +107,8 @@ describe.skipIf(!baseUrl)("a long step started by a bypassing wake", () => {
           // vitest sets NODE_ENV=test, under which eve swaps the agent's own
           // model for its mock and the scripted tool call never happens.
           NODE_ENV: "production",
+          // The bypass this exercises exists only on spec 8 runs.
+          WORKFLOW_SPEC_VERSION: "8",
           // Short, so the runtime's own ownership check lets B run the step message;
           // the fence is then the only thing left to refuse it.
           WORKFLOW_INLINE_OWNERSHIP_LEASE_SECONDS: "2",
