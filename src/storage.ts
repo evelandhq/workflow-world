@@ -22,6 +22,7 @@ import {
   InBandSupersededError,
   RunExpiredError,
   RunNotSupportedError,
+  START_HOOK_ADMISSION_REJECTED,
   TooEarlyError,
   WorkflowRunNotFoundError,
   WorkflowWorldError,
@@ -42,6 +43,7 @@ import type {
   PaginatedResponse,
   ResolveData,
   SerializedData,
+  StartHook,
   Step,
   StepWithoutData,
   Storage,
@@ -62,6 +64,7 @@ import {
   isChildEntityCreationEventType,
   isHookEventRequiringExistence,
   isLegacySpecVersion,
+  isStartHookId,
   isTerminalRunEventType,
   isTerminalStepStatus,
   isTerminalWorkflowRunStatus,
@@ -100,9 +103,18 @@ import {
 } from "drizzle-orm";
 import { monotonicFactory } from "ulid";
 import { type Drizzle, Schema } from "./drizzle/index.js";
-import type { SerializedContent } from "./drizzle/schema.js";
+import { HOOK_TOKEN_CLAIM_UNIQUE, type SerializedContent } from "./drizzle/schema.js";
 import { deliveryInFlight } from "./delivery-liveness.js";
 import { resolveRunRetentionForCreation } from "./run-retention-resolution.js";
+import {
+  admittedStartHook,
+  assertStartHookAdmissible,
+  decideStartHookAdmission,
+  runStartHook,
+  type StartHookDecision,
+  type StartHookTx,
+  startHookConflict,
+} from "./start-hook.js";
 import { dedupIndexName } from "./tenant.js";
 import { compact } from "./util.js";
 
@@ -236,6 +248,15 @@ function pgErrorOf(error: unknown): { code?: string; constraint?: string } {
   const direct = error as { code?: string; constraint?: string };
   if (direct?.code) return direct;
   return (error as { cause?: { code?: string; constraint?: string } })?.cause ?? {};
+}
+
+/**
+ * Whether `error` is a second claim of a hook token (migration 0022): another
+ * Hook or a start Hook admission committed its claim first.
+ */
+function isHookTokenClaimViolation(error: unknown): boolean {
+  const pgErr = pgErrorOf(error);
+  return pgErr.code === "23505" && pgErr.constraint === HOOK_TOKEN_CLAIM_UNIQUE;
 }
 
 type EventInsert = typeof Schema.events.$inferInsert;
@@ -412,7 +433,7 @@ async function openEventSlots(db: EventInsertDb, tenantId: string, runId: string
 
 /**
  * Creates a run together with its `run_created` event, or returns `undefined`
- * when the run already exists.
+ * when the run already exists or `admit` declined to create it.
  *
  * One transaction, because the run row is what every other writer keys off: a
  * `run_started` that can see the row skips the resilient-start path and
@@ -428,8 +449,13 @@ async function insertRunWithCreatedEvent(
   drizzle: Drizzle,
   runValues: typeof Schema.runs.$inferInsert,
   event: Pick<EventInsert, "eventData" | "specVersion">,
+  admit?: (tx: StartHookTx) => Promise<boolean>,
 ): Promise<{ run: typeof Schema.runs.$inferSelect; eventId: string; createdAt: Date } | undefined> {
   return drizzle.transaction(async (tx) => {
+    // A start Hook candidate is decided in the transaction that would create
+    // its run, so the decision, the start Hook and the run commit together (or
+    // a refusal commits alone). `false` creates nothing.
+    if (admit && !(await admit(tx))) return undefined;
     const [run] = await tx.insert(Schema.runs).values(runValues).onConflictDoNothing().returning();
     if (!run) return undefined;
     // The marker pins this run to v6 slot identity. Its absence remains the
@@ -1181,6 +1207,16 @@ function createUnfencedEventsStorage(
         }
       }
 
+      // The start Hook (`start({ experimental_hook })`), on either creating
+      // write: the direct `run_created`, or the queued copy's resilient
+      // `run_started`. Checked before anything is written; a refusal is
+      // permanent, so it carries the code that stops the queued copy retrying.
+      const startHook: StartHook | undefined =
+        data.eventType === "run_created" || data.eventType === "run_started"
+          ? ((data as { eventData?: { startHook?: StartHook } }).eventData?.startHook ?? undefined)
+          : undefined;
+      if (startHook) assertStartHookAdmissible(startHook, hookRetentionLimitMs);
+
       // A slot-numbered id is chosen by the INSERT that commits it, so callers
       // await this immediately before writing. Legacy runs receive a ULID.
       let eventId: string | undefined;
@@ -1203,7 +1239,15 @@ function createUnfencedEventsStorage(
       if (data.eventType === "run_created" && runId && runId !== "") {
         const validationError = validateUlidTimestamp(effectiveRunId, "wrun_");
         if (validationError) {
-          throw new WorkflowWorldError(validationError);
+          // A start Hook candidate this old can never be created (the orphan
+          // bound is the same threshold), so its refusal is permanent for both
+          // of its copies.
+          throw new WorkflowWorldError(
+            validationError,
+            startHook
+              ? { status: 400, code: START_HOOK_ADMISSION_REJECTED, reason: "expired" }
+              : undefined,
+          );
         }
       }
 
@@ -1284,6 +1328,11 @@ function createUnfencedEventsStorage(
             // Create run + run_created event atomically. The
             // transaction ensures we never have an orphaned run
             // without its run_created event.
+            //
+            // The queued copy of an atomic start admits its candidate here when
+            // it beats the direct `run_created`; both reach the one decision
+            // recorded for the candidate.
+            let startHookDecision: StartHookDecision | undefined;
             const inserted = await insertRunWithCreatedEvent(
               drizzle,
               {
@@ -1304,6 +1353,7 @@ function createUnfencedEventsStorage(
                 queueNamespace: runQueueNamespace,
                 retentionClass,
                 retentionRootRunId,
+                startHook: startHook && runStartHook(effectiveRunId, startHook),
               },
               {
                 eventData: {
@@ -1315,10 +1365,27 @@ function createUnfencedEventsStorage(
                   allowReservedAttributes: runInputData.allowReservedAttributes,
                   encryptionPublicKey: runInputData.encryptionPublicKey,
                   retentionClass: runInputData.retentionClass,
+                  ...(startHook ? { startHook: admittedStartHook(effectiveRunId, startHook) } : {}),
                 },
                 specVersion: effectiveSpecVersion,
               },
+              startHook &&
+                (async (tx) => {
+                  startHookDecision = await decideStartHookAdmission(
+                    tx,
+                    tenantId,
+                    effectiveRunId,
+                    startHook,
+                    effectiveSpecVersion,
+                  );
+                  return startHookDecision.decision === "accepted" && !startHookDecision.replayed;
+                }),
             );
+            // Thrown only now: the refusal had to commit to be immutable.
+            const decided = startHookDecision as StartHookDecision | undefined;
+            if (startHook && decided?.decision === "rejected") {
+              throw startHookConflict(startHook, decided.conflictingRunId);
+            }
             const createdRun = inserted;
 
             if (createdRun) {
@@ -1586,6 +1653,9 @@ function createUnfencedEventsStorage(
           eventData.retentionClass,
           eventData.attributes,
         );
+        // Atomic start: decide the candidate in the transaction that creates
+        // its run, so the start Hook and the run commit together.
+        let startHookDecision: StartHookDecision | undefined;
         const createdRun = await insertRunWithCreatedEvent(
           drizzle,
           {
@@ -1605,10 +1675,64 @@ function createUnfencedEventsStorage(
             queueNamespace: runQueueNamespace,
             retentionClass,
             retentionRootRunId,
+            startHook: startHook && runStartHook(effectiveRunId, startHook),
           },
-          { eventData, specVersion: effectiveSpecVersion },
+          {
+            // The stored `run_created` names the start Hook's id: the runtime
+            // binds the workflow's `createHook({ token })` to it on every replay.
+            eventData: startHook
+              ? { ...eventData, startHook: admittedStartHook(effectiveRunId, startHook) }
+              : eventData,
+            specVersion: effectiveSpecVersion,
+          },
+          startHook &&
+            (async (tx) => {
+              startHookDecision = await decideStartHookAdmission(
+                tx,
+                tenantId,
+                effectiveRunId,
+                startHook,
+                effectiveSpecVersion,
+              );
+              return startHookDecision.decision === "accepted" && !startHookDecision.replayed;
+            }),
         );
-        // No row back means the run already exists — typically because the
+        const decided = startHookDecision as StartHookDecision | undefined;
+        if (startHook && decided?.decision === "rejected") {
+          // Only a refused candidate creates nothing, and the refusal had to
+          // commit before it could be answered.
+          throw startHookConflict(startHook, decided.conflictingRunId);
+        }
+        if (!createdRun && startHook && decided && decided.decision !== "rejected") {
+          // Accepted earlier (by this call's retry or the queued copy): answer
+          // with that run rather than EntityConflictError. A run created
+          // without a start Hook is answered the same way: its `startHook` is
+          // absent, which `start()` reports as a start that was not idempotent
+          // rather than a refusal.
+          const [existingRun] = await drizzle
+            .select()
+            .from(Schema.runs)
+            .where(and(eq(Schema.runs.tenantId, tenantId), eq(Schema.runs.runId, effectiveRunId)))
+            .limit(1);
+          const [existingEvent] = await drizzle
+            .select({ eventId: Schema.events.eventId, createdAt: Schema.events.createdAt })
+            .from(Schema.events)
+            .where(
+              and(
+                eq(Schema.events.tenantId, tenantId),
+                eq(Schema.events.runId, effectiveRunId),
+                eq(Schema.events.eventType, "run_created"),
+              ),
+            )
+            .limit(1);
+          if (!existingRun || !existingEvent) {
+            // The run was admitted and has since been deleted.
+            throw new WorkflowRunNotFoundError(effectiveRunId);
+          }
+          eventId = existingEvent.eventId;
+          runCreatedAt = existingEvent.createdAt;
+          run = deserializeRunError(compact(existingRun));
+        } else // No row back means the run already exists — typically because the
         // resilient start path (a `run_started` for a run that did not exist yet)
         // won a TOCTOU race and created it.
         //
@@ -1622,12 +1746,13 @@ function createUnfencedEventsStorage(
         // would then see two.
         if (!createdRun) {
           throw new EntityConflictError(`Workflow run "${effectiveRunId}" already exists`);
+        } else {
+          // The event is already in the log: it committed with the run row, so
+          // the generic event INSERT below is skipped.
+          eventId = createdRun.eventId;
+          runCreatedAt = createdRun.createdAt;
+          run = deserializeRunError(compact(createdRun.run));
         }
-        // The event is already in the log: it committed with the run row, so the
-        // generic event INSERT below is skipped.
-        eventId = createdRun.eventId;
-        runCreatedAt = createdRun.createdAt;
-        run = deserializeRunError(compact(createdRun.run));
       }
 
       // Handle run_started event: update run status
@@ -1950,6 +2075,11 @@ function createUnfencedEventsStorage(
             input?: unknown;
           } & Record<string, unknown>;
           storedEventData = rest;
+        } else if (data.eventType === "run_created" && startHook) {
+          storedEventData = {
+            ...(data.eventData as Record<string, unknown>),
+            startHook: admittedStartHook(effectiveRunId, startHook),
+          };
         } else {
           storedEventData = data.eventData;
         }
@@ -2313,6 +2443,14 @@ function createUnfencedEventsStorage(
           force?: boolean;
         };
         const hookId = data.correlationId!;
+        // A run's start Hook is created by its admission (`run_created` stands
+        // for its creation), never by a `hook_created`.
+        if (isStartHookId(effectiveRunId, hookId)) {
+          throw new WorkflowWorldError(
+            `Hook "${hookId}" is the start Hook of run "${effectiveRunId}", created by its admission`,
+            { status: 400 },
+          );
+        }
 
         // Check for duplicate token using prepared statement
         const [existingHook] = await getHookByToken.execute({
@@ -2362,6 +2500,10 @@ function createUnfencedEventsStorage(
           isWebhook: eventData.isWebhook,
           isSystem: eventData.isSystem ?? false,
           tokenRetentionUntil: eventData.tokenRetentionUntil,
+          // Every Hook claims its token: the claim index, not the read above,
+          // decides between concurrent creations (another run's Hook, or a
+          // start Hook admission).
+          claimsToken: true,
           ...(claimedFrom !== undefined ? { claimedFrom } : {}),
         });
 
@@ -2373,7 +2515,10 @@ function createUnfencedEventsStorage(
         // locks this row, and its lock waits for this commit. (These used to be
         // two statements; the orphaned-row recovery below exists for rows an
         // older World left behind between them.)
-        const insertFreshHook = async () => {
+        //
+        // Answers whether this creation claimed the token: false when another
+        // Hook claimed it first, in which case nothing was written.
+        const insertFreshHook = async (): Promise<boolean> => {
           const created = await journaledHookCreated(() =>
             drizzle.transaction(async (tx) => {
               await tx
@@ -2389,7 +2534,9 @@ function createUnfencedEventsStorage(
               const [hookValue] = await tx
                 .insert(Schema.hooks)
                 .values(hookRow())
-                .onConflictDoNothing()
+                // Only a duplicate of this same hook (its id) is skipped; a
+                // claim conflict raises, and is answered below.
+                .onConflictDoNothing({ target: [Schema.hooks.tenantId, Schema.hooks.hookId] })
                 .returning();
               const eventValue = await insertEventRow(tx, {
                 tenantId,
@@ -2407,13 +2554,37 @@ function createUnfencedEventsStorage(
               }
               return { hookValue, eventValue };
             }, SLOT_INSERT_TRANSACTION),
-          );
+          ).catch((err: unknown) => {
+            if (isHookTokenClaimViolation(err)) return undefined;
+            throw err;
+          });
+          if (!created) return false;
           if (created.hookValue) {
             created.hookValue.metadata ||= created.hookValue.metadataJson;
             hook = HookSchema.parse(compact(created.hookValue));
           }
           eventId = created.eventValue.eventId;
           value = { createdAt: created.eventValue.createdAt };
+          return true;
+        };
+        // A creation that lost the token's claim to a concurrent one: the
+        // winner has committed (the unique insert waited for it), so it is
+        // visible now.
+        const answerLostClaim = async (): Promise<void> => {
+          const [owner] = await getHookByToken.execute({ token: eventData.token });
+          if (!owner) {
+            throw new WorkflowWorldError(
+              `The hook token of run "${effectiveRunId}" changed owner while being claimed; retry`,
+              { status: 503 },
+            );
+          }
+          if (owner.runId === effectiveRunId && owner.hookId === hookId) {
+            // A concurrent write of this same hook_created committed first: a
+            // duplicate, not a conflict (see the same-hook path below).
+            throw new EntityConflictError(`Hook "${hookId}" already created`);
+          }
+          forceRefusedReason = null;
+          conflictingRunId = owner.runId;
         };
 
         if (existingHook) {
@@ -2643,7 +2814,10 @@ function createUnfencedEventsStorage(
                 try {
                   return await takeoverAttempt();
                 } catch (err) {
-                  if (err !== OWNER_CHANGED) throw err;
+                  // A start Hook admission (or another creation) that claimed
+                  // the token between the victim's delete and our insert has
+                  // changed the owner too: re-resolve it.
+                  if (err !== OWNER_CHANGED && !isHookTokenClaimViolation(err)) throw err;
                   if (attempt >= MAX_OWNER_CHANGES) {
                     throw new WorkflowWorldError(
                       `Hook token "${eventData.token}" changed owner ${String(attempt + 1)} times while being force-claimed; retry`,
@@ -2657,7 +2831,7 @@ function createUnfencedEventsStorage(
               case "free":
                 // The token was released between the read above and the
                 // transaction: an ordinary creation after all.
-                await insertFreshHook();
+                if (!(await insertFreshHook())) await answerLostClaim();
                 break;
               case "owned":
                 throw new EntityConflictError(`Hook "${hookId}" already created`);
@@ -2676,55 +2850,55 @@ function createUnfencedEventsStorage(
                 break;
             }
           }
+        } else if (!(await insertFreshHook())) {
+          await answerLostClaim();
+        }
 
-          if (forceRefusedReason !== undefined) {
-            // Cross-hook / cross-run conflict: a different (runId, hookId) holds
-            // this token, or a forced creation the takeover above declined.
-            // Create a hook_conflict event instead of throwing 409 — this lets
-            // the workflow continue and fail gracefully when the hook is awaited.
-            const conflictEventData = {
-              token: eventData.token,
-              conflictingRunId,
-              ...(forceRefusedReason !== null && { forceRefusedReason }),
-            };
-            const conflictValue = await insertEventRow(drizzle, {
-              tenantId,
-              runId: effectiveRunId,
-              eventId: await getEventId(),
-              correlationId: hookId,
-              eventType: "hook_conflict",
-              eventData: conflictEventData,
-              specVersion: effectiveSpecVersion,
-            });
+        if (forceRefusedReason !== undefined) {
+          // Cross-hook / cross-run conflict: a different (runId, hookId) holds
+          // this token, or a forced creation the takeover above declined.
+          // Create a hook_conflict event instead of throwing 409 — this lets
+          // the workflow continue and fail gracefully when the hook is awaited.
+          const conflictEventData = {
+            token: eventData.token,
+            conflictingRunId,
+            ...(forceRefusedReason !== null && { forceRefusedReason }),
+          };
+          const conflictValue = await insertEventRow(drizzle, {
+            tenantId,
+            runId: effectiveRunId,
+            eventId: await getEventId(),
+            correlationId: hookId,
+            eventType: "hook_conflict",
+            eventData: conflictEventData,
+            specVersion: effectiveSpecVersion,
+          });
 
-            if (!conflictValue) {
-              throw new EntityConflictError(
-                `hook_conflict for run "${effectiveRunId}" could not be created`,
-              );
-            }
-            const conflictEventId = conflictValue.eventId;
-            eventId = conflictEventId;
-
-            const conflictResult = {
-              eventType: "hook_conflict" as const,
-              correlationId: hookId,
-              eventData: conflictEventData,
-              ...conflictValue,
-              runId: effectiveRunId,
-              eventId: conflictEventId,
-            };
-            const parsedConflict = EventSchema.parse(conflictResult);
-            const resolveData = params?.resolveData ?? "all";
-            return {
-              event: stripEventDataRefs(parsedConflict, resolveData),
-              run,
-              step,
-              hook: undefined,
-              ...(run ? { maxEvents: getMaxEventsPerRun() } : {}),
-            };
+          if (!conflictValue) {
+            throw new EntityConflictError(
+              `hook_conflict for run "${effectiveRunId}" could not be created`,
+            );
           }
-        } else {
-          await insertFreshHook();
+          const conflictEventId = conflictValue.eventId;
+          eventId = conflictEventId;
+
+          const conflictResult = {
+            eventType: "hook_conflict" as const,
+            correlationId: hookId,
+            eventData: conflictEventData,
+            ...conflictValue,
+            runId: effectiveRunId,
+            eventId: conflictEventId,
+          };
+          const parsedConflict = EventSchema.parse(conflictResult);
+          const resolveData = params?.resolveData ?? "all";
+          return {
+            event: stripEventDataRefs(parsedConflict, resolveData),
+            run,
+            step,
+            hook: undefined,
+            ...(run ? { maxEvents: getMaxEventsPerRun() } : {}),
+          };
         }
       }
 

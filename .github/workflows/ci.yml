@@ -141,11 +141,12 @@ jobs:
         # Mirrors the enabled entries in e2e-tests/eve-versions.mts. Keep them in
         # step — the file is what the suite reads; this list is only what CI
         # pays for. Eveland's window is the single line 1.0.x, verified at
-        # 1.0.0-rc.5, which bundles the Workflow 5.4 runtime the pins here
+        # 1.0.0-rc.6, which bundles the Workflow 5.4 runtime the pins here
         # follow (core 5.4.0 / world 5.1.0). Its sessions force-claim their
         # hook tokens on handoff (`capabilities.hookForceClaim`,
-        # e2e-tests/session-handoff.test.mts).
-        eve: ["1.0.0-rc.5"]
+        # e2e-tests/session-handoff.test.mts) and start with an atomic start
+        # Hook (`capabilities.atomicStartHook`).
+        eve: ["1.0.0-rc.6"]
     services:
       postgres:
         image: postgres:17-alpine

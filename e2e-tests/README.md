@@ -47,7 +47,7 @@ assertion about _this_ package.
 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
 
 # Run one enabled version, as each CI matrix job does.
-EVE_VERSION=1.0.0-rc.5 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
+EVE_VERSION=1.0.0-rc.6 WORKFLOW_WORLD_E2E_URL=postgres://user:pass@127.0.0.1:5432/postgres pnpm run test:e2e
 ```
 
 The URL is used both to create the per-version database and, rewritten, to connect
@@ -59,7 +59,7 @@ Each enabled eve version costs an `npm install` plus a full `eve build`, so
 `eve-versions.mts` enables them deliberately rather than all at once. Eveland's
 supported window comes from its `packages/core/src/eve-compatibility.ts`; it is
 currently the single line 1.0.x, and this package pins the `@workflow/*` set
-1.0.0-rc.5 bundles, the Workflow 5.4 runtime (core 5.4.0, world 5.1.0,
+1.0.0-rc.6 bundles, the Workflow 5.4 runtime (core 5.4.0, world 5.1.0,
 world-local 5.2.1). A minor does not reliably identify a `@workflow/*` set, so
 the entries name exact patches; `eve-versions.mts` records why each one earns
 its install. eve moves a session to a fresh run by force-claiming its hook

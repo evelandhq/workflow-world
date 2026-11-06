@@ -3,6 +3,7 @@ import {
   type Hook,
   type HookClaimedFrom,
   type SerializedData,
+  type StartHook,
   type Step,
   StepStatusSchema,
   type Wait,
@@ -29,6 +30,9 @@ import { Cbor, type Cborized } from "./cbor.js";
 import type { RunRetentionClass } from "../run-retention-policy.js";
 
 export const schema = pgSchema("workflow");
+
+/** The index a second claim of one hook token violates (migration 0022). */
+export const HOOK_TOKEN_CLAIM_UNIQUE = "workflow_hooks_token_claim_unique";
 
 function mustBeMoreThanOne<T>(t: T[]) {
   return t as [T, ...T[]];
@@ -72,6 +76,9 @@ export type SerializedContent = any[];
  * against another tenant's row, which both breaks the write and leaks the
  * existence of that row.
  */
+/** The start Hook a run row keeps: `run.startHook`, without its metadata. */
+export type RunStartHook = Omit<StartHook, "metadata"> & { hookId: string };
+
 export const runs = schema.table(
   "workflow_runs",
   {
@@ -126,6 +133,12 @@ export const runs = schema.table(
     compactAfter: timestamp("compact_after"),
     expireAfter: timestamp("expire_after"),
     detailExpireAfter: timestamp("detail_expire_after"),
+    /**
+     * The start Hook the run was admitted with (`start({ experimental_hook })`),
+     * without its metadata, echoed as `run.startHook`. NULL for a run started
+     * without one. See `start-hook.ts`.
+     */
+    startHook: Cbor<RunStartHook>()("start_hook_cbor"),
   },
   (tb) => [
     primaryKey({ columns: [tb.tenantId, tb.runId] }),
@@ -284,6 +297,15 @@ export const hooks = schema.table(
      * for every ordinary hook. See the hook_created branch of storage.ts.
      */
     claimedFrom: Cbor<HookClaimedFrom>()("claimed_from"),
+    /**
+     * This row's claim on `token` is unique within the tenant: at most one row
+     * per token has it (`workflow_hooks_token_claim_unique`), so two start Hook
+     * admissions racing for a token, or an admission and another run's
+     * `createHook`, conflict on the insert instead of both winning. Every Hook
+     * written since migration 0022 sets it; rows written before it do not, so
+     * the index cannot fail on existing data.
+     */
+    claimsToken: boolean("claims_token").notNull().default(false),
   },
   (tb) => [
     primaryKey({ columns: [tb.tenantId, tb.hookId] }),
@@ -292,6 +314,32 @@ export const hooks = schema.table(
     // 2704 bytes, and hook tokens carry model-issued tool-call ids of unbounded
     // length. Lookups must filter on `md5(token)` to use it (migration 0018).
     index("workflow_hooks_tenant_token_md5_index").on(tb.tenantId, sql`md5(${tb.token})`),
+    // A digest for the same reason; sha256 because this one decides ownership
+    // (migration 0022).
+    uniqueIndex(HOOK_TOKEN_CLAIM_UNIQUE)
+      .on(tb.tenantId, sql`workflow.hook_token_digest(${tb.token})`)
+      .where(sql`${tb.claimsToken}`),
+  ],
+);
+
+/**
+ * One immutable accept-or-reject decision per start Hook candidate run, written
+ * in the transaction that creates an accepted run (`start-hook.ts`). Rows
+ * older than every candidate window are deleted as admissions go.
+ */
+export const startHookAdmissions = schema.table(
+  "workflow_start_hook_admissions",
+  {
+    tenantId: varchar("tenant_id").notNull(),
+    runId: varchar("run_id").notNull(),
+    token: varchar("token").notNull(),
+    decision: varchar("decision").$type<"accepted" | "rejected">().notNull(),
+    conflictingRunId: varchar("conflicting_run_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (tb) => [
+    primaryKey({ columns: [tb.tenantId, tb.runId] }),
+    index("workflow_start_hook_admissions_created_at_index").on(tb.createdAt),
   ],
 );
 

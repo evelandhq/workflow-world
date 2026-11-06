@@ -379,6 +379,59 @@ CTE on the event insert; holding the slots row lock through the insert makes a
 plain conditional update enough here. `src/storage.in-band-fence.test.ts` runs
 upstream's own conformance module against it.
 
+### Atomic start Hook
+
+`start(workflow, args, { experimental_hook: { token } })` admits a run together
+with a Hook on `token`, and the World declares `capabilities.atomicStartHook`.
+eve 1.0.0-rc.6 starts every session this way, with the session's channel
+address as the token, so two first messages racing to one address reach one
+session; it refuses to start a session on a World that does not declare it.
+
+`start()` publishes the candidate's queue message and then writes `run_created`;
+the queued copy writes a resilient `run_started` carrying the same
+`startHook`. Either may arrive first, so both decide in the transaction that
+would create the run (`decideStartHookAdmission`, `src/start-hook.ts`). The
+first attempt for a candidate run id records one immutable decision in
+`workflow_start_hook_admissions` (migration 0022), which every later attempt,
+through either path, returns:
+
+- accepted: the run, its `run_created` (naming the start Hook) and the start
+  Hook commit together. The start Hook is an ordinary `workflow_hooks` row with
+  hook id `startHookId(runId)` and no `hook_created` of its own, so it resolves
+  by token and takes deliveries while the run is still pending, and from then on
+  follows the ordinary Hook lifecycle: disposal, the run's end, retention and
+  force-claim. A repeat returns the run rather than `EntityConflictError`.
+- rejected: nothing but the decision is written, and the refusal is
+  `HookConflictError` naming the owner, thrown only after the decision commits.
+
+Every Hook row written from 0022 on claims its token (`claims_token`), and a
+partial unique index allows one claiming row per token in a tenant, so the
+insert, not the preceding read, decides between two admissions, or between an
+admission and another run's `createHook`. A plain creation that loses the
+claim answers `hook_conflict` like any other conflict. The index keys on
+`workflow.hook_token_digest(token)`, a sha256, because a token can run to
+several kilobytes (migration 0018); rows written before 0022 claim nothing, so
+the index cannot fail on existing data. Past the 24h orphan bound
+(`START_HOOK_CANDIDATE_MAX_AGE_MS`) a candidate is refused permanently with
+`START_HOOK_ADMISSION_REJECTED`, which stops its queued copy retrying, and
+decisions older than that are deleted as admissions go.
+
+Older Worlds can share the database: Eveland bundles a World into each
+Release, and only the deployment that created a run writes to it. A candidate's
+queued copy is therefore handled by the World that admitted it, never by one
+that would create the run without its start Hook. An older World leaves
+`claims_token` false and never reads the new columns; its by-token read still
+finds a start Hook as the token's owner, so only a creation of its own racing an
+admission for the same token in the same instant is unprotected, as it was
+between any two creations before 0022.
+
+This is upstream world-postgres 5.1.1's implementation, scoped by tenant. Its
+admission, Hook row and run commit in one transaction, so the orphan states a
+World that admits in several writes must handle (a claim with no run yet) do
+not exist here. `src/storage.atomic-start-hook.test.ts` runs upstream's own
+conformance module against it; the five cases that stage those states are
+skipped.
+
 ## Data model
 
 ### The tenancy column is `tenant_id`
@@ -391,16 +444,17 @@ meaning and is not read here.
 
 ### Tables
 
-| table                         | partitioned | role                                                            |
-| ----------------------------- | ----------- | --------------------------------------------------------------- |
-| `workflow_runs`               | no          | the dispatcher's index: tenant, deployment, status, attributes  |
-| `workflow_steps`              | no          | promote to partitioned if it outgrows runs — same recipe        |
-| `workflow_hooks`              | no          | plus `token_retention_until`, and `claimed_from` for a takeover |
-| `workflow_waits`              | no          | `resume_at` is the sleeping timer; graphile's `run_at` fires it |
-| `workflow_events`             | LIST        | append-heavy, and the only write path for run state             |
-| `workflow_stream_chunks`      | LIST        | legacy logical rows plus v2 packed physical blocks              |
-| `workflow_stream_checkpoints` | no          | retired: no longer written, kept until a migration drops it     |
-| `dispatch_dead_letters`       | no          | platform-owned; see [Dead letters](#dead-letters)               |
+| table                            | partitioned | role                                                            |
+| -------------------------------- | ----------- | --------------------------------------------------------------- |
+| `workflow_runs`                  | no          | the dispatcher's index: tenant, deployment, status, attributes  |
+| `workflow_steps`                 | no          | promote to partitioned if it outgrows runs — same recipe        |
+| `workflow_hooks`                 | no          | plus `token_retention_until`, `claimed_from`, `claims_token`    |
+| `workflow_waits`                 | no          | `resume_at` is the sleeping timer; graphile's `run_at` fires it |
+| `workflow_events`                | LIST        | append-heavy, and the only write path for run state             |
+| `workflow_stream_chunks`         | LIST        | legacy logical rows plus v2 packed physical blocks              |
+| `workflow_stream_checkpoints`    | no          | retired: no longer written, kept until a migration drops it     |
+| `workflow_start_hook_admissions` | no          | one decision per start Hook candidate; kept for 25 hours        |
+| `dispatch_dead_letters`          | no          | platform-owned; see [Dead letters](#dead-letters)               |
 
 `tenant_id` leads the primary key on every one of them, including the
 unpartitioned tables where Postgres does not require it. Run and step ids come
@@ -440,7 +494,9 @@ legacy stream-retention sweep uses the partial expression index on
 `coalesce(completed_at, updated_at), tenant_id, id`; deadline-driven maintenance
 uses the `compact_after`, `expire_after`, and `detail_expire_after` indexes, then
 the `(tenant_id, retention_root_run_id, status)` index to validate whole-lineage
-eligibility.
+eligibility. `workflow_hooks (tenant_id, hook_token_digest(token)) WHERE
+claims_token` is unique: it is what makes a token's owner one row (see
+[Atomic start Hook](#atomic-start-hook)).
 
 graphile's own tables live in the same database, in their own schema, untouched.
 
