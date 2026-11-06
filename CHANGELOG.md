@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.30.0...workflow-world-v0.31.0) (2026-11-06)
+
+
+### Features
+
+* admit atomic start hooks, which eve 1.0.0-rc.6 needs to start a session ([#129](https://github.com/evelandhq/workflow-world/issues/129)) ([6ae25ca](https://github.com/evelandhq/workflow-world/commit/6ae25ca4aeed3791658e8cbc636c6c456f5684e0))
+
 ## [0.30.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.29.0...workflow-world-v0.30.0) (2026-11-05)
 
 
