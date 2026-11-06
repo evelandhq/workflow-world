@@ -2,7 +2,7 @@
 
 An eve release is almost never a reason to do anything here. What matters is not
 that eve shipped, but whether the `@workflow/*` set it bundles moved. Eveland's
-supported window is the single line 1.0.x, verified at 1.0.0-rc.5, and the pins
+supported window is the single line 1.0.x, verified at 1.0.0-rc.6, and the pins
 here follow the set that release bundles: core 5.4.0, world 5.1.0, world-local
 5.2.1, errors 5.1.0 and utils 5.0.2. eve 1.0 no longer installs that set as
 dependencies. It bundles it under `dist/src/compiled/@workflow` and records each
@@ -10,7 +10,10 @@ version in `dist/src/compiled/.vendor-stamp.json`, which is what
 `src/eve-pin-contract.test.ts` and `scripts/eve-pin-drift.mjs` read.
 `e2e-tests/eve-versions.mts` is the table of record. Exact patches still matter:
 Workflow pins have moved within an eve line before (1.0.0-rc.3 and rc.5 are the
-latest examples), so a line is not a set.
+latest examples), so a line is not a set. A release can also start using a
+capability of the same set: rc.6 bundles exactly rc.5's Workflow runtime, but
+starts every session with an atomic start Hook and refuses a World that does not
+declare `atomicStartHook`.
 
 World 5.1.0 adds only optional members, each behind a capability that fails
 closed when a World leaves it unset:
@@ -26,7 +29,13 @@ closed when a World leaves it unset:
   one at a time. Declared with the fence: a spec 9 run's orchestrator messages
   wait in its run queue and none bypasses it, while its step messages keep full
   parallelism (`runQueueFor` in `src/dispatch-contract.ts`).
-- `atomicStartHook`, `start({ hook })` admission. eve does not use it.
+- `atomicStartHook`, `start({ experimental_hook })` admission: the run is
+  admitted together with a Hook on the given token, so a duplicate start is
+  refused with `HookConflictError` naming the owner. eve 1.0.0-rc.6 starts every
+  session this way, claiming its channel address, and fails to start one on a
+  World that does not declare it. Declared since 0.31.0 (`docs/design.md`,
+  Atomic start Hook); `src/storage.atomic-start-hook.test.ts` runs upstream's
+  own conformance module for it.
 - `hookResumeDedup` and `resolvedHookResume`, deduplicated and cached hook
   resumes. eve uses them only for signed inbox handles
   (`EVE_INBOX_HANDLE_SECRET`); without them it resolves the hook by token.
@@ -74,7 +83,7 @@ The conformance harness moved with it. `@workflow/world-testing` from beta.56
 on asserts every run is stamped at least what its own runtime mints (8), so
 while this World declared 7 the harness was held on beta.55. It now tracks the
 newest stable harness, 5.0.8, which ships its own runtime bundle on core 5.4.0
-/ world 5.1.0 -- the same set eve 1.0.0-rc.5 bundles, by timing rather than by
+/ world 5.1.0 -- the same set eve 1.0.0-rc.6 bundles, by timing rather than by
 constraint; see the exemption in `src/eve-pin-contract.test.ts`. Its
 `resolveData` family (this World's `'skip-step-inputs'` reading) passes, and so
 does its `inBandFence` family since 0.30.0. Run the suite with

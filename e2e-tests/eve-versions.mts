@@ -5,10 +5,10 @@
  *
  * Eveland supports one eve line, 1.0.x. eve 1.0 no longer installs the
  * Workflow runtime as dependencies: it bundles it, and records the set in
- * `dist/src/compiled/.vendor-stamp.json`. 1.0.0-rc.5 bundles the Workflow 5.4
- * runtime the pins here follow:
+ * `dist/src/compiled/.vendor-stamp.json`. 1.0.0-rc.6 bundles the Workflow 5.4
+ * runtime the pins here follow, the same set as rc.5:
  *
- * | package                 | 1.0.0-rc.5 |
+ * | package                 | 1.0.0-rc.6 |
  * | ----------------------- | ---------- |
  * | `@workflow/core`        | 5.4.0      |
  * | `@workflow/world`       | 5.1.0      |
@@ -21,7 +21,10 @@
  * `capabilities.inBandFence`, and spec 8 runs on one that does not. It moves a
  * session to a fresh run by force-claiming the session's hook tokens
  * (`capabilities.hookForceClaim`, `session-handoff.test.mts`) and reads
- * `capabilities.deploymentAffinity`.
+ * `capabilities.deploymentAffinity`. From rc.6 it starts every session with
+ * an atomic start Hook on the session's channel address
+ * (`capabilities.atomicStartHook`) and refuses to start one on a World that
+ * does not declare it.
  *
  * Exact patches matter because Workflow pins move within a line: eve 1.0.0-rc.3
  * moved them, and so did rc.5. Each enabled entry costs an npm install plus a
@@ -34,7 +37,7 @@ export type EveVersion = {
   enabled: boolean;
 };
 
-export const EVE_VERSIONS: readonly EveVersion[] = [{ version: "1.0.0-rc.5", enabled: true }];
+export const EVE_VERSIONS: readonly EveVersion[] = [{ version: "1.0.0-rc.6", enabled: true }];
 
 const eveVersionUnderTest = process.env.EVE_VERSION;
 

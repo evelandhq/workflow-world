@@ -156,7 +156,7 @@ describe("@workflow/* pins track the installed eve", () => {
     // stamped at least `mintedSpecVersion()`, which is 8. With force-claim
     // implemented the World declares 8 (see `specVersion` in src/index.ts), and
     // the harness tracks the newest stable release. 5.0.8 bundles core 5.4.0 /
-    // world 5.1.0, the same set eve 1.0.0-rc.5 bundles, but that is timing, not
+    // world 5.1.0, the same set eve 1.0.0-rc.6 bundles, but that is timing, not
     // a constraint. The real-eve e2e is what exercises the pinned core.
     "@workflow/world-testing": "test-only harness; ships its own runtime bundle",
   };

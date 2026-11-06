@@ -241,6 +241,16 @@ export function createWorld(
        */
       hookRetention: { active: true },
       /**
+       * `start(workflow, args, { experimental_hook })` admits the run together
+       * with a Hook on the given token, in one transaction (storage.ts and
+       * start-hook.ts): one immutable decision per candidate run, a duplicate
+       * start refused with `HookConflictError` naming the owner, and the start
+       * Hook resumable from the moment `run_created` returns. eve
+       * 1.0.0-rc.6 starts every session this way, claiming its channel address,
+       * and refuses to start one on a World that does not declare this.
+       */
+      atomicStartHook: { active: true },
+      /**
        * `createHook({ experimental_force: true })` takes a token over from the
        * run that holds it instead of answering `hook_conflict`
        * (storage.ts, hook_created): the victim's `hook_disposed{forceClaimedBy}`,

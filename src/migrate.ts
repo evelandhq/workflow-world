@@ -148,6 +148,9 @@ export async function dropTenantPartitions(pool: Pool, tenantId: string): Promis
   await pool.query("delete from workflow.workflow_stream_checkpoints where tenant_id = $1", [
     tenantId,
   ]);
+  await pool.query("delete from workflow.workflow_start_hook_admissions where tenant_id = $1", [
+    tenantId,
+  ]);
 }
 
 export async function tenantPartitionsExist(pool: Pool, tenantId: string): Promise<boolean> {

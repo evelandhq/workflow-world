@@ -15,8 +15,8 @@ allowBuilds:
 # needed at two versions takes one entry with a version union (`a || b`): a
 # second `@workflow/world@...` line would be silently ignored.
 minimumReleaseAgeExclude:
-  - eve@1.0.0-rc.5
-  # One @workflow/* set: the Workflow 5.4 runtime eve 1.0.0-rc.5 bundles (core
+  - eve@1.0.0-rc.6
+  # One @workflow/* set: the Workflow 5.4 runtime eve 1.0.0-rc.6 bundles (core
   # 5.4.0 / world 5.1.0 / world-local 5.2.1 / errors 5.1.0; src/eve-pin-contract
   # .test.ts pins this package to it). The conformance harness,
   # @workflow/world-testing 5.0.8, ships its own runtime bundle on the same set;
