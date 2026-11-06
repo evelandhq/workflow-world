@@ -355,7 +355,11 @@ event it cannot list, and a write that appends nothing (a duplicate answered
 with the existing event) leaves it alone. Out-of-band writes (a background
 step, `resumeHook()`, `cancel()`) never take the lock and never move the count.
 `events.list` reads `{ seq, seqInBand }` in one statement before the page, which
-is where an orchestrator takes its count from.
+is where an orchestrator takes its count from. If creation commits between
+these reads, the first query can miss the slot marker while the page already
+contains slot-numbered events. The reader then reads the snapshot and page
+again, in that order: attaching a newer count to the old page could hide an
+in-band event the orchestrator has not consumed.
 
 Two smaller spec 9 rules ride with it. An inline step's creation is its first
 `step_started`, which keeps its input, and no synthetic `step_created` is

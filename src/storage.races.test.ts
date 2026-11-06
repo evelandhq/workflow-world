@@ -603,12 +603,12 @@ describe.skipIf(!testUrl)("concurrent entity-creation races", () => {
 });
 
 /**
- * Resolves once, the first time `pool` is about to send a statement matching
- * `pattern`, and holds that statement until `release()` is called. Drizzle
+ * Resolves once, before (or after) the first statement matching `pattern`, and
+ * holds that statement's progress until `release()` is called. Drizzle
  * sends plain statements through `pool.query` and transactional ones through a
  * checked-out client, so both are intercepted.
  */
-function holdFirstStatement(pool: Pool, pattern: RegExp) {
+function holdFirstStatement(pool: Pool, pattern: RegExp, phase: "before" | "after" = "before") {
   let reached!: () => void;
   let release!: () => void;
   const atGate = new Promise<void>((resolve) => (reached = resolve));
@@ -621,8 +621,10 @@ function holdFirstStatement(pool: Pool, pattern: RegExp) {
     (async (...args: any[]) => {
       if (armed && pattern.test(textOf(args[0]))) {
         armed = false;
+        const result = phase === "after" ? await original.apply(self, args) : undefined;
         reached();
         await released;
+        if (phase === "after") return result;
       }
       return original.apply(self, args);
     }) as unknown as T;
@@ -688,6 +690,78 @@ describe.skipIf(!testUrl)("run_created vs. cross-replica run_started", () => {
     await clearTenantRows().catch(() => {});
     await dropTenantPartitions(admin, TENANT_START).catch(() => {});
     await admin?.end().catch(() => {});
+  });
+
+  it("returns a fence snapshot when creation commits between the snapshot and event-page reads", async () => {
+    const creator = createEventsStorage(createClient(creatorPool), TENANT_START, undefined, 9);
+    const delivery = createEventsStorage(createClient(deliveryPool), TENANT_START, undefined, 9);
+    const runId = `wrun_${ulid()}`;
+
+    // The first snapshot query sees no run. Hold the event-page query until a
+    // different replica commits the run, slot marker and run_created together.
+    const gate = holdFirstStatement(
+      deliveryPool,
+      /^select "tenant_id", "id", "type".*from "workflow"\."workflow_events"/i,
+    );
+    const listing = delivery.list({ runId, specVersion: 9 });
+    try {
+      await gate.atGate;
+      await creator.create(runId, {
+        eventType: "run_created",
+        specVersion: 9,
+        eventData: {
+          deploymentId: "deployment-123",
+          workflowName: "test-workflow",
+          input: new Uint8Array(),
+        },
+      });
+    } finally {
+      gate.release();
+    }
+
+    const log = await listing;
+    expect(log.data.map((event) => event.eventType)).toEqual(["run_created"]);
+    // A spec 9 orchestrator rejects a nonempty log without this snapshot,
+    // before it can execute any workflow code.
+    expect(log.snapshot).toEqual({ seq: 1, seqInBand: 1 });
+  });
+
+  it("does not attach a newer fence to an event page read before that fence", async () => {
+    const creator = createEventsStorage(createClient(creatorPool), TENANT_START, undefined, 9);
+    const delivery = createEventsStorage(createClient(deliveryPool), TENANT_START, undefined, 9);
+    const runId = `wrun_${ulid()}`;
+    const pageQuery = /^select "tenant_id", "id", "type".*from "workflow"\."workflow_events"/i;
+    const beforePage = holdFirstStatement(deliveryPool, pageQuery);
+    const afterPage = holdFirstStatement(deliveryPool, pageQuery, "after");
+    const listing = delivery.list({ runId, specVersion: 9 });
+    try {
+      await beforePage.atGate;
+      await creator.create(runId, {
+        eventType: "run_created",
+        specVersion: 9,
+        eventData: {
+          deploymentId: "deployment-123",
+          workflowName: "test-workflow",
+          input: new Uint8Array(),
+        },
+      });
+      beforePage.release();
+      await afterPage.atGate;
+      // The page has only run_created. A fresh snapshot now covers two events,
+      // so recovering the missing snapshot must also reread the event page.
+      await creator.create(
+        runId,
+        { eventType: "run_started", specVersion: 9 },
+        { inBand: true, expectedSeqInBand: 1 },
+      );
+    } finally {
+      beforePage.release();
+      afterPage.release();
+    }
+
+    const log = await listing;
+    expect(log.snapshot).toEqual({ seq: 2, seqInBand: 2 });
+    expect(log.data.map((event) => event.eventType)).toEqual(["run_created", "run_started"]);
   });
 
   it("keeps run_created in the first slot when another replica starts the run mid-create", async () => {

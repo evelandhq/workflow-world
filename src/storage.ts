@@ -1006,8 +1006,16 @@ export function createEventsStorage(
       // Read before listing, in one statement: the count and the highest slot.
       // Every in-band write the count includes committed with its event, so the
       // listing that follows sees it.
-      const snapshot = await readEventLogSnapshot(drizzle, tenantId, params.runId);
-      const page = await unfenced.list(params);
+      let snapshot = await readEventLogSnapshot(drizzle, tenantId, params.runId);
+      let page = await unfenced.list(params);
+      if (!snapshot && page.data.some((event) => eventIdToSlot(event.eventId) !== null)) {
+        // Creation can commit between these reads: the page then sees the
+        // slot-numbered run that the snapshot query missed. Read both again,
+        // in the same order, so a newer count is never paired with an older
+        // listing that could have missed an in-band event.
+        snapshot = await readEventLogSnapshot(drizzle, tenantId, params.runId);
+        if (snapshot) page = await unfenced.list(params);
+      }
       return snapshot ? { ...page, snapshot } : page;
     },
   };
