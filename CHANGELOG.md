@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.31.0...workflow-world-v0.31.1) (2026-11-06)
+
+
+### Fixes
+
+* recover fence snapshots during concurrent run creation ([#131](https://github.com/evelandhq/workflow-world/issues/131)) ([fff7bdd](https://github.com/evelandhq/workflow-world/commit/fff7bdde6e57684915590c4682bfcf0dc3b5325d))
+
 ## [0.31.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.30.0...workflow-world-v0.31.0) (2026-11-06)
 
 
