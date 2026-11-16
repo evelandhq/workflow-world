@@ -150,7 +150,6 @@ describe("postgres queue", () => {
   it("serializes a spec 9 run's orchestrator messages, a hook wake included, in its run queue", async () => {
     const queue = buildQueue(buildConfig(), pool);
     await queue.start();
-    vi.mocked(pool.query).mockClear();
 
     await queue.queue("__wkf_workflow_greet", {
       runId: "wrun_SPEC9",
@@ -158,138 +157,12 @@ describe("postgres queue", () => {
       hookResumeTiming: { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 },
     });
 
-    // No lock lookup: a spec 9 hook wake never bypasses.
-    expect(vi.mocked(pool.query)).not.toHaveBeenCalled();
     const options = vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2];
     expect(options).toEqual(
       expect.objectContaining({
         queueName: runQueueName(TENANT, "wrun_SPEC9"),
         flags: [`project:${TENANT}`],
       }),
-    );
-  });
-
-  it("enqueues a hook wake past its run's queue while a delivery holds it", async () => {
-    const queue = buildQueue(buildConfig(), pool);
-    await queue.start();
-    vi.mocked(pool.query).mockResolvedValueOnce({ rows: [{}] } as never);
-
-    await queue.queue("__wkf_workflow_greet", {
-      runId: "wrun_01ABC",
-      hookResumeTiming: { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 },
-    });
-
-    expect(vi.mocked(pool.query).mock.calls.at(-1)?.[1]).toEqual([
-      runQueueName(TENANT, "wrun_01ABC"),
-    ]);
-    const options = vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2];
-    expect(options).not.toHaveProperty("queueName");
-    // The delivery it interrupts already holds a slot of the tenant's cap.
-    expect(options).toEqual(expect.objectContaining({ flags: [`wake:${TENANT}`] }));
-    // One pending bypassing wake per run: a later one replaces it.
-    expect(options).toEqual(expect.objectContaining({ jobKey: `wfwake:${TENANT}:wrun_01ABC` }));
-  });
-
-  it("keys a bypassing wake by its producer's idempotency key or its own input when it has one", async () => {
-    const queue = buildQueue(buildConfig(), pool);
-    await queue.start();
-    const hookResumeTiming = { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 };
-
-    vi.mocked(pool.query).mockResolvedValueOnce({ rows: [{}] } as never);
-    await queue.queue(
-      "__wkf_workflow_greet",
-      { runId: "wrun_01ABC", hookResumeTiming },
-      { idempotencyKey: "hook-res_1" },
-    );
-    expect(vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2]).toEqual(
-      expect.objectContaining({ jobKey: "hook-res_1" }),
-    );
-
-    vi.mocked(pool.query).mockResolvedValueOnce({ rows: [{}] } as never);
-    const { messageId } = await queue.queue("__wkf_workflow_greet", {
-      runId: "wrun_01ABC",
-      hookInput: {
-        resumeId: "res_2",
-        hookId: "hook_1",
-        token: "tok_1",
-        payload: null,
-        payloadDigest: "d",
-      },
-    });
-    expect(vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2]).toEqual(
-      expect.objectContaining({ jobKey: messageId }),
-    );
-  });
-
-  it("queues a hook wake as usual when the run queue's lock cannot be read", async () => {
-    const queue = buildQueue(buildConfig(), pool);
-    await queue.start();
-    vi.mocked(pool.query).mockRejectedValueOnce(new Error("relation does not exist"));
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    await queue.queue("__wkf_workflow_greet", {
-      runId: "wrun_01ABC",
-      hookResumeTiming: { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 },
-    });
-
-    expect(vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2]).toEqual(
-      expect.objectContaining({
-        queueName: runQueueName(TENANT, "wrun_01ABC"),
-        flags: [`project:${TENANT}`],
-      }),
-    );
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
-  });
-
-  it("queues a delayed hook wake as usual, so it cannot push back a pending one", async () => {
-    const queue = buildQueue(buildConfig(), pool);
-    await queue.start();
-    const lookups = vi.mocked(pool.query).mock.calls.length;
-
-    await queue.queue(
-      "__wkf_workflow_greet",
-      {
-        runId: "wrun_01ABC",
-        hookResumeTiming: { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 },
-      },
-      { delaySeconds: 5 },
-    );
-
-    expect(vi.mocked(pool.query).mock.calls.length).toBe(lookups);
-    expect(vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2]).toEqual(
-      expect.objectContaining({
-        queueName: runQueueName(TENANT, "wrun_01ABC"),
-        flags: [`project:${TENANT}`],
-      }),
-    );
-  });
-
-  it("does not look up the run queue for a message that is not a hook wake", async () => {
-    const queue = buildQueue(buildConfig(), pool);
-    await queue.start();
-    const lookups = vi.mocked(pool.query).mock.calls.length;
-
-    await queue.queue("__wkf_workflow_greet", { runId: "wrun_01ABC" });
-
-    expect(vi.mocked(pool.query).mock.calls.length).toBe(lookups);
-    expect(vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2]).toEqual(
-      expect.objectContaining({ queueName: runQueueName(TENANT, "wrun_01ABC") }),
-    );
-  });
-
-  it("enqueues a hook wake for an idle run in its run's queue", async () => {
-    const queue = buildQueue(buildConfig(), pool);
-    await queue.start();
-    vi.mocked(pool.query).mockResolvedValueOnce({ rows: [] } as never);
-
-    await queue.queue("__wkf_workflow_greet", {
-      runId: "wrun_01ABC",
-      hookResumeTiming: { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 },
-    });
-
-    expect(vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2]).toEqual(
-      expect.objectContaining({ queueName: runQueueName(TENANT, "wrun_01ABC") }),
     );
   });
 

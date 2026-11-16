@@ -1,4 +1,4 @@
-import { continuationOf, tenantFlag, wakeFlag } from "../dispatch-contract.js";
+import { continuationOf, tenantFlag } from "../dispatch-contract.js";
 import { MessageData, readBody, readRunId } from "../message.js";
 import type { Pool } from "pg";
 import type { ActivationClient } from "./activation-client.js";
@@ -335,37 +335,29 @@ export type ExecutorFailureTracker = ReturnType<typeof createExecutorFailureTrac
  * tenant's jobs, instead of one busy project monopolising the pool.
  */
 export function createFairness(input: { maxInFlightPerTenant: number }) {
-  // A tenant's deliveries and its bypassing hook wakes (`wakeFlag`) each have a
-  // cap of `maxInFlightPerTenant`.
-  const lanes = { delivery: new Map<string, number>(), wake: new Map<string, number>() };
-  const flagOf = { delivery: tenantFlag, wake: wakeFlag };
+  const inFlight = new Map<string, number>();
   return {
     forbiddenFlags(): string[] {
       const forbidden: string[] = [];
-      for (const lane of ["delivery", "wake"] as const) {
-        for (const [tenantId, count] of lanes[lane]) {
-          if (count >= input.maxInFlightPerTenant) forbidden.push(flagOf[lane](tenantId));
-        }
+      for (const [tenantId, count] of inFlight) {
+        if (count >= input.maxInFlightPerTenant) forbidden.push(tenantFlag(tenantId));
       }
       return forbidden;
     },
-    acquire(tenantId: string, lane: FairnessLane = "delivery"): void {
-      lanes[lane].set(tenantId, (lanes[lane].get(tenantId) ?? 0) + 1);
+    acquire(tenantId: string): void {
+      inFlight.set(tenantId, (inFlight.get(tenantId) ?? 0) + 1);
     },
-    release(tenantId: string, lane: FairnessLane = "delivery"): void {
-      const next = (lanes[lane].get(tenantId) ?? 1) - 1;
-      if (next <= 0) lanes[lane].delete(tenantId);
-      else lanes[lane].set(tenantId, next);
+    release(tenantId: string): void {
+      const next = (inFlight.get(tenantId) ?? 1) - 1;
+      if (next <= 0) inFlight.delete(tenantId);
+      else inFlight.set(tenantId, next);
     },
     /** In-flight deliveries per tenant. */
     snapshot(): Record<string, number> {
-      return Object.fromEntries(lanes.delivery);
+      return Object.fromEntries(inFlight);
     },
   };
 }
-
-/** `wake` holds only hook wakes that bypassed a run queue; a queued one is a delivery. */
-export type FairnessLane = "delivery" | "wake";
 
 export type Fairness = ReturnType<typeof createFairness>;
 

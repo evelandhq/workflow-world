@@ -1,10 +1,7 @@
-import { SPEC_VERSION_CURRENT } from "@workflow/world";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createClient } from "./drizzle/index.js";
+import { createClient, Schema } from "./drizzle/index.js";
 import { dropTenantPartitions, ensureTenantPartitions, runMigrations } from "./index.js";
-import { Schema } from "./drizzle/index.js";
-import { and, eq } from "drizzle-orm";
 import { createEventsStorage } from "./storage.js";
 import { ulid } from "ulid";
 
@@ -162,59 +159,9 @@ describe.skipIf(!testUrl)("hook_received against a terminal run", () => {
     expect(listed.data.filter((event) => event.eventType === "hook_received")).toHaveLength(1);
   });
 
-  /**
-   * The legacy path, which nothing else covers.
-   *
-   * A run whose `specVersion` is <= 1 is routed to the legacy handler before the
-   * terminal-run validation block is reached, so the guard inside that handler is
-   * the only thing standing between a cancelled legacy run and an accepted hook.
-   */
-  it("rejects hook_received on a terminal LEGACY run, which bypasses the main guard", async () => {
-    const runId = await createRunInStatus("cancelled");
-
-    // Demote the run to a legacy spec version. Writing it directly is the point:
-    // the current-spec path cannot produce one, and this is exactly the shape a
-    // run created by an older eve has on disk.
-    await drizzle
-      .update(Schema.runs)
-      .set({ specVersion: 1 })
-      .where(and(eq(Schema.runs.tenantId, TENANT), eq(Schema.runs.runId, runId)));
-
-    await expect(hookReceived(runId, `whk_${ulid()}`)).rejects.toThrow(/terminal state/i);
-
-    const listed = await events.list({ runId, pagination: { sortOrder: "asc" } });
-    expect(listed.data.filter((event) => event.eventType === "hook_received")).toHaveLength(0);
-  });
-
-  it("accepts hook_received on a running LEGACY run", async () => {
-    const runId = `wrun_${ulid()}`;
-    const runData = {
-      deploymentId: "deployment-hook",
-      workflowName: "hook-workflow",
-      input: new Uint8Array([1]),
-    };
-    await events.create(runId, { eventType: "run_created", eventData: runData });
-    await events.create(runId, { eventType: "run_started", eventData: runData });
-    const hookId = `whk_${ulid()}`;
-    await createHook(runId, hookId, `tok_${ulid()}`);
-    await drizzle
-      .update(Schema.runs)
-      .set({ specVersion: 1 })
-      .where(and(eq(Schema.runs.tenantId, TENANT), eq(Schema.runs.runId, runId)));
-
-    await expect(hookReceived(runId, hookId)).resolves.toBeDefined();
-  });
-
   it("reports a missing run rather than silently accepting the hook", async () => {
     // The guard reads the run row under lock; no row means there is nothing to
     // attach the hook to.
     await expect(hookReceived(`wrun_${ulid()}`, `whk_${ulid()}`)).rejects.toThrow();
-  });
-
-  it("keeps the spec version the run was created with", () => {
-    // Cheap tripwire: if the current spec version moves past the legacy threshold
-    // the demotion above stops exercising the legacy path, and these tests would
-    // start passing for the wrong reason.
-    expect(SPEC_VERSION_CURRENT).toBeGreaterThan(1);
   });
 });

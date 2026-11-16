@@ -207,13 +207,13 @@ async function recoverActiveRunsForAllTenants(
   // would hold its next legitimate delivery for graphile's four-hour threshold.
   const oldWorkerIds = new Set(rows.flatMap((row) => (row.locked_by ? [row.locked_by] : [])));
   if (reclaimOldWorkerLocks) {
-    // A job in no queue shows a dead worker's lock on the job alone: a hook
-    // wake that bypassed its run's queue (`bypassesRunQueue` in queue.ts), or
-    // a held timer the dead generation was promoting (`timers.ts`). Left
-    // locked, a run parked on a hook would wait four hours for the input that
-    // wake carries, and a timer would count as the run's live job above for
-    // as long. No graphile index covers locked jobs, so this reads the whole
-    // job table, once per boot.
+    // A job in no queue shows a dead worker's lock on the job alone: a step
+    // message or a wait's timer hop, which wait in no run queue
+    // (`runQueueFor`), or a held timer the dead generation was promoting
+    // (`timers.ts`). Left locked, the step or wait would stall for graphile's
+    // four-hour threshold, and a timer would count as the run's live job above
+    // for as long. No graphile index covers locked jobs, so this reads the
+    // whole job table, once per boot.
     const { rows: unqueued } = await input.pool.query<{ locked_by: string }>(
       `select distinct jobs.locked_by
          from graphile_worker._private_jobs as jobs

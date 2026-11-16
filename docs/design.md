@@ -119,39 +119,25 @@ Ranked by how expensive they are to violate.
 the reference implementation with a tenant predicate added. The remaining
 optional members carry decisions worth stating.
 
-**`specVersion` is `mintedSpecVersion(env, { inBandFence: true })`: single
-orchestrator, `9`, when `WORKFLOW_SPEC_VERSION=9` asks for it (eve 1.0's
-default; see [In-band writer fence](#in-band-writer-fence)), else hook
-force-claim, `8`, unless `WORKFLOW_SEALED_LOG=0` opts the deployment back to
-slot identity, `6`.** eve
-compiles the runtime protocol check into every release. Through core beta.40
-that was literal equality; beta.41 uses an inclusive range. In beta.42 both the
-floor and ceiling are 6 and slot identity is mandatory rather than a capability.
-`@workflow/world` beta.32 (eve 0.49) minted spec 7, the "sealed log", and
-beta.38 (eve 0.66.3) minted 8, the hook force-claim reader contract; the
-runtime's floor stays at 6, and the runtime stamps each new run with whatever
-the World declares. Both are reader contracts. Spec 7's exists for backends
+**`specVersion` is always `9`, the single-orchestrator version eve 1.0 asks
+for** (`WORKFLOW_SPEC_VERSION=9`; see [In-band writer fence](#in-band-writer-fence)).
+A deployment that asks for any other version is refused when the World is
+created, rather than left believing it creates runs of a version it does not.
+The runtime stamps each new run with the declared version and admits any World
+whose version lies between slot identity (6) and the highest it can read.
+
+Spec 9 includes every reader contract below it. Spec 7's exists for backends
 that pre-assign event positions and must seal abandoned ones with `noop`
 events; this World allocates each position inside the INSERT that occupies it,
 so it never has a hole to seal. Spec 8's is the `hook_disposed{forceClaimedBy}`
 row another run's takeover writes into a run's log (see
-[Hook force-claim](#hook-force-claim)): a run stamped 8 reads it as "your hook
-was taken", a run below it would read it as its own `dispose()` and wait on the
-hook forever, so the stamped version is what a takeover consults before it
-writes one.
-
-Through 0.17.0 this World pinned 6, and through 0.26 it capped the declaration
-at 7: it never took a token over, and declaring 8 would have shut out every
-runtime before core beta.56 (eve 0.66.2 and older). Every line in Eveland's
-window has read 8 since, and eve needs force-claim for its session
-handoffs, so the cap came off together with `capabilities.hookForceClaim`. An
-in-flight run is pinned to the deployment that created it, so a version stamped
-by a new Release is never replayed by an older one. The env var is the fallback
-if a v6-only executor ever has to be served again; its runs can force-claim but
-can never be claimed from. The declared value is read once per `createWorld()`
-and handed to storage, so the run-creation fallback and legacy event stamps
-agree with what the runtime was told. A conformance test verifies that the
-installed runtime and this World agree.
+[Hook force-claim](#hook-force-claim)): a run stamped 8 or above reads it as
+"your hook was taken", while a run below it would read it as its own
+`dispose()` and wait on the hook forever, so the stamped version is what a
+takeover consults before it writes one. The declared value is read once per
+`createWorld()` and handed to storage, so the run-creation fallback agrees with
+what the runtime was told. A conformance test verifies that the installed
+runtime and this World agree.
 The package must also declare `@workflow/world` (or `@workflow/core`) on a
 matching version line, because eve checks the manifest's major and prerelease
 tag before it ever loads the world.
@@ -725,109 +711,41 @@ own send, the dispatcher's reschedule, and boot recovery — must derive the nam
 identically or the serialization is silently partial, so it has exactly one
 definition (`runQueueFor` in `src/dispatch-contract.ts`).
 
-**On a spec 9 (single-orchestrator) run only the orchestrator's deliveries wait
-in the run queue, and nothing bypasses it.** Its step messages and a long
-wait's intermediate timer hops take no queue name: a spec 9 orchestrator that
-waits on a background step stays live for a while (eve's linger), and a step
-queued behind it would wait that out before it could start. Its hook wakes never
-bypass: the running orchestrator tails the run's log, so a resume or a cancel
-reaches it without a second delivery, and a second orchestrator would run an
-inline step the first is still running again. What the queue still lets through
-(a delivery that outlives its dispatch timeout) the in-band writer fence refuses.
-Everything below about hook wakes applies to spec 8 runs.
+**Only a run's orchestrator deliveries wait in its run queue, and nothing
+bypasses it.** Every run is a spec 9 (single-orchestrator) run. Its step
+messages and a long wait's intermediate timer hops take no queue name: an
+orchestrator that waits on a background step stays live for a while (eve's
+linger), and a step queued behind it would wait that out before it could
+start. Its hook wakes wait in the queue too: the running orchestrator tails
+the run's log, so a resume or a cancel reaches it without a second delivery,
+and a second orchestrator would run an inline step the first is still running
+again. What the queue still lets through (a delivery that outlives its dispatch
+timeout) the in-band writer fence refuses. A message that names a run but
+carries no spec stamp (boot recovery rebuilds one from the run row) also waits
+in that run's queue.
 
-**A hook wake sent while its run's queue is held is the one exception.** It is
-new input for the run, not a duplicate, and it is the only way a cancel reaches
-a step that is running: eve runs the step inside the delivery that claimed it,
-and the replay the cancel's wake starts is what aborts it. Queued behind that
-delivery, the replay would start after the step had finished and its side
-effect had gone out. So when the World sends a hook wake (`isHookWake`) and a
-delivery holds the run's queue, the wake takes no queue name. On an idle run it
-queues as usual. Such a wake is also counted against a cap of its own rather
-than the tenant's delivery cap (`wakeFlag`): the delivery it interrupts already
-holds a slot of that cap. The wake cap has the size of the delivery cap, and
-like it, it is approximate: graphile reads the forbidden flags before a claim
-and the count rises after it, so idle workers claiming at once can overshoot. A
-wake with no input in its payload and no producer idempotency key also takes a
-per-run job key, so a burst of input during a long step leaves one pending wake
-rather than one per message. That is safe because `resumeHook` commits the input
-to the event log before it publishes such a wake; a wake that carries its input
-(`hookInput`) or a producer key keeps a key of its own.
+The wake a force-claim sends its victim queues on the victim's run like any
+other delivery. The claimer's runtime publishes it from `Hook.claimedFrom` with
+an idempotency key of `hook-force-claim-<claimer hookId>`. Nothing is lost by
+waiting: the `hook_disposed{forceClaimedBy}` it announces committed before it
+was sent, and whichever replay of the victim runs next reads it.
 
-The wake a force-claim sends its victim is not a hook wake. The claimer's
-runtime publishes it from `Hook.claimedFrom` with an idempotency key of
-`hook-force-claim-<claimer hookId>` and neither `hookResumeTiming` nor
-`hookInput`, so it queues on the victim's run like any other delivery. Nothing
-is lost by waiting: the `hook_disposed{forceClaimedBy}` it announces committed
-before it was sent, and whichever replay of the victim runs next reads it.
-
-A wake running beside its owner does not weaken the exclusion a step had
-before. A replay executes inline
-only a step it claims itself, and the storage claim on a new step's
-`step_started` gives that to one caller.
-
-That holds only while neither replay starts a step optimistically, that is,
-runs a new step's body before its claim resolves, which two racing replays can
-both do. `@workflow/core` reaches optimistic start two ways on the spec 8 runs
-this World creates (5.4 moved that runtime to `runtime/spec8`), and both stay
-away from a run that can receive a hook wake: a deployment opts in with
-`WORKFLOW_OPTIMISTIC_INLINE_START=1`, which must not be set where this World
-runs; and turbo forces it on a run's first delivery, but only until the run has
-a hook or a wait, and a run that receives a hook wake has a hook. Without per-run
-serialization the forced start does race: twelve competing deliveries during a
-live run ran step bodies a second time in three of three runs, and in none of
-four with `WORKFLOW_OPTIMISTIC_INLINE_START=0`. Both conditions are internal to
-core, so `src/core-concurrency-contract.test.ts` checks them against the
-installed dist, and a core bump that changes either fails there. Any other step it can only enqueue as a
-step message; while the owner's ownership lease (860 s by default) is live,
-`@workflow/core` arms only a delayed backstop replay of the run instead. Past the
-lease, a step message can be claimed while the step still runs, on any
-replica, once the run's queue is free; while the owner runs, the queue is free
-only when the owner is a wake that bypassed it. So storage keeps the delivery that started
-a step on the step (`owner_message_id`), and refuses another delivery's
-`step_started` with a retry while that delivery's graphile job is still locked
+A step can be started by two deliveries at once. Its step message waits in no
+run queue, so past the owner's ownership lease (860 s by default) a step
+message can be claimed while the orchestrator still runs the step inline, on
+any replica. So storage keeps the delivery that started a step on the step
+(`owner_message_id`), and refuses another delivery's `step_started` with a
+retry while that delivery's graphile job is still locked
 (`deliveryInFlight`). The owner's own redelivery may start it again, and a
 refused start comes back later, at a tenth of how long the step has run (30 s
 to 5 min): each retry is a delivery, so the retries thin out on a long step.
+The restart fence reads graphile's private job table by payload, which has no
+index. It runs only when a running step is started again, which is rare, and a
+failed read lets the start through.
 
-The fence ends where the queue lock always ended: when the owner's delivery
-does. A delivery past the dispatch timeout is aborted and its job unlocked
-while the step body may still run on its executor; the owner's own redelivery
-then ran it again before this change too. Rows written
-before migration 0019, or by an older World, have no owner and are not fenced;
-their owner held the run's queue, which still orders the step message behind
-it.
-
-Limits, in order of likelihood:
-
-- The decision is made once, at send time. A wake that finds the queue idle
-  waits behind a step message that is already queued there, and a wake the
-  dispatcher reschedules goes back into the queue. A replay that is already
-  queued is no problem: it reads the input from the event log. The other way
-  round, a wake that found the queue held may run beside whichever delivery
-  holds it by the time it is claimed; the step claim and the restart fence
-  above cover that delivery too.
-- The wake still needs a free dispatcher slot and a free slot of its tenant's
-  wake cap. With either held by running work, it waits like any other job. A
-  wake's replay can go on to run ordinary work in the same job, such as the turn
-  for input that queued up during the cancelled step, and that holds a wake slot
-  meanwhile. Reserving dispatcher slots for wakes would need them under a job
-  name of their own; lowering the tenant cap instead starves a parent step that
-  holds a slot while it waits for its child run.
-- A wake that meets a running step leaves that delayed backstop replay behind,
-  at most one per step start. It is a no-op replay, but in external mode it
-  usually lands on an idle deployment and costs a cold start.
-- The per-run key folds only wakes still pending. A wake already claimed keeps
-  running, so with free dispatcher slots a burst of input gives about one
-  replay per message. A claimed wake that a newer one supersedes loses its
-  retries: if it then fails, its job row stays behind as failed, with no dead
-  letter, and the newer wake replays the same log.
-- A step that resumes a hook of its own run sends a wake that bypasses its own
-  delivery: one extra replay and one backstop replay, no second execution. eve
-  resumes other runs' hooks (a parent session), so this is rare.
-- The restart fence reads graphile's private job table by payload, which has
-  no index. It runs only when a running step is started again, which is rare,
-  and a failed read lets the start through as before.
+The fence ends when the owner's delivery does. A delivery past the dispatch
+timeout is aborted and its job unlocked while the step body may still run on
+its executor, and the owner's own redelivery may then run it again.
 
 Boot recovery releases a dead worker's lock on a flow job in no queue by the job
 itself, since there is no queue to find it by.

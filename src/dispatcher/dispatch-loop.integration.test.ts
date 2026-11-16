@@ -175,63 +175,6 @@ describe.skipIf(!testUrl)("dispatch loop", () => {
     expect(responses.every((status) => status === 200)).toBe(true);
   }, 60_000);
 
-  test("a hook wake reaches a run while another delivery for it is still running", async () => {
-    // eve runs a step inside the delivery that claimed it, and a cancel reaches
-    // that step only through the replay its hook wake starts. Queued behind the
-    // running delivery, the cancel would arrive after the step it was meant to stop.
-    const run = await world.events.create(null, {
-      eventType: "run_created",
-      eventData: { deploymentId: DEPLOYMENT, workflowName: "greet", input: [] },
-      specVersion: 5,
-    });
-    const runId = run.run!.runId;
-    const queueName = `${getQueueTopicPrefix("workflow")}greet` as ValidQueueName;
-    const wakesOf = () =>
-      delivered.filter((entry) => entry.runId === runId).map((entry) => entry.hookWake);
-    let release = (): void => {};
-    held.set(runId, new Promise<void>((resolve) => (release = resolve)));
-
-    try {
-      await world.queue(queueName, { runId });
-      await waitFor(() => wakesOf().length === 1, 30_000);
-
-      // A plain replay is a duplicate of the running one, and still waits.
-      await world.queue(queueName, { runId });
-      const resumedAt = Date.now();
-      await world.queue(queueName, {
-        runId,
-        hookResumeTiming: { resumeRequestedAtMs: resumedAt, queuePublishRequestedAtMs: resumedAt },
-      });
-      await waitFor(() => wakesOf().length === 2, 5_000);
-
-      // The first wake is still running and fills the tenant's wake cap of one,
-      // so later ones wait too: wakes cannot take the whole pool. Waiting, they
-      // fold into one job under the run's wake key.
-      for (let wake = 0; wake < 2; wake += 1) {
-        await world.queue(queueName, {
-          runId,
-          hookResumeTiming: {
-            resumeRequestedAtMs: resumedAt,
-            queuePublishRequestedAtMs: resumedAt,
-          },
-        });
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-      expect(wakesOf()).toEqual([false, true]);
-      const pending = await admin.query(
-        "select 1 from graphile_worker._private_jobs where key = $1 and locked_at is null",
-        [`wfwake:${TENANT}:${runId}`],
-      );
-      expect(pending.rows).toHaveLength(1);
-    } finally {
-      release();
-    }
-
-    await waitFor(() => wakesOf().length === 4, 30_000);
-    expect(wakesOf().slice(0, 2)).toEqual([false, true]);
-    expect(wakesOf().slice(2).sort()).toEqual([false, true]);
-  }, 60_000);
-
   test("a dispatch addressed to another deployment is refused", async () => {
     // The runtime secret is shared platform-wide, so the deployment id is what
     // stops a captured dispatch being replayed at a different agent on the host.

@@ -1,5 +1,5 @@
 import type { Step, Storage, WorkflowRun } from "@workflow/world";
-import { eventIdToSlot, SPEC_VERSION_CURRENT } from "@workflow/world";
+import { eventIdToSlot, SPEC_VERSION_SINGLE_ORCHESTRATOR } from "@workflow/world";
 import { TooEarlyError } from "@workflow/errors";
 import { makeWorkerUtils, type WorkerUtils } from "graphile-worker";
 import { Pool } from "pg";
@@ -172,7 +172,7 @@ describe.skipIf(!testUrl)("steps storage", () => {
         completedAt: undefined,
         createdAt: expect.any(Date),
         updatedAt: expect.any(Date),
-        specVersion: SPEC_VERSION_CURRENT,
+        specVersion: SPEC_VERSION_SINGLE_ORCHESTRATOR,
       });
     });
   });
@@ -437,7 +437,10 @@ describe.skipIf(!testUrl)("steps storage", () => {
       expect(persisted.input).toEqual(new Uint8Array([7, 8, 9]));
     });
 
-    it("writes a synthetic step_created event (input there, not on step_started)", async () => {
+    it("makes the start the step's creation: no step_created, input on step_started", async () => {
+      // A spec 9 replay reads the step's name and input off its first
+      // step_started and counts it as one position, so a synthetic
+      // step_created would take a position the orchestrator never accounted for.
       await events.create(testRunId, {
         eventType: "step_started",
         correlationId: "lazy-step-2",
@@ -450,10 +453,11 @@ describe.skipIf(!testUrl)("steps storage", () => {
       });
       const created = evts.data.find((e) => e.eventType === "step_created");
       const started = evts.data.find((e) => e.eventType === "step_started");
-      expect(created).toBeDefined();
+      expect(created).toBeUndefined();
       expect(started).toBeDefined();
-      expect((created?.eventData as { input?: unknown } | undefined)?.input).toBeDefined();
-      expect((started?.eventData as { input?: unknown } | undefined)?.input).toBeUndefined();
+      expect((started?.eventData as { input?: unknown } | undefined)?.input).toEqual(
+        new Uint8Array([1]),
+      );
     });
 
     it("still rejects a bare step_started (no input) on a missing step", async () => {

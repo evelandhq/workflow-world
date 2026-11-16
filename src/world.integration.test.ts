@@ -1,11 +1,9 @@
 import { EntityConflictError } from "@workflow/errors";
 import {
-  mintedSpecVersion,
   slotToEventId,
   SPEC_VERSION_CURRENT,
   SPEC_VERSION_MAX_SUPPORTED,
-  SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM,
-  SPEC_VERSION_SUPPORTS_SLOT_IDENTITY,
+  SPEC_VERSION_SINGLE_ORCHESTRATOR,
 } from "@workflow/world";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -169,19 +167,12 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
     expect(await beta.streams.list(alphaRunId)).toEqual([]);
   });
 
-  test("specVersion is what upstream mints: hook force-claim, 8", () => {
-    // @workflow/world beta.38 (eve 0.66.3) minted spec 8, the hook force-claim
-    // reader contract, while the runtime floor stayed at slot identity (6).
-    // The World declares exactly `mintedSpecVersion()` and pairs it with
-    // `capabilities.hookForceClaim`; see the note on `specVersion` in
-    // src/index.ts. The run created above is stamped with it, so the suite
-    // exercises writing and reading 8.
-    expect(SPEC_VERSION_SUPPORTS_SLOT_IDENTITY).toBe(6);
-    expect(SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM).toBe(8);
-    expect(SPEC_VERSION_CURRENT).toBe(8);
-    expect(alpha.specVersion).toBe(mintedSpecVersion());
-    expect(alpha.specVersion).toBe(SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM);
+  test("specVersion is the single-orchestrator version", () => {
+    // The run created above is stamped with it, so the suite exercises writing
+    // and reading spec 9 runs; see the note on `specVersion` in src/index.ts.
+    expect(alpha.specVersion).toBe(SPEC_VERSION_SINGLE_ORCHESTRATOR);
     expect(alpha.specVersion).toBeLessThanOrEqual(SPEC_VERSION_MAX_SUPPORTED);
+    expect(alpha.capabilities?.inBandFence).toBe(true);
     expect(alpha.capabilities?.hookForceClaim).toBe(true);
     expect(alpha.capabilities?.hookRetention?.active).toBe(true);
   });

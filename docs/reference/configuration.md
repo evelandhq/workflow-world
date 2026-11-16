@@ -20,11 +20,11 @@ rather than a loud one.
 Upstream's own names are also read on the deployment side, with upstream's
 meaning:
 
-| variable                                      | default   | meaning                                                                                                                                                                                                                                                  |
-| --------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WORKFLOW_SPEC_VERSION`                       | unset (8) | the spec version new runs are stamped with: `9` creates single-orchestrator runs, which this World serves with its in-band writer fence; `6` to `8` are honoured too. eve 1.0 sets `9` by default. Existing runs keep the version they were stamped with |
-| `WORKFLOW_MAX_EVENTS`                         | `25000`   | per-run event ceiling reported on run-lifecycle responses; the runtime fails a run that reaches it with `MAX_EVENTS_EXCEEDED`                                                                                                                            |
-| `WORKFLOW_POSTGRES_HOOK_RETENTION_LIMIT_DAYS` | `30`      | the longest `tokenRetentionUntil` a hook may ask for                                                                                                                                                                                                     |
+| variable                                      | default   | meaning                                                                                                                                                                             |
+| --------------------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORKFLOW_SPEC_VERSION`                       | unset (9) | must be unset or `9`: this World creates only single-orchestrator runs, which it serves with its in-band writer fence. eve 1.0 sets `9`. Any other value fails the World at startup |
+| `WORKFLOW_MAX_EVENTS`                         | `25000`   | per-run event ceiling reported on run-lifecycle responses; the runtime fails a run that reaches it with `MAX_EVENTS_EXCEEDED`                                                       |
+| `WORKFLOW_POSTGRES_HOOK_RETENTION_LIMIT_DAYS` | `30`      | the longest `tokenRetentionUntil` a hook may ask for                                                                                                                                |
 
 ## Host side (read by the dispatcher)
 
