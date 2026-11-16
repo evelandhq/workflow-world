@@ -9,7 +9,7 @@ import {
   runMigrations,
 } from "./migrate.js";
 
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const ALPHA = `p_retention_alpha_${suffix}`;
 const BETA = `p_retention_beta_${suffix}`;
@@ -97,7 +97,6 @@ describe.skipIf(!testUrl)("terminal stream retention", () => {
       pool,
       tenantId: ALPHA,
       deploymentId: "dep_retention",
-      runner: "external",
     });
     try {
       const expiredStream = await alphaWorld.streams.getChunks("same_run", "stream-same_run");

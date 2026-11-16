@@ -25,9 +25,9 @@ import { dedupIndexName, derivePartitionName } from "./tenant.js";
  * no type can check. This suite is what actually holds that invariant: two
  * worlds on one database, asserting that neither can observe the other.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 // Unique per run so the suite is repeatable against a database it has already
 // used — otherwise the second run sees the first run's rows and the scoping
 // assertions fail for the wrong reason.
@@ -52,13 +52,11 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
       connectionString: testUrl!,
       tenantId: ALPHA,
       deploymentId: "dep_alpha_1",
-      runner: "external",
     });
     beta = createWorld({
       connectionString: testUrl!,
       tenantId: BETA,
       deploymentId: "dep_beta_1",
-      runner: "external",
     });
 
     alphaRunId = (
@@ -195,7 +193,6 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
       connectionString: testUrl!,
       tenantId: `p_unprovisioned_${suffix}`,
       deploymentId: "dep_x",
-      runner: "external",
     });
     try {
       await expect(

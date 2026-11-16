@@ -5,7 +5,6 @@ import {
   type EvelandWorldConfig,
   type ResolvedWorldConfig,
   resolveConnectionString,
-  resolveRunnerMode,
   resolveStreamCompaction,
 } from "./config.js";
 import { createClient, type Drizzle } from "./drizzle/index.js";
@@ -19,9 +18,8 @@ import {
 } from "./storage.js";
 import { createStreamer } from "./streamer.js";
 import { assertValidTenantId } from "./tenant.js";
-import { reenqueueTenantRuns } from "./recovery.js";
 
-export type { EvelandWorldConfig, WorkflowRunnerMode } from "./config.js";
+export type { EvelandWorldConfig } from "./config.js";
 export * from "./dispatch-contract.js";
 export { MessageData } from "./message.js";
 export {
@@ -31,7 +29,6 @@ export {
   runMigrations,
   tenantPartitionsExist,
 } from "./migrate.js";
-export { reenqueueTenantRuns } from "./recovery.js";
 export { inflightDeliveries } from "./inflight.js";
 export {
   reconcileWorkflowRuns,
@@ -40,19 +37,6 @@ export {
   type ReconciledWorkflowRun,
   type WorkflowRunReconciliationDisposition,
 } from "./reconciliation.js";
-export {
-  backfillWorkflowRunRetentionClass,
-  inspectWorkflowRunRetentionMismatches,
-  previewWorkflowRunRetentionBackfill,
-  type WorkflowRunRetentionBackfillGroup,
-  type WorkflowRunRetentionBackfillOptions,
-  type WorkflowRunRetentionBackfillPreview,
-  type WorkflowRunRetentionBackfillResult,
-  type WorkflowRunRetentionBackfillSelector,
-  type WorkflowRunRetentionMismatch,
-  type WorkflowRunRetentionMismatchOptions,
-  type WorkflowRunRetentionMismatchResult,
-} from "./retention-backfill.js";
 export {
   packTerminalStreamBlocks,
   type PackTerminalStreamBlocksOptions,
@@ -109,13 +93,8 @@ function required(value: string | undefined, name: string): string {
 }
 
 function resolveConfig(config: EvelandWorldConfig): ResolvedWorldConfig {
-  // Each of these has one canonical `WORKFLOW_WORLD_*` name owned by this
-  // package plus the `EVELAND_*` name the host injects today. Keep both lists in
-  // step with `resolveConnectionString` and `resolveDispatchRuntimeSecret`: a
-  // name that only one end honours is how you get a process that starts clean
-  // and then fails every dispatch.
   const tenantId = required(
-    config.tenantId ?? process.env.WORKFLOW_WORLD_TENANT_ID ?? process.env.EVELAND_PROJECT_ID,
+    config.tenantId ?? process.env.WORKFLOW_WORLD_TENANT_ID,
     "WORKFLOW_WORLD_TENANT_ID",
   );
   assertValidTenantId(tenantId);
@@ -123,34 +102,18 @@ function resolveConfig(config: EvelandWorldConfig): ResolvedWorldConfig {
   return {
     tenantId,
     deploymentId: required(
-      config.deploymentId ??
-        process.env.WORKFLOW_WORLD_DEPLOYMENT_ID ??
-        process.env.EVELAND_DEPLOYMENT_ID,
+      config.deploymentId ?? process.env.WORKFLOW_WORLD_DEPLOYMENT_ID,
       "WORKFLOW_WORLD_DEPLOYMENT_ID",
     ),
-    runner:
-      config.runner ??
-      resolveRunnerMode(process.env.WORKFLOW_WORLD_RUNNER ?? process.env.EVELAND_WORKFLOW_RUNNER),
     // `resolveQueueNamespace` is upstream's own resolver, so the fallback to
     // `WORKFLOW_QUEUE_NAMESPACE` matches exactly what eve's runtime does.
     ...(queueNamespace !== undefined ? { queueNamespace } : {}),
-    ...(config.port !== undefined ? { port: config.port } : {}),
-    // `??` cannot express this: `parseInt("")` is NaN, which is not nullish, so
-    // the fallback was unreachable and an unset variable produced NaN. A
-    // `Number.isFinite` guard in `createWorld` rescued it, but only there —
-    // `resolveConfig` on its own handed NaN to graphile.
-    queueConcurrency:
-      config.queueConcurrency ??
-      (Number.parseInt(process.env.WORKFLOW_POSTGRES_WORKER_CONCURRENCY ?? "", 10) || 50),
     ...(config.streamFlushIntervalMs !== undefined
       ? { streamFlushIntervalMs: config.streamFlushIntervalMs }
       : {}),
     compactStreamSnapshots:
       config.compactStreamSnapshots ??
-      resolveStreamCompaction(
-        process.env.WORKFLOW_WORLD_STREAM_COMPACTION ??
-          process.env.EVELAND_WORKFLOW_STREAM_COMPACTION,
-      ),
+      resolveStreamCompaction(process.env.WORKFLOW_WORLD_STREAM_COMPACTION),
   };
 }
 
@@ -158,9 +121,6 @@ export function createWorld(
   config: EvelandWorldConfig = {} as EvelandWorldConfig,
 ): World & { start(): Promise<void> } {
   const resolved = resolveConfig(config);
-  if (!Number.isFinite(resolved.queueConcurrency) || resolved.queueConcurrency <= 0) {
-    resolved.queueConcurrency = 50;
-  }
 
   const maxPoolSize = config.maxPoolSize ?? getDefaultMaxPoolSize();
   const pool =
@@ -316,32 +276,15 @@ export function createWorld(
     async resolveLatestDeploymentId() {
       return resolved.deploymentId;
     },
+    /**
+     * Starts the queue's graphile utilities and nothing else. An agent boot is
+     * not a recovery event: jobs are durable in Postgres and the dispatcher
+     * owns recovery. A held delivery that dies with this process fails its
+     * job and graphile retries it, and a dispatcher restart reclaims dead
+     * worker locks itself.
+     */
     async start() {
       await queue.start();
-      // In external mode an agent boot is not a recovery event. Jobs are
-      // durable in Postgres and the dispatcher owns recovery: a held delivery
-      // that dies with this process fails its job and graphile retries it, and
-      // a dispatcher restart reclaims dead worker locks itself. Re-enqueueing
-      // here was worse than redundant — the sweep lists the whole project's
-      // active runs, each enqueue is a fresh, un-keyed job, and the dispatcher
-      // routes every one to the deployment its run is pinned to. So one
-      // deployment booting woke every other deployment with an active run,
-      // each of which booted and re-enqueued the same runs again: a fleet-wide
-      // cold-start cascade on every upgrade.
-      if (resolved.runner === "external") {
-        return;
-      }
-      // Embedded keeps upstream's behaviour. There the in-process runner is the
-      // only claimer, and a job locked by a runner that died with this process
-      // would otherwise wait out graphile's four-hour stale-lock threshold.
-      // Upstream's `reenqueueActiveRuns` lists runs unfiltered and would
-      // re-enqueue every project's active runs from any agent's boot; this is
-      // the tenant-scoped equivalent.
-      await reenqueueTenantRuns({
-        runs: storage.runs,
-        enqueue: queue.queue,
-        tenantId: resolved.tenantId,
-      });
     },
     async close() {
       // Idempotent, and it has to be: a shutdown path and an error path can both

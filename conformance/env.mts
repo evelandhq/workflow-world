@@ -52,7 +52,6 @@ export function applyConformanceEnv(): void {
     WORKFLOW_WORLD_URL: url,
     WORKFLOW_WORLD_TENANT_ID: TENANT_ID,
     WORKFLOW_WORLD_DEPLOYMENT_ID: DEPLOYMENT_ID,
-    WORKFLOW_WORLD_RUNNER: "external",
     WORKFLOW_WORLD_RUNTIME_SECRET: RUNTIME_SECRET,
 
     // Host side — read by the dispatcher.

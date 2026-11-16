@@ -1,4 +1,5 @@
 import cp from "node:child_process";
+import { startDispatcherService, type DispatcherService } from "../src/dispatcher/service.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -138,9 +139,10 @@ export type StartedAgent = {
  * Starts the built agent and waits for it to listen.
  *
  * Env is the deployment side of this package's contract: the World reads the
- * database, tenant, deployment, runner mode and dispatch secret from it. The
- * tenant must already be provisioned — there is no DEFAULT partition, so an
- * unprovisioned tenant fails loudly on first write rather than pooling rows.
+ * database, tenant, deployment and dispatch secret from it. The tenant must
+ * already be provisioned — there is no DEFAULT partition, so an unprovisioned
+ * tenant fails loudly on first write rather than pooling rows. Nothing is
+ * delivered until a dispatcher runs ({@link startDispatcher}).
  */
 export async function startAgent(input: {
   dir: string;
@@ -148,8 +150,6 @@ export async function startAgent(input: {
   databaseUrl: string;
   tenantId: string;
   deploymentId: string;
-  /** `external` leaves delivery to a dispatcher the caller runs. */
-  runner?: "embedded" | "external";
   /** Laid over the inherited environment. */
   env?: Record<string, string>;
 }): Promise<StartedAgent> {
@@ -166,7 +166,6 @@ export async function startAgent(input: {
       WORKFLOW_WORLD_URL: input.databaseUrl,
       WORKFLOW_WORLD_TENANT_ID: input.tenantId,
       WORKFLOW_WORLD_DEPLOYMENT_ID: input.deploymentId,
-      WORKFLOW_WORLD_RUNNER: input.runner ?? "embedded",
       WORKFLOW_WORLD_RUNTIME_SECRET: E2E_RUNTIME_SECRET,
       ...input.env,
     },
@@ -221,6 +220,28 @@ export async function startAgent(input: {
       signalGroup("SIGKILL");
     },
   };
+}
+
+/**
+ * Runs the dispatcher in this process, delivering every job of the database to
+ * `origin` (one deployment, always running), the way a host would.
+ */
+export function startDispatcher(input: {
+  databaseUrl: string;
+  deploymentId: string;
+  origin: string;
+}): Promise<DispatcherService> {
+  return startDispatcherService({
+    env: {
+      NODE_ENV: "development",
+      WORKFLOW_WORLD_URL: input.databaseUrl,
+      WORKFLOW_WORLD_RUNTIME_SECRET: E2E_RUNTIME_SECRET,
+      WORKFLOW_DISPATCHER_STATIC_ENDPOINTS: `${input.deploymentId}=${input.origin}`,
+      WORKFLOW_DISPATCHER_POLL_INTERVAL_MS: "100",
+      WORKFLOW_DISPATCHER_MAINTENANCE_INTERVAL_MS: "0",
+    },
+    telemetry: { emit() {}, async shutdown() {} },
+  });
 }
 
 /**

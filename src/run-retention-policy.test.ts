@@ -8,7 +8,6 @@ import {
 describe("run retention policy", () => {
   test.each([
     ["scheduled", "scheduled"],
-    ["ephemeral", "scheduled"],
     ["interactive", "interactive"],
     ["persistent", "persistent"],
     [undefined, "interactive"],
@@ -24,7 +23,7 @@ describe("run retention policy", () => {
     expect(resolveRunRetentionClass("scheduled", { [RUN_RETENTION_ATTRIBUTE]: "persistent" })).toBe(
       "scheduled",
     );
-    expect(resolveRunRetentionClass(undefined, { [RUN_RETENTION_ATTRIBUTE]: "ephemeral" })).toBe(
+    expect(resolveRunRetentionClass(undefined, { [RUN_RETENTION_ATTRIBUTE]: "scheduled" })).toBe(
       "scheduled",
     );
   });

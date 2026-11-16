@@ -5,6 +5,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createWorld, ensureTenantPartitions, runMigrations } from "../src/index.js";
 import { dropTenantPartitions } from "../src/migrate.js";
+import type { DispatcherService } from "../src/dispatcher/service.js";
 import { ENABLED_EVE_VERSIONS } from "./eve-versions.mts";
 import {
   buildAgent,
@@ -12,6 +13,7 @@ import {
   deploymentFor,
   packWorld,
   startAgent,
+  startDispatcher,
   tenantFor,
   type StartedAgent,
 } from "./harness.mts";
@@ -67,6 +69,7 @@ describe.skipIf(!baseUrl)("an eve session moves to a fresh run through hook forc
 
       let pool: Pool;
       let agent: StartedAgent | undefined;
+      let dispatcher: DispatcherService | undefined;
       let world: ReturnType<typeof createWorld> | undefined;
       let dir: string;
 
@@ -89,7 +92,6 @@ describe.skipIf(!baseUrl)("an eve session moves to a fresh run through hook forc
           connectionString: databaseUrl,
           tenantId,
           deploymentId,
-          runner: "external",
         });
 
         dir = buildAgent({ eveVersion: entry.version, worldTarball });
@@ -101,9 +103,15 @@ describe.skipIf(!baseUrl)("an eve session moves to a fresh run through hook forc
           deploymentId,
           env: { NODE_ENV: "test", EVE_MOCK_AUTHORED_MODELS: "1" },
         });
+        dispatcher = await startDispatcher({
+          databaseUrl,
+          deploymentId,
+          origin: `http://127.0.0.1:${String(port)}`,
+        });
       });
 
       afterAll(async () => {
+        await dispatcher?.stop().catch(() => {});
         await agent?.stop();
         await world?.close?.();
         await dropTenantPartitions(pool, tenantId).catch(() => {});

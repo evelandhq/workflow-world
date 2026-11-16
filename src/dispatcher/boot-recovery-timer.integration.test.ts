@@ -17,9 +17,9 @@ import { reenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
  * recovery must replay it rather than wait for hooks nobody else resolves
  * (evelandhq/workflow-world#89).
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_boottimer_${suffix}`;
 
@@ -63,7 +63,6 @@ describe.skipIf(!testUrl)("boot recovery replays a hook-holding run parked on a 
       connectionString: testUrl!,
       tenantId: TENANT,
       deploymentId: "dep_sleeper",
-      runner: "external",
     });
     worlds.push(world);
     const created = await world.events.create(null, {

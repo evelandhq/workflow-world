@@ -25,7 +25,7 @@ import { dropTenantPartitions } from "./migrate.js";
  * isolation is deliberately never used for it. This is eve's own naming, and it
  * has to round-trip faithfully rather than be normalised away.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const TENANT = "prj_queue_namespace";
 
 describe.skipIf(!testUrl)("eve queue namespace round-trip", () => {
@@ -38,7 +38,7 @@ describe.skipIf(!testUrl)("eve queue namespace round-trip", () => {
   }, 60_000);
 
   afterAll(async () => {
-    // These jobs are never claimed — the world runs in `external` mode and no
+    // These jobs are never claimed — no
     // dispatcher is running here — so they would sit in the shared graphile table
     // and be picked up by whichever later suite starts a real dispatcher. Scoped
     // to this tenant's payloads; a blanket delete would eat other suites' jobs.
@@ -60,8 +60,6 @@ describe.skipIf(!testUrl)("eve queue namespace round-trip", () => {
       pool,
       tenantId: TENANT,
       deploymentId: "dep_ns_1",
-      // `external` so no in-process runner claims the job before we can read it.
-      runner: "external",
       ...(queueNamespace !== undefined ? { queueNamespace } : {}),
     });
     try {

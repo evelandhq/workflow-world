@@ -19,7 +19,7 @@ import {
  * that a waiting dispatcher gets the lock the moment the holder is gone. A
  * mocked client cannot say any of that.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 
 function collectingTelemetry(): DispatcherTelemetry & { events: DispatcherEvent[] } {
   const events: DispatcherEvent[] = [];

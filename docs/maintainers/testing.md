@@ -4,12 +4,12 @@ Run these commands from the repository root after installing dependencies with
 pnpm. Replace the example URLs with disposable PostgreSQL databases whose user
 can create schemas and tables; the Eve E2E suite also needs permission to create
 databases. Database-backed cases in the default suite are skipped when
-`EVELAND_WORKFLOW_WORLD_TEST_URL` is unset.
+`WORKFLOW_WORLD_TEST_URL` is unset.
 
 ## Unit and integration
 
 ```bash
-EVELAND_WORKFLOW_WORLD_TEST_URL=postgres://…/wfw_test pnpm test
+WORKFLOW_WORLD_TEST_URL=postgres://…/wfw_test pnpm test
 ```
 
 ## External conformance

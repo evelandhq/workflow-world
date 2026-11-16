@@ -30,9 +30,9 @@ import { createEventsStorage, createRunsStorage, createStepsStorage } from "./st
  *     `ensureTenantPartitions` instead of upstream's testcontainer + `db:push`,
  *     and every hand-written INSERT carries `tenant_id`.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 
 /**
  * One tenant per test FILE, not per test. `vitest.config.ts` sets

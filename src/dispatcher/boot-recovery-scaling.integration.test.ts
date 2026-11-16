@@ -19,9 +19,9 @@ import {
  * which a warm cache on a fast machine hides. (Adapted from
  * evelandhq/workflow-world#116.)
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_recscale_${suffix}`;
 const OTHER_TENANT = `p_recscale_other_${suffix}`;

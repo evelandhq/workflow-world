@@ -487,9 +487,8 @@ describe("fairness", () => {
 });
 
 /**
- * Message-level dedup, restoring the parity `external` mode lost: the World's
- * embedded task handler keeps a completed-key set and an in-flight map, and both
- * are unreachable once no in-process runner is registered.
+ * Message-level dedup: a completed-key set and an in-flight map, as upstream's
+ * in-process runner keeps.
  */
 describe("createMessageDedup", () => {
   const completed = (): DispatchOutcome => ({ type: "completed" });

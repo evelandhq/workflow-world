@@ -4,7 +4,6 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { FLOW_JOB_NAME, runQueueName, TIMER_JOB_NAME } from "../dispatch-contract.js";
 import { MessageData } from "../message.js";
-import { derivePartitionName } from "../tenant.js";
 import { dropTenantPartitions, ensureTenantPartitions, runMigrations } from "../migrate.js";
 import type { ActivationClient } from "./activation-client.js";
 import { reenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
@@ -22,9 +21,9 @@ import { createTimerHandler, moveDelayedJobsToTimers, registerTimerTask } from "
  * comes due goes back onto the run's queue under its own key, and boot recovery
  * still treats a held timer as the run's wake-up.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_timers_${suffix}`;
 const DEPLOYMENT = `dep_timers_${suffix}`;
@@ -63,13 +62,7 @@ describe.skipIf(!testUrl)("delayed deliveries leave their run queue", () => {
     await admin
       ?.query(
         "delete from graphile_worker._private_jobs where task_id in (select id from graphile_worker._private_tasks where identifier = any($1))",
-        [
-          [
-            OTHER_TASK,
-            derivePartitionName(FLOW_JOB_NAME, TENANT),
-            derivePartitionName(TIMER_JOB_NAME, TENANT),
-          ],
-        ],
+        [[OTHER_TASK]],
       )
       .catch(() => {});
     await admin
@@ -214,26 +207,6 @@ describe.skipIf(!testUrl)("delayed deliveries leave their run queue", () => {
     expect(await readJob(soonJob)).toMatchObject({ task: FLOW_JOB_NAME });
   });
 
-  test("an embedded tenant's jobs move only under that tenant's own names", async () => {
-    const runId = `wrun_embedded_${suffix}`;
-    const flowName = derivePartitionName(FLOW_JOB_NAME, TENANT);
-    const timerName = derivePartitionName(TIMER_JOB_NAME, TENANT);
-    await registerTimerTask(admin, timerName);
-    const jobId = await enqueueLikeTheWorld(runId, {
-      messageId: `msg_embedded_${suffix}`,
-      delaySeconds: 3600,
-      task: flowName,
-    });
-
-    // The dispatcher's sweep leaves it alone: only that tenant's runner can
-    // claim the timer it would become.
-    await moveDelayedJobsToTimers(admin);
-    expect(await readJob(jobId)).toMatchObject({ task: flowName });
-
-    await moveDelayedJobsToTimers(admin, { flowJobName: flowName, timerJobName: timerName });
-    expect(await readJob(jobId)).toMatchObject({ task: timerName, queue_name: null });
-  });
-
   test("a newer enqueue under the same key takes the timer back onto the queue", async () => {
     const runId = `wrun_rekeyed_${suffix}`;
     const key = `wait_rekeyed_${suffix}`;
@@ -274,7 +247,6 @@ describe.skipIf(!testUrl)("delayed deliveries leave their run queue", () => {
 
     await createTimerHandler({
       addJob: (identifier, payload, spec) => workerUtils.addJob(identifier, payload, spec),
-      flowJobName: FLOW_JOB_NAME,
     })(timer!.payload, { job: { key } });
 
     const jobs = await jobsForRun(runId);

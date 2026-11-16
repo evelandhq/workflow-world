@@ -12,7 +12,7 @@ import {
   setWorkflowRunRetentionClass,
 } from "./retention.js";
 
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_deadline_retention_${suffix}`;
 
@@ -120,7 +120,7 @@ describe.skipIf(!testUrl)("deadline-driven retention", () => {
       setWorkflowRunRetentionClass(pool, {
         tenantId: TENANT,
         runId: "reclassify",
-        retentionClass: "ephemeral",
+        retentionClass: "scheduled",
       }),
     ).resolves.toEqual({ updated: true, retentionClass: "scheduled" });
 

@@ -20,7 +20,7 @@ import { ulid } from "ulid";
  * the caller's terminal-run validation block runs, so nothing else was checking
  * them at all. Upstream's own suite does not cover that path.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const TENANT = "prj_hook_terminal";
 
 type EventsStorage = ReturnType<typeof createEventsStorage>;

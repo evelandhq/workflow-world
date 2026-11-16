@@ -15,9 +15,9 @@ import { reconcileWorkflowRuns } from "./reconciliation.js";
  * run reaching a terminal status resolves its letters — whoever writes that
  * status.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run these.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run these.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_dead_letter_${suffix}`;
 

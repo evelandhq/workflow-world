@@ -26,13 +26,9 @@ export const DISPATCH_VERSION = 1;
  * The graphile task name the World enqueues to and the dispatcher claims from.
  *
  * Both ends have to agree on it, so it lives here rather than in either half.
- * In `embedded` mode the World suffixes it per tenant (see `getJobQueueName`);
- * in `external` mode the name is shared, because the dispatcher deliberately
- * claims across all tenants.
- *
- * There is one name because `@workflow/world` has one queue kind. Up to
- * 5.0.0-beta.22 there was also a `'step'` kind with its own queue; beta.23
- * removed it, and the runtime now runs steps inline inside the flow handler.
+ * The name is shared by every tenant, because the dispatcher deliberately
+ * claims across all of them. There is one name because `@workflow/world` has
+ * one queue kind.
  */
 export const FLOW_JOB_NAME = "eveland_wf_flows";
 
@@ -49,10 +45,9 @@ export const FLOW_JOB_NAME = "eveland_wf_flows";
  *
  * Far-future flow jobs move here (see `timers.ts`), and when one comes due it is
  * re-added as a flow job on the run's queue, so per-run serialization still
- * covers the delivery itself. In `external` mode only the dispatcher writes this
- * name: deployments keep enqueueing flow jobs exactly as before, because their
- * world is baked at build time and an older dispatcher would never claim it. An
- * `embedded` runner uses its own per-tenant suffix of it.
+ * covers the delivery itself. Only the dispatcher writes this name: deployments
+ * enqueue flow jobs, because their world is baked at build time and an older
+ * dispatcher would never claim a timer.
  */
 export const TIMER_JOB_NAME = "eveland_wf_timers";
 
@@ -60,11 +55,9 @@ export const TIMER_JOB_NAME = "eveland_wf_timers";
  * graphile queue name that serializes the deliveries for one run. A hook wake
  * that arrives while the queue is held is the one exception; see `isHookWake`.
  *
- * graphile executes jobs sharing a `queueName` strictly one at a time, which is
- * exactly the guarantee `external` mode otherwise loses. In `embedded` mode the
- * task handler holds an in-process `inflightWorkflowRuns` map for this, but that
- * map is unreachable when no in-process runner is registered — and it could not
- * work anyway, because a process-local map cannot coordinate N dispatchers.
+ * graphile executes jobs sharing a `queueName` strictly one at a time. A
+ * process-local map could not provide this, because it cannot coordinate N
+ * dispatchers.
  *
  * Duplicate deliveries for one run are ordinary, not exotic: the World's own
  * enqueue uses a fresh ULID per send, so two sends for one run are two
@@ -148,18 +141,17 @@ export type DispatchRoute = "flow";
 export type DispatchRejection = { status: number; error: string };
 
 /**
- * Checked on the deployment side for every inbound dispatch.
- *
- * Requests carrying no version header at all are accepted: eve's own queue
- * handler is mounted on the same route and an embedded-mode world POSTs to it
- * over loopback without any Eveland headers. The check exists to reject a
- * *newer* dispatcher, not to make the header mandatory.
+ * Checked on the deployment side for every inbound dispatch. Every delivery
+ * comes from the dispatcher, so a request without the header is refused like
+ * any other unauthenticated one.
  */
 export function checkDispatchVersion(
   headerValue: string | null | undefined,
   supported: number = DISPATCH_VERSION,
 ): DispatchRejection | undefined {
-  if (headerValue === null || headerValue === undefined || headerValue === "") return undefined;
+  if (headerValue === null || headerValue === undefined || headerValue === "") {
+    return { status: 401, error: `Missing ${DISPATCH_VERSION_HEADER}.` };
+  }
   const version = Number(headerValue);
   if (!Number.isInteger(version) || version <= 0) {
     return { status: 400, error: `Invalid ${DISPATCH_VERSION_HEADER}: ${headerValue}` };
@@ -176,28 +168,18 @@ export function checkDispatchVersion(
 }
 
 /**
- * The environment variables carrying the shared dispatch secret, in precedence
- * order. `WORKFLOW_WORLD_RUNTIME_SECRET` is this package's own name;
- * `EVELAND_SCHEDULER_RUNTIME_SECRET` is the name Eveland already sets.
+ * The environment variable carrying the shared dispatch secret.
  *
  * This lives in the contract module because BOTH ends must agree. The deployment
  * side reads it in `createQueueHandler` and the host side reads it when building
  * the dispatch headers. A name honoured by only one end produces a dispatcher
- * that starts clean, passes every test, and then 401s every single dispatch —
- * so the list has exactly one home.
+ * that starts clean, passes every test, and then 401s every single dispatch.
  */
-export const RUNTIME_SECRET_ENV_NAMES = [
-  "WORKFLOW_WORLD_RUNTIME_SECRET",
-  "EVELAND_SCHEDULER_RUNTIME_SECRET",
-] as const;
+export const RUNTIME_SECRET_ENV_NAME = "WORKFLOW_WORLD_RUNTIME_SECRET";
 
-/** First non-empty value among {@link RUNTIME_SECRET_ENV_NAMES}. */
+/** The shared dispatch secret, or `undefined` when unset or empty. */
 export function readRuntimeSecretFromEnv(env: NodeJS.ProcessEnv): string | undefined {
-  for (const name of RUNTIME_SECRET_ENV_NAMES) {
-    const value = env[name];
-    if (value) return value;
-  }
-  return undefined;
+  return env[RUNTIME_SECRET_ENV_NAME] || undefined;
 }
 
 /**

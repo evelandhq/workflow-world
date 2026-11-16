@@ -17,11 +17,7 @@ import {
   type MessageDedup,
 } from "./dispatcher.js";
 
-/**
- * Job names must match what `@evelandhq/workflow-world` enqueues in external
- * mode. Embedded-mode jobs carry a per-tenant suffix and are deliberately not
- * claimed here — they belong to that deployment's own in-process runner.
- */
+/** Job names must match what the World enqueues (`FLOW_JOB_NAME`). */
 import {
   deliveryAccounting,
   FLOW_JOB_NAME,
@@ -140,8 +136,7 @@ export async function startDispatcher(input: {
     // through `parseQueueName`, which strips the `__wkf_<kind>_` prefix. eve's
     // handler rejects a name without that prefix outright ("Unhandled
     // queue", 400), and a 400 is non-retryable — so sending the bare id
-    // dead-letters every message. The embedded runner rebuilds the full name
-    // for the same reason.
+    // dead-letters every message.
     //
     // The namespace comes off the MESSAGE, not from this process's environment.
     // The dispatcher runs on the host; `WORKFLOW_QUEUE_NAMESPACE` here would be
@@ -211,7 +206,7 @@ export async function startDispatcher(input: {
     forbiddenFlags: () => fairness.forbiddenFlags(),
     taskList: {
       [FLOW_JOB_NAME]: makeHandler(FLOW_JOB_NAME),
-      [TIMER_JOB_NAME]: createTimerHandler({ addJob, flowJobName: FLOW_JOB_NAME }),
+      [TIMER_JOB_NAME]: createTimerHandler({ addJob }),
     },
   });
 

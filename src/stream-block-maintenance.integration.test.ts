@@ -10,7 +10,7 @@ import {
 import { packTerminalStreamBlocks } from "./stream-block-maintenance.js";
 import { compactStreamChunk } from "./stream-compaction.js";
 
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_pack_terminal_${suffix}`;
 
@@ -26,7 +26,6 @@ describe.skipIf(!testUrl)("terminal stream block maintenance", () => {
       pool,
       tenantId: TENANT,
       deploymentId: "dep_pack_terminal",
-      runner: "external",
     });
   }, 60_000);
 

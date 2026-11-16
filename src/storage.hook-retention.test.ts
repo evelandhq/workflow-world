@@ -20,7 +20,7 @@ import { ulid } from "ulid";
  * retention got a token that was immediately reusable. Silently dropping a field
  * someone set is the dangerous half: failing loudly would at least be actionable.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const TENANT = "prj_hook_retention";
 
 type EventsStorage = ReturnType<typeof createEventsStorage>;
@@ -232,7 +232,6 @@ describe.skipIf(!testUrl)("hook token retention", () => {
       pool,
       tenantId: TENANT,
       deploymentId: "dep_retention",
-      runner: "external",
     });
     // A World that stays silent is treated as not supporting retention.
     expect(world.capabilities?.hookRetention?.active).toBe(true);

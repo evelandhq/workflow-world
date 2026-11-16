@@ -36,9 +36,9 @@ import {
  * `isCorrelatedEventUniqueViolation` has to recognise that name or every
  * assertion below degrades to an unhandled 23505.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 
 /**
  * Fixed rather than per-run-unique, because `vitest.config.ts` sets
@@ -649,7 +649,7 @@ function holdFirstStatement(pool: Pool, pattern: RegExp, phase: "before" | "afte
 }
 
 /**
- * Multi-replica start race. In external runner mode the dispatcher may deliver
+ * Multi-replica start race. The dispatcher may deliver
  * a run's first message to a DIFFERENT replica while the creating replica is
  * still inside `events.create(run_created)`. Each replica is modelled here by
  * its own pool, and the creator is held immediately before its `run_created`

@@ -30,7 +30,7 @@ import {
  * with real time). Hook retention is compared in SQL, so those cases wait real
  * seconds, which is why the timeout is raised.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const TENANT = "prj_atomic_start_hook";
 const OTHER_TENANT = "prj_atomic_start_hook_other";
 
@@ -54,7 +54,6 @@ describe.skipIf(!testUrl)("atomic start Hook", () => {
       pool,
       tenantId: TENANT,
       deploymentId: "dep_start_hook",
-      runner: "external" as const,
     };
     world = createWorld(options);
     secondWorld = createWorld(options);

@@ -13,11 +13,9 @@ import { DEPLOYMENT_ID, PACKAGE_NAME, resolveConformanceDatabaseUrl, TENANT_ID }
  * conformance suite structurally cannot see, because every test in it is a single
  * sequential invoke.
  *
- * In `external` mode the World starts no in-process runner, so the embedded task
- * handler's `inflightWorkflowRuns` guard is unreachable — and a process-local map
- * could not serve N dispatchers anyway. The replacement is a per-run graphile
- * queue (`runQueueName`), applied by all three enqueue paths: the World's own
- * send, the dispatcher's reschedule, and boot recovery.
+ * A process-local map could not serve N dispatchers, so the guarantee is a
+ * per-run graphile queue (`runQueueName`), applied by all three enqueue paths:
+ * the World's own send, the dispatcher's reschedule, and boot recovery.
  *
  * `workflows/noop.ts`'s `brokenWf` is the detector. `noop` is a `'use step'`
  * function returning a module-level counter, so the output is one number per
@@ -81,7 +79,7 @@ async function runBrokenWf(options: {
  * invalidate the gate below.
  */
 test(
-  "CONTROL: a clean external run executes each step body exactly once",
+  "CONTROL: a clean run executes each step body exactly once",
   { timeout: 120_000 },
   async () => {
     const result = await runBrokenWf({});
@@ -119,7 +117,6 @@ test(
       connectionString: resolveConformanceDatabaseUrl(),
       tenantId: TENANT_ID,
       deploymentId: DEPLOYMENT_ID,
-      runner: "external",
     });
     try {
       const offered: string[] = [];

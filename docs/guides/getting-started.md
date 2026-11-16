@@ -2,49 +2,72 @@
 
 [Documentation](../README.md) · [Configuration](../reference/configuration.md)
 
+The World has two halves. A deployment loads it through the Workflow SDK and
+writes runs, events and queue jobs to a shared PostgreSQL database. The
+dispatcher, an always-running host process, claims those jobs and delivers them
+back to the deployment each run is pinned to. Nothing is delivered until a
+dispatcher is running.
+
 ## Install
+
+Use Node.js 24+ and PostgreSQL.
 
 ```bash
 npm install @evelandhq/workflow-world
 ```
 
-## Workflow SDK integration
+## Provision the database and tenants
 
-Use Node.js 24+ and PostgreSQL. The standalone
-[Next.js example](../../examples/nextjs/README.md) installs the public npm package,
-provisions a tenant, and runs a workflow with a step and a durable sleep in
-`embedded` mode. It pins `workflow@5.0.0-beta.48` and `@evelandhq/workflow-world@0.15.2`
-as a verified pair; the SDK's default `latest` tag is a separate release line.
+Run `workflow-world-setup` with `WORKFLOW_WORLD_URL` in its environment. It
+applies the schema migrations and initializes Graphile; **it does not create
+tenant partitions**. Call `ensureTenantPartitions(pool, tenantId)` once per
+tenant afterwards:
+
+```ts
+import { Pool } from "pg";
+import { ensureTenantPartitions } from "@evelandhq/workflow-world";
+
+const pool = new Pool({ connectionString: process.env.WORKFLOW_WORLD_URL });
+await ensureTenantPartitions(pool, "my_tenant");
+await pool.end();
+```
+
+There is no default partition, so a deployment of an unprovisioned tenant fails
+on its first write.
+
+## Configure deployments
 
 The SDK loads the World through these environment variables:
 
 ```bash
 WORKFLOW_TARGET_WORLD=@evelandhq/workflow-world
 WORKFLOW_WORLD_URL=postgres://world:world@127.0.0.1:5432/world
-WORKFLOW_WORLD_TENANT_ID=quickstart
-WORKFLOW_WORLD_DEPLOYMENT_ID=local-v1
-WORKFLOW_WORLD_RUNNER=embedded
+WORKFLOW_WORLD_TENANT_ID=my_tenant
+WORKFLOW_WORLD_DEPLOYMENT_ID=my_tenant-v1
+WORKFLOW_WORLD_RUNTIME_SECRET=<shared with the dispatcher>
 ```
 
 Configure your framework's Workflow integration too (for Next.js,
-`withWorkflow` from `workflow/next`). `experimental.workflow.world` is Eve's
-integration setting, not the general SDK setup.
+`withWorkflow` from `workflow/next`). Each build of an app is a deployment with
+its own id: a run stays pinned to the deployment that created it.
 
-Before starting the app, run `workflow-world-setup` with the database URL in its
-environment. It applies schema migrations and initializes Graphile; **it does
-not create tenant partitions**. Call `ensureTenantPartitions(pool, tenantId)`
-once per tenant afterwards. The example's `npm run setup` performs both steps;
-see its [provisioning script](../../examples/nextjs/scripts/provision-tenant.mjs).
+The deployment's flow route (`/.well-known/workflow/v1/flow`) accepts only
+requests that carry the runtime secret and name this deployment, which only
+the dispatcher sends. Keep the route off any public proxy all the same.
 
-## External runner
+## Run the dispatcher
 
-Once embedded mode works, switch to `WORKFLOW_WORLD_RUNNER=external`, configure
-the host activation API and shared runtime secret in the
-[configuration reference](../reference/configuration.md), and run
-`npx workflow-dispatcher` as an always-running host process. The activation API
-must locate or wake the run's pinned deployment and implement the lease contract
-in [the design document](../design.md#the-activation-lease). The dispatcher and
-activation service must remain available while executors scale to zero.
+Run `npx workflow-dispatcher` as an always-running host process, with the same
+`WORKFLOW_WORLD_URL` and `WORKFLOW_WORLD_RUNTIME_SECRET`. It finds a run's
+deployment in one of two ways:
 
-See [dispatcher operations](../operations/dispatcher.md) for pool sizing,
-readiness, recovery, and upgrades.
+- `WORKFLOW_DISPATCHER_ACTIVATION_API_URL`: the host's activation API, which
+  locates or wakes the run's pinned deployment and implements the lease
+  contract in [the design document](../design.md#the-activation-lease). Use it
+  for executors that scale to zero.
+- `WORKFLOW_DISPATCHER_STATIC_ENDPOINTS`: fixed `<deploymentId>=<origin>` pairs
+  for executors that are always running.
+
+See the [configuration reference](../reference/configuration.md) for every
+setting, and [dispatcher operations](../operations/dispatcher.md) for pool
+sizing, readiness, recovery, and upgrades.

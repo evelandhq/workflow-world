@@ -18,9 +18,9 @@ import { createEventsStorage } from "./storage.js";
  *
  * All 16 upstream tests in the group are present; none were dropped.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 
 /**
  * One tenant per ported file. Files share a database and only *files* are
