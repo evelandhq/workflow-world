@@ -17,8 +17,8 @@ export function agentDir(eveVersion: string, fixture = "fixture"): string {
 
 /**
  * A version as an identifier: tenant ids are validated, and the database name
- * is interpolated into DDL, so both stay in `[0-9a-z_]` (`1.0.0-rc.6` becomes
- * `1_0_0_rc_6`).
+ * is interpolated into DDL, so both stay in `[0-9a-z_]` (`1.0.0` becomes
+ * `1_0_0`).
  */
 function versionSlug(eveVersion: string): string {
   return eveVersion.toLowerCase().replace(/[^0-9a-z]/g, "_");

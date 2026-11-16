@@ -8,14 +8,12 @@
  * when the answer is no.
  *
  * Quiet is the point. eve ships often and almost none of it reaches this
- * package — Eveland's window is the single line 1.0.x, and the Workflow set its
- * verified release bundles is pinned here.
- * A check that fired on every eve release would be noise nobody reads; this one
- * fires roughly once per eve minor line, which is the real cadence of work here.
+ * package, which pins the Workflow set its verified eve release bundles. A
+ * check that fired on every eve release would be noise nobody reads; this one
+ * fires only when a release moves the set.
  *
- * Workflow pins have moved mid-line before (0.31.2 is one example), which is why
- * this reports an exact version rather than a line and never infers a set from a
- * minor.
+ * Workflow pins can move within an eve line, which is why this reports an exact
+ * version rather than a line and never infers a set from a minor.
  *
  *   node scripts/eve-pin-drift.mjs
  *
@@ -27,11 +25,8 @@
  * ## Why the registry and not Eveland's compatibility policy
  *
  * The authority on what may actually be deployed is
- * `packages/core/src/eve-compatibility.ts` in the Eveland repository, and the
- * honest version of this check would read it. It cannot: that repository is
- * private and this one is public, so reaching it would mean giving a public
- * repo's scheduled job a cross-repo credential — a large amount of standing
- * access bought for a weekly convenience.
+ * `packages/core/src/eve-compatibility.ts` in the Eveland repository. This
+ * check reads the registry instead, so it depends on nothing but npm.
  *
  * The registry is the weaker but sufficient signal. Eveland's window only ever
  * verifies versions that already exist on npm, so a `@workflow/*` move always
@@ -303,10 +298,8 @@ lines.push(
   "",
   "When it is time: bump the `eve` devDependency, run `pnpm install`, and let",
   "`src/eve-pin-contract.test.ts` name the packages that have to move with it.",
-  "Confirm `specVersion` remains compatible — eve compiles the runtime's check into each",
-  "release, as literal equality through `@workflow/core` beta.40 and as a",
-  "floor-and-ceiling range from beta.41 on, and the floor still rejects a World",
-  "pinned behind the runtime. Then run `pnpm run test:e2e`, which is the only thing",
+  "Confirm `specVersion` remains compatible — eve compiles the runtime's accepted",
+  "range into each release. Then run `pnpm run test:e2e`, which is the only thing",
   "here that loads a real eve.",
 );
 

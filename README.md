@@ -72,5 +72,5 @@ Copyright 2026 Eveland. Licensed under [Apache-2.0](./LICENSE).
 
 Storage, streamer, queue, and Drizzle schema modules derive from Vercel's
 `@workflow/world-postgres`. [NOTICE](./NOTICE) records upstream attribution, the
-base revision, and modifications; the [compatibility contract](./docs/world-postgres-beta34-compatibility.md)
+base revision, and modifications; the [compatibility contract](./docs/world-postgres-compatibility.md)
 defines the behavioral boundary.

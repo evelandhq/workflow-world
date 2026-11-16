@@ -334,7 +334,7 @@ describe.skipIf(!testUrl)("the dispatcher keeps delayed deliveries off run queue
       async release() {},
     };
 
-    // A backlog left by an older dispatcher: a sleeping run's continuation
+    // A backlog left while no dispatcher ran: a sleeping run's continuation
     // still on its run queue when this one starts.
     await admin.query(
       `select graphile_worker.add_job(

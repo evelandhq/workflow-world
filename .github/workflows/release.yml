@@ -7,9 +7,8 @@ name: Release
 # while that PR sits there. Merging it is the decision to release: that merge
 # tags the commit, cuts a GitHub release, and only then does `publish` run.
 #
-# The alternative — publishing on every merge to main — is wrong for a 0.x
-# package that has carried no production traffic. Cutting a version should be a
-# choice, not a side effect of merging a fix.
+# The alternative — publishing on every merge to main — would make cutting a
+# version a side effect of merging a fix rather than a choice.
 #
 # `bootstrap-sha` in release-please-config.json is the commit published by hand
 # as 0.1.0. That first publish cannot come from here: npm will not let you

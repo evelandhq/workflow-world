@@ -80,9 +80,8 @@ export const listenChannel = async (
 
   // `close` has to be idempotent. `createWorld().close()` is reachable more than
   // once in practice — a shutdown path and an error path can both call it, and a
-  // supervisor may signal twice — and the second call used to throw "Client was
-  // closed and is not queryable" from the `UNLISTEN`, because the client had
-  // already ended.
+  // supervisor may signal twice — and a second `UNLISTEN` on the ended client
+  // would throw "Client was closed and is not queryable".
   let closed = false;
 
   return {
@@ -359,9 +358,9 @@ export function createStreamer(
           .orderBy(asc(streams.chunkId))
           .limit(limit + 1);
 
-        // Stored bytes are handed through verbatim: every supported Eve line
-        // writes delta-only appends (stream v25), so there is no snapshot to
-        // rebuild and no accumulator state to carry across pages.
+        // Stored bytes are handed through verbatim: eve writes delta-only
+        // appends, so there is no snapshot to rebuild and no accumulator state
+        // to carry across pages.
         const logicalRows = rows
           .flatMap(unpackStreamRow)
           .filter((chunk) => !cursorChunkId || chunk.id > cursorChunkId);

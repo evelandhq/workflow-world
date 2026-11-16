@@ -57,7 +57,7 @@ meaning:
 | `WORKFLOW_WORLD_STREAM_COMPACTION`                       | `on`               | also controls snapshot stripping during terminal block rewrites                                                                                                                                                     |
 | `WORKFLOW_DISPATCHER_OWNERSHIP_LIVENESS_MS`              | `90000`            | how long a dead dispatcher may keep the ownership lock before the server reclaims it — see [ownership liveness](../operations/dispatcher.md#ownership-liveness)                                                     |
 | `WORKFLOW_DISPATCHER_OWNERSHIP_RETRY_INTERVAL_MS`        | `5000`             | retry cadence while another dispatcher holds the lock                                                                                                                                                               |
-| `WORKFLOW_DISPATCHER_OWNERSHIP_WAIT_MS`                  | unbounded          | give up on the lock after this long; `0` fails on the first miss, as versions before 0.16 always did                                                                                                                |
+| `WORKFLOW_DISPATCHER_OWNERSHIP_WAIT_MS`                  | unbounded          | give up on the lock after this long; `0` fails on the first miss                                                                                                                                                    |
 
 See [dispatcher operations](../operations/dispatcher.md) for runtime behavior
 and [storage and retention](../operations/storage.md) for maintenance policies.

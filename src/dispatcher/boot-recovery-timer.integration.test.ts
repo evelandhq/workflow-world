@@ -10,8 +10,8 @@ import { reenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
  * A run parked on a timer is recovered even while it holds hooks.
  *
  * Boot recovery skips hook-holding runs because a hook is normally the run's
- * other wake-up (a session on its inbox). From eve 0.57 the durable sleep tool
- * is a child run that holds an abort hook and its callback hook while it
+ * other wake-up (a session on its inbox). eve's durable sleep tool is a child
+ * run that holds an abort hook and its callback hook while it
  * sleeps, and its only driver is the delayed job. If that job is lost, the
  * `waiting` wait with a `resume_at` is what says "this run is inside a sleep";
  * recovery must replay it rather than wait for hooks nobody else resolves

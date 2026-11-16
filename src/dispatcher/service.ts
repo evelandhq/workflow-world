@@ -17,9 +17,8 @@ import { resolveDispatchRuntimeSecret, resolveSecretWithDevFallback } from "./se
 
 /**
  * The whole service as a function, so the CLI is a three-line wrapper and a test
- * can start it without a process. What used to be `server.ts`'s top-level
- * statements — the platform's build info banner, the platform observability
- * singleton, the eveland env names — are now the host's business, injected here.
+ * can start it without a process. A host's own concerns (a build info banner,
+ * its observability, its configuration names) are injected here.
  */
 export type DispatcherServiceOptions = {
   env?: NodeJS.ProcessEnv;

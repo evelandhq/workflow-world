@@ -49,9 +49,8 @@ export type DispatcherConfiguration = {
 
 /**
  * The activation lease TTL the host's control API issues. The dispatcher does
- * not set it; it only has to renew inside it. It used to be a hardcoded mirror
- * of eveland's default, which is exactly the kind of silent coupling a
- * standalone package cannot keep — so the host declares it.
+ * not set it; it only has to renew inside it, so the host declares it rather
+ * than this package assuming a host's default.
  */
 const DEFAULT_ACTIVATION_LEASE_TTL_MS = 180_000;
 
@@ -150,10 +149,9 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
   // dispatcher's lifecycle advisory lock (session-scoped, so its client stays
   // checked out until shutdown) and one for Graphile's LISTEN.
   //
-  // Nothing else is held. This used to say graphile takes a pooled connection
-  // per *running* job, and the concurrency was bounded at `poolSize - 2` on
-  // that basis. It is not true: `makeWithPgClientFromPool` acquires around a
-  // callback and releases in its `finally`, and graphile invokes the task
+  // Nothing else is held. graphile does not take a pooled connection per
+  // *running* job: `makeWithPgClientFromPool` acquires around a callback and
+  // releases in its `finally`, and graphile invokes the task
   // handler outside that callback — a connection is taken for `getJob` and for
   // `completeJob`, and returned to the pool in between. A held dispatch waiting
   // minutes on HTTP therefore holds no connection at all.

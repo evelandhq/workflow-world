@@ -49,12 +49,12 @@ graphile-worker 0.16 claims a job by first locking every available named queue
 due job; 0.17 and 0.18 still do this by default. Each lock is a WAL record and
 each claim a commit, so a claim costs one row lock **per queue that holds any
 job, due or not**. Per-run serialization gives every run its own
-`wfrun:<tenant>:<run>` queue, and a sleeping run's delayed continuation used to
+`wfrun:<tenant>:<run>` queue, and a sleeping run's delayed continuation would
 keep that queue alive for the whole sleep — eve's session timeout re-arms every
-23 hours for as long as the session lives. A few hundred live sessions meant a
-few hundred row locks on every claim, and with a high
-`WORKFLOW_DISPATCHER_CONCURRENCY` and a short poll interval that was a steady
-stream of WAL and fsyncs (evelandhq/workflow-world#115).
+23 hours for as long as the session lives. A few hundred live sessions would
+mean a few hundred row locks on every claim, and with a high
+`WORKFLOW_DISPATCHER_CONCURRENCY` and a short poll interval a steady stream of
+WAL and fsyncs (evelandhq/workflow-world#115).
 
 The dispatcher therefore holds any delivery due more than a minute out as an
 `eveland_wf_timers` job with no queue. Every
@@ -63,39 +63,11 @@ jobs off their run queues and reclaims the queues they leave empty; its own
 `{ timeoutSeconds }` reschedules skip the queue from the start. When a timer
 comes due the dispatcher re-adds it to the run's queue as an ordinary flow job,
 under the same job key, so the delivery itself is still serialized. Deployments
-enqueue exactly what they did before, so this applies to every build already
-deployed, and no deployment ever writes a job that only a newer dispatcher could
-claim. Jobs that have been attempted keep their place, since moving one would
-reset its retry count.
+enqueue ordinary flow jobs, so no deployment ever writes a job that only a newer
+dispatcher could claim. Jobs that have been attempted keep their place, since
+moving one would reset its retry count.
 
-**Rolling the dispatcher back below this version** leaves held timers with no
-consumer: an older dispatcher does not claim `eveland_wf_timers`. Stop it and
-return them to their run queues first:
-
-```sql
-begin;
-insert into graphile_worker._private_job_queues (queue_name)
-select distinct jobs.payload ->> 'runQueue'
-  from graphile_worker._private_jobs as jobs
-  join graphile_worker._private_tasks as tasks on tasks.id = jobs.task_id
- where tasks.identifier = 'eveland_wf_timers'
-on conflict do nothing;
-update graphile_worker._private_jobs as jobs
-   set task_id = flow.id,
-       job_queue_id = queues.id,
-       flags = jsonb_build_object('project:' || (jobs.payload ->> 'tenantId'), true)
-  from graphile_worker._private_tasks as timer,
-       graphile_worker._private_tasks as flow,
-       graphile_worker._private_job_queues as queues
- where timer.identifier = 'eveland_wf_timers'
-   and flow.identifier = 'eveland_wf_flows'
-   and jobs.task_id = timer.id
-   and queues.queue_name = jobs.payload ->> 'runQueue'
-   and jobs.locked_at is null;
-commit;
-```
-
-The number of `_private_job_queues` rows now tracks runs with work due, not
+The number of `_private_job_queues` rows tracks runs with work due, not
 runs that are alive:
 
 ```sql
@@ -155,9 +127,6 @@ runs it does re-enqueue are released a few deployments at a time
 `WORKFLOW_DISPATCHER_BOOT_RECOVERY_WAVE_INTERVAL_MS`), so a restart does not ask
 the host to cold-start every deployment with an active run at once. A second
 dispatcher pointed at the same database fails closed instead of sharing claims.
-When first upgrading from a version that did not take this ownership lock, stop
-the old dispatcher before starting the new one; the new lock cannot fence a
-binary that never participates in it.
 
 ## Ownership liveness
 
@@ -195,7 +164,7 @@ client address and connection time from `pg_locks` each time, and starts the
 moment the holder is gone. That is what a restart during the liveness window
 looks like — a few warnings, then `ready` — rather than a crash loop that trips
 the supervisor's start limit. Set `WORKFLOW_DISPATCHER_OWNERSHIP_WAIT_MS` to
-bound the wait; `0` restores the old fail-fast behaviour. The holder is also
+bound the wait; `0` fails on the first miss. The holder is also
 readable programmatically through `readDispatcherOwnershipHolder`, and
 `terminateDispatcherOwnershipHolder` is the escape hatch for a holder the layers
 cannot reach (a pre-0.16 dispatcher that never set them).
