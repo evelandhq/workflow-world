@@ -190,7 +190,10 @@ that omits the field leaves a runaway workflow with no bound at all.
 `streams.writeMulti` generates monotonic logical ids up front, strips Eve's
 cumulative snapshots, and packs up to 64 logical chunks / 256 KiB into each v2
 physical row. One NOTIFY names one block; readers expand both legacy rows and v2
-blocks before applying cursor or index semantics. `analytics` and
+blocks before applying cursor or index semantics. A `streams.get` reader takes
+in a page of rows when its consumer has room for it and treats a NOTIFY as a
+wake-up only, so what a slow or abandoned reader holds does not grow with its
+stream. `analytics` and
 `getEncryptionKeyForRun` are deliberately not implemented; both belong to work
 that is out of scope below.
 
