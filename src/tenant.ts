@@ -15,8 +15,7 @@ export const TENANT_COLUMN = "tenant_id";
  * Partition names are derived, never interpolated from raw ids: project ids use
  * a mixed-case alphabet, Postgres folds unquoted identifiers to lowercase, and
  * identifiers truncate at 63 bytes. The digest keeps case-variant and
- * long-prefix ids collision-free, mirroring `deriveProjectWorkflowDatabaseName`
- * in the worker's legacy bootstrap.
+ * long-prefix ids collision-free.
  */
 export function derivePartitionName(table: string, tenantId: string): string {
   const safe = tenantId

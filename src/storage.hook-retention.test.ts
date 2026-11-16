@@ -15,10 +15,9 @@ import { ulid } from "ulid";
  * Hook token retention: `tokenRetentionUntil` keeps a token reserved past the end
  * of the run that created it.
  *
- * The field used to be accepted and silently discarded — there was no column for
- * it — and run termination deleted the hook regardless, so a caller that asked for
- * retention got a token that was immediately reusable. Silently dropping a field
- * someone set is the dangerous half: failing loudly would at least be actionable.
+ * A World that accepted the field and dropped it would let run termination
+ * delete the hook regardless, so a caller that asked for retention would get a
+ * token that was immediately reusable.
  */
 const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const TENANT = "prj_hook_retention";

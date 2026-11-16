@@ -163,14 +163,13 @@ that omits the field leaves a runaway workflow with no bound at all.
 
 `streams.writeMulti` generates monotonic logical ids up front, strips Eve's
 cumulative snapshots, and packs up to 64 logical chunks / 256 KiB into each v2
-physical row. One NOTIFY names one block; readers expand both legacy rows and v2
-blocks before applying cursor or index semantics. `analytics` and
+physical row. One NOTIFY names one block; readers expand both one-row-per-chunk
+rows and v2 blocks before applying cursor or index semantics. `analytics` and
 `getEncryptionKeyForRun` are deliberately not implemented; both belong to work
 that is out of scope below.
 
-Three optional members added in `@workflow/world` 5.0.0-beta.24 are left
-unimplemented on purpose. Each one fails open, and the reasons differ enough to
-be worth recording:
+Several optional members are left unimplemented on purpose. Each one fails open,
+and the reasons differ enough to be worth recording:
 
 - **`getEnvironment()`** exists so a run's creating environment can travel on its
   queue message and a consuming deployment can notice it was handed a message
@@ -193,39 +192,6 @@ be worth recording:
   back through the analytics surface. It is dropped for the same reason
   `requestId` already is: this World does not implement `analytics`, so there is
   nothing to read it back through.
-
-The same release grew `hookInput` and `preconditionReinvocations` on the queue
-payload and `environment` on `RunInput`. None of them reach this package: the vqs
-body is carried as opaque bytes on `MessageData.data`, and only eve's own handler
-parses it.
-
-5.0.0-beta.25 — first picked up by eve 0.31.2 — added one required param and four
-more optional members. The required one, `runId` on
-`ListEventsByCorrelationIdParams`, is implemented; see
-`events.listByCorrelationId`. Of the optional four, one is now declared and the
-other three are unimplemented:
-
-- **`capabilities.deploymentAffinity`** was left unset here until eve 0.76.1,
-  and is declared now. On its own it turns on the runtime's affinity guard: a
-  misrouted delivery is re-routed to the run's deployment and ultimately fails
-  the run with `DEPLOYMENT_MISMATCH`. This World qualifies — the guard is unsafe
-  only for Worlds whose deployment id is synthetic or version-tagged, and
-  `queue.getDeploymentId` returns the real one — but the dispatcher already
-  resolves affinity from the run row before any delivery happens
-  (`resolveAffinity`), so the guard alone was a second mechanism for a condition
-  the first is designed to make unreachable. eve 0.76.1 gave the flag a second
-  reader: eve itself takes it to mean "this World routes each run to its own
-  deployment". A World without it is assumed to run one eve version at a time,
-  so eve compares every run's `$eve.version` attribute with its own version,
-  parks or cancels deliveries for runs another version created, and ends a
-  session whose owner run another version created (`session_stranded`) instead
-  of resuming that run and letting it hand the session over. On Eveland, where
-  Deployments on different eve versions run side by side, that turned every
-  channel-address continuation across an eve-version promote into a reset. The
-  guard's remedy still differs from the dispatcher's (a terminal run's straggler
-  is dropped by the dispatcher, failed by the guard), but with the dispatcher
-  routing on the run row the guard should never fire; if it does, the
-  dispatcher's routing has a hole worth fixing directly.
 - **`queue.isDeploymentUnavailableError`** lets the runtime distinguish "this
   deployment definitively cannot receive the message" from a transient failure.
   The dispatcher already makes exactly that distinction on the activation
@@ -234,11 +200,36 @@ other three are unimplemented:
   World's queue surface. Nothing in the runtime path consults it here.
 - **`runs.cancelMany`** is a bulk cancel, capped at 500 ids. `@workflow/core`'s
   `cancelRuns` falls back to bounded-concurrency single cancels when it is
-  absent, which is correct and is what happens today.
+  absent, which is correct.
 - **`getRuntimeDeadline()`** reports when the hosting platform will terminate the
   current invocation. On this platform a step's invocation is a held vqs POST
   whose lifetime the dispatcher controls through lease renewal, so there is no
   externally-imposed wall clock for the World to report.
+
+The queue payload's `hookInput` and `preconditionReinvocations`, and
+`environment` on `RunInput`, do not reach this package: the vqs body is carried
+as opaque bytes on `MessageData.data`, and only eve's own handler parses it.
+
+**`capabilities.deploymentAffinity` is declared.** On its own it turns on the
+runtime's affinity guard: a misrouted delivery is re-routed to the run's
+deployment and ultimately fails the run with `DEPLOYMENT_MISMATCH`. This World
+qualifies — the guard is unsafe only for Worlds whose deployment id is synthetic
+or version-tagged, and `queue.getDeploymentId` returns the real one — but the
+dispatcher already resolves affinity from the run row before any delivery
+happens (`resolveAffinity`), so the guard alone would be a second mechanism for
+a condition the first is designed to make unreachable. The flag has a second
+reader: eve itself takes it to mean "this World routes each run to its own
+deployment". A World without it is assumed to run one eve version at a time, so
+eve compares every run's `$eve.version` attribute with its own version, parks
+or cancels deliveries for runs another version created, and ends a session
+whose owner run another version created (`session_stranded`) instead of
+resuming that run and letting it hand the session over. On Eveland, where
+Deployments on different eve versions run side by side, that would turn every
+channel-address continuation across an eve-version promote into a reset. The
+guard's remedy differs from the dispatcher's (a terminal run's straggler is
+dropped by the dispatcher, failed by the guard), but with the dispatcher routing
+on the run row the guard should never fire; if it does, the dispatcher's routing
+has a hole worth fixing directly.
 
 `CreateEventParams.preloadEvents` is an advisory opt-in on `hook_received` that a
 World MAY answer with the run's complete replay log. It is ignored, which the
@@ -304,9 +295,8 @@ Two orderings make this safe, and both rest on row locks held to commit:
   A delivery to a finished victim is refused as before (terminal run or missing
   hook), and the runtime re-resolves the token from the claimer's `claimedFrom`.
 - **No disposal is journaled ahead of its hook's creation.** `hook_created`
-  writes its hook row and its event in one transaction (they were two
-  statements; the orphaned-row recovery stays for rows an older World left),
-  so a takeover that can see the row also sees the creation already journaled.
+  writes its hook row and its event in one transaction, so a takeover that can
+  see the row also sees the creation already journaled.
 
 The World cannot publish the victim's wake -- the claimer's runtime does that
 from `claimedFrom`, through the ordinary queue, with an idempotency key per
@@ -457,7 +447,7 @@ These bite hard enough to be worth stating outright.
 `workflow_runs (deployment_id) WHERE status IN ('pending','running')` for the
 retention guard, partial so it stays small as terminal runs accumulate; and
 `workflow_runs (tenant_id, created_at DESC)` for listing surfaces. The
-legacy stream-retention sweep uses the partial expression index on
+caller-selected stream cleanup uses the partial expression index on
 `coalesce(completed_at, updated_at), tenant_id, id`; deadline-driven maintenance
 uses the `compact_after`, `expire_after`, and `detail_expire_after` indexes, then
 the `(tenant_id, retention_root_run_id, status)` index to validate whole-lineage
@@ -470,9 +460,8 @@ graphile's own tables live in the same database, in their own schema, untouched.
 ### Stream compaction and terminal retention
 
 The stream boundary is logical, not physical. Write-side snapshot stripping turns
-a v24-shaped `messageSoFar` / `reasoningSoFar` append back into a delta; every
-supported Eve line already writes deltas (stream v25), so the guard is normally
-a no-op. Readers serve stored bytes verbatim: rebuilding snapshots on read
+an append carrying a cumulative `messageSoFar` / `reasoningSoFar` back into a
+delta; eve writes deltas, so the guard is normally a no-op. Readers serve stored bytes verbatim: rebuilding snapshots on read
 would re-inflate every read to O(n²) bytes that the runtime normalizes away
 again. Packed rows retain every logical chunk id, so a
 terminal rewrite and a rolling upgrade do not change cursors, `startIndex`, or
@@ -508,8 +497,8 @@ packing, stream expiry, and graph expiry are failure-isolated and protected by
 advisory locks. Eligibility is decided across the complete stored lineage: any
 active member, later member deadline, persistent member, or unexpired retained
 hook holds both stream and graph data. Stream and graph expiry preserve EOF
-forever. The older
-`pruneTerminalStreamChunks(retentionMs)` entry point remains for standalone hosts.
+forever. The caller-selected `pruneTerminalStreamChunks(retentionMs)` entry
+point serves hosts that sweep on their own schedule.
 Expiring chunks expires replay from old raw cursors even though EOF still makes
 the stream resolve as complete. Normal deletes make pages reusable but do not
 promise to shrink relation files.
@@ -553,8 +542,7 @@ for the step's whole duration. The POST returning is what marks the job complete
 `http://127.0.0.1:<endpointPort>`, which is every host that runs its executors
 beside the dispatcher. `endpointUrl` is an origin anywhere else — typically a
 service in front of several replicas of one deployment — and wins when both are
-present, so a control plane can add it without taking away the port an older
-dispatcher still reads. Only the origin is used: the route is this package's to
+present. Only the origin is used: the route is this package's to
 choose, because the dispatch carries the runtime secret and whoever supplies the
 address must not be able to aim it at another path. A URL with a path, a query
 or credentials is refused, and the message is dead-lettered rather than retried
@@ -790,7 +778,7 @@ An unresolved dead letter is therefore the dispatcher's terminal **quarantine**
 state even though the workflow run itself remains `pending` or `running`. Boot
 recovery excludes quarantined runs, so every dispatcher restart cannot recreate
 the same terminal delivery forever. Platform deployment-retention queries must
-apply the same exclusion: an unresolved dispatch failure no longer protects a
+apply the same exclusion, so an unresolved dispatch failure does not protect a
 dead executor indefinitely. This deliberately does not append `run_failed` or a
 stream EOF on the workflow's behalf.
 

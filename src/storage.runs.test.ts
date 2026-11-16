@@ -195,11 +195,11 @@ describe.skipIf(!testUrl)("runs storage (postgres)", () => {
     });
 
     /**
-     * Restored: the fork used to swallow this. `.onConflictDoNothing()` returned
-     * no row, so the code left `run` undefined and fell through to the generic
-     * event INSERT — a duplicate `run_created` landed in the log, and eve's
-     * `start()`, which asserts `result.run`, got `undefined` with no typed error
-     * to branch on.
+     * `.onConflictDoNothing()` returns no row for a duplicate; without this
+     * error the code would leave `run` undefined and fall through to the
+     * generic event INSERT — a duplicate `run_created` in the log, and eve's
+     * `start()`, which asserts `result.run`, would get `undefined` with no typed
+     * error to branch on.
      */
     it("rejects a duplicate run_created with EntityConflictError", async () => {
       const runId = `wrun_${ulid()}`;
@@ -421,8 +421,8 @@ describe.skipIf(!testUrl)("runs storage (postgres)", () => {
     });
 
     it("filters by a set of statuses, and an empty set matches nothing", async () => {
-      // `@workflow/world` 5.0.0-beta.36 widened `status` to an array so callers
-      // can ask for e.g. every non-terminal run in one paginated call.
+      // `status` may be an array so callers can ask for e.g. every
+      // non-terminal run in one paginated call.
       const pending = await createRun(events, {
         deploymentId: "deployment-1",
         workflowName: "workflow-1",

@@ -210,7 +210,7 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
       test("a scheduled delivery preserves an existing interactive root", async () => {
         const { sessionId } = await createInteractiveOwner(port);
 
-        // From eve 0.49 a session-create answers as soon as Workflow accepts the
+        // A session-create answers as soon as Workflow accepts the
         // run, before the address's continuation hook exists. A delivery that
         // lands in that gap is not a follow-up but a racing first message: eve
         // starts a second candidate root, settles the conflict inside the

@@ -95,18 +95,15 @@ function withoutSnapshot(data: Record<string, unknown>, soFarKey: string): Recor
 /**
  * Strip Eve's cumulative snapshots while preserving unknown bytes exactly.
  *
- * Every supported Eve line speaks message stream v25 (0.50.0 and later) or
- * v26 (0.69.0 and later, same append events), whose appends carry the delta
- * alone, so on a current run this is a no-op: the frame is parsed, nothing is
- * found, and the original buffer is returned. It stays on as a cheap
- * write-side guard so that a v24-shaped append -- a stale build, a
- * hand-written chunk -- can never reintroduce O(n²) storage.
+ * eve's message stream appends carry the delta alone, so on a current run this
+ * is a no-op: the frame is parsed, nothing is found, and the original buffer is
+ * returned. It stays on as a cheap write-side guard so that an append carrying
+ * a cumulative snapshot (a hand-written chunk, say) can never reintroduce
+ * O(n²) storage.
  *
- * Nothing rebuilds the snapshot on read. The rehydrator that used to do so was
- * removed once the last v24 line left the supported window: it re-inflated
- * every read back to O(n²) bytes that a v25 runtime immediately normalized away
- * again, and it persisted accumulator checkpoints for the same non-purpose.
- * Stored bytes are what readers get.
+ * Nothing rebuilds the snapshot on read: that would re-inflate every read to
+ * O(n²) bytes the runtime immediately normalizes away again. Stored bytes are
+ * what readers get.
  */
 export function compactStreamChunk(chunk: Buffer): Buffer {
   const frames = parseFrames(chunk);

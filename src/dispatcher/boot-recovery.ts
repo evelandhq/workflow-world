@@ -49,8 +49,8 @@ import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
  *
  * The exception is a run whose wake-up is a `sleep()`: a `waiting` wait with a
  * `resume_at`. Its only driver is the delayed job, and the hooks it holds are
- * its own (from eve 0.57 the durable sleep tool is a child run that carries
- * an abort hook and its callback hook while it sleeps — evelandhq/workflow-world#89).
+ * its own (eve's durable sleep tool is a child run that carries an abort hook
+ * and its callback hook while it sleeps — evelandhq/workflow-world#89).
  * Nobody else resolves those, so losing the job strands the run for good
  * unless boot recovery replays it; the replay re-arms the timer from the
  * wait's own deadline. A run that created a hook, moved on without a timer,

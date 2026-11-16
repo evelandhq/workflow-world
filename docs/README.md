@@ -20,7 +20,7 @@ Start with the [project README](../README.md) for user and developer quick start
 
 - [Design](./design.md): topology, tenant isolation, data model,
   dispatch and activation contracts, failure semantics, and limitations.
-- [Upstream compatibility](./world-postgres-beta34-compatibility.md): required
+- [Upstream compatibility](./world-postgres-compatibility.md): required
   behavioral parity and intentional differences from the reference World.
 
 ## Maintaining the project

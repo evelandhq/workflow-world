@@ -33,8 +33,7 @@ export type VqsRequest = {
    * Where the executor listens. A port means loopback, which is every host that
    * runs its executors beside the dispatcher; a URL is an executor somewhere
    * else — a service in front of several replicas of one deployment. When both
-   * are given the URL wins, so a control plane can add it without removing the
-   * port older dispatchers still read.
+   * are given the URL wins.
    */
   endpointPort?: number;
   endpointUrl?: string;
@@ -83,8 +82,7 @@ export function parseEndpointUrl(value: string): { origin: string } | { error: s
 }
 
 function flowUrl(request: VqsRequest): string | { error: string } {
-  // One route only: `WorkflowUrlRoute` lost its `'step'` member in
-  // `@workflow/world` 5.0.0-beta.23, alongside the queue kind.
+  // One route only: `WorkflowUrlRoute` has no `'step'` member.
   if (request.endpointUrl !== undefined) {
     const endpoint = parseEndpointUrl(request.endpointUrl);
     return "error" in endpoint ? endpoint : `${endpoint.origin}${WORKFLOW_ROUTE_BASE}/flow`;

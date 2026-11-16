@@ -6,14 +6,8 @@
  * `tenantId`) and schema setup (this repo's own migrations instead of
  * testcontainers + `db:push`).
  *
- * Six upstream tests in this range are deliberately absent because the
- * behaviour they assert does not exist at our pins (`@workflow/world`
- * 5.0.0-beta.24): the four `tokenRetentionUntil` retention tests (no retention
- * column, and `hook_created` drops the field), and the two that expect
- * `hook_received` to raise `RunExpiredError` on a run that reached a terminal
- * state (there is no such guard on either the current-spec or legacy path).
- * Faking them would assert our fork's absence of a feature as if it were the
- * feature.
+ * Hook token retention lives in `storage.hook-retention.test.ts`, and the
+ * terminal-run guard on `hook_received` in `storage.hook-terminal.test.ts`.
  *
  * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */

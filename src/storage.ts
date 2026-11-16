@@ -2318,9 +2318,7 @@ function createUnfencedEventsStorage(
         // that takeover appends OUR `hook_disposed`; a `hook_created` journaled
         // after it would land behind its own disposal, a row no replay can
         // consume. One transaction makes that order unreachable: the takeover
-        // locks this row, and its lock waits for this commit. (These used to be
-        // two statements; the orphaned-row recovery below exists for rows an
-        // older World left behind between them.)
+        // locks this row, and its lock waits for this commit.
         //
         // Answers whether this creation claimed the token: false when another
         // Hook claimed it first, in which case nothing was written.
@@ -2396,8 +2394,7 @@ function createUnfencedEventsStorage(
           // Idempotency: if the existing hook is the *same* (runId, hookId)
           // we are trying to create, this is either a duplicate / replayed
           // processing of the same hook_created (not a real conflict), or
-          // an orphaned hook row from a prior crashed attempt (older Worlds
-          // wrote the hook row and its event in separate statements).
+          // a hook row whose `hook_created` event is missing.
           // Distinguish by checking whether the `hook_created` event actually
           // exists in the event log:
           //   - exists → real duplicate: throw EntityConflictError so the
@@ -2711,9 +2708,9 @@ function createUnfencedEventsStorage(
       // `DELETE ... RETURNING` ensures only one concurrent caller succeeds: no
       // row back means the hook was already disposed, by its run or by a
       // takeover. The delete also takes the hook row's lock, and the transaction
-      // holds it until the `hook_disposed` row exists. Committed separately (as
-      // this used to be), the lock was released at the delete's own autocommit,
-      // leaving a window for a resume to pass its existence check and land its
+      // holds it until the `hook_disposed` row exists. Committed separately, the
+      // lock would be released at the delete's own autocommit, leaving a window
+      // for a resume to pass its existence check and land its
       // `hook_received` AFTER this disposal -- an order no replay can consume,
       // which strands the delivery and ends the run in a corrupted-log failure.
       // It is the same ordering the force-claim takeover gives the disposal it
@@ -3119,15 +3116,13 @@ function createUnfencedEventsStorage(
       };
     },
     /**
-     * `runId` became required on the params in `@workflow/world` 5.0.0-beta.25,
-     * so the predicate is now run-scoped as well as tenant-scoped.
+     * Run-scoped as well as tenant-scoped: `runId` is required on the params.
      *
      * This narrows results rather than just restating them, and hooks are the
      * case that proves it. The hook-existence lookup ahead of `hook_received` is
      * keyed `(tenant_id, hook_id)` with no run in it, so a hook created under one
      * run can be received under another — leaving one correlationId with events
-     * owned by two different runs. Before beta.25 this method returned all of
-     * them; now each run sees only its own. Steps cannot produce that shape
+     * owned by two different runs; each run sees only its own. Steps cannot produce that shape
      * (`workflow_steps` is keyed `(tenant_id, step_id)` and every step event is
      * written under the owning run), which is why hooks are where the change is
      * observable. See the cross-run coverage in `storage.events.test.ts`.

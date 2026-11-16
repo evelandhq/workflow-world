@@ -98,8 +98,8 @@ test(
  * ULID per send, so nothing collapses it — while the first is in flight. The
  * per-run queue name is the only thing keeping the two from running at once.
  *
- * The dispatcher's own boot sweep used to be the injector here. It no longer
- * can be: a run in flight always has a live job on its queue (the delivery
+ * The dispatcher's own boot sweep cannot be the injector here: a run in flight
+ * always has a live job on its queue (the delivery
  * being held, or the continuation the runtime enqueues before acking), and the
  * sweep skips exactly those runs. So it is asserted the other way round — the
  * sweep, run repeatedly during flight, never so much as offers this run to the

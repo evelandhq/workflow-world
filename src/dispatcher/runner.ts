@@ -221,8 +221,8 @@ export async function startDispatcher(input: {
   // timers.ts), so a sleeping run must not keep its queue. Deployments enqueue
   // their delayed continuations straight onto the run's queue; this moves them
   // off it and collects the queues they leave empty right away rather than at
-  // the next GC. Runs once at start, so a backlog left by an older dispatcher
-  // is cleared before it costs anything further.
+  // the next GC. Runs once at start too, so a backlog left while no
+  // dispatcher ran is cleared before it costs anything further.
   let sweeping = false;
   let timerTaskRegistered = false;
   const sweepTimers = async () => {

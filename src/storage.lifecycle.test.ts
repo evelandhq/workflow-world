@@ -14,7 +14,7 @@ import { createEventsStorage } from "./storage.js";
  * Lifecycle coverage ported from `@workflow/world-postgres`'s
  * `test/storage.test.ts`: the "idempotent operations", "step_retrying event
  * handling", "run cancellation with in-flight entities", "event ordering
- * validation" and "legacy/backwards compatibility" groups.
+ * validation" and "spec versions" groups.
  *
  * These are upstream's assertions rather than new ones. `storage.ts` is a
  * tenant-scoped fork that deliberately keeps upstream's event-sourcing logic
@@ -36,7 +36,7 @@ const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 /**
  * One tenant per test FILE, not per test. `vitest.config.ts` sets
  * `fileParallelism: false`, but the ported suites all share one database, and
- * several of the tests below pin fixed run ids (`wrun_legacy_v1`, ...). A tenant
+ * several of the tests below pin fixed run ids (`wrun_future`, ...). A tenant
  * unique to this file is what keeps those ids from colliding with another file's.
  */
 const TENANT = "prj_port_lifecycle";
@@ -110,7 +110,7 @@ describe.skipIf(!testUrl)("storage lifecycle (Postgres)", () => {
    * Upstream TRUNCATEs the four tables; here the tables are shared by every
    * tenant, so the reset is scoped by `tenant_id`. It also makes the file
    * repeatable against a database it has already used, which the fixed run ids
-   * in the legacy group need.
+   * in the spec versions group need.
    */
   async function clearTenant() {
     for (const table of [
@@ -404,7 +404,7 @@ describe.skipIf(!testUrl)("storage lifecycle (Postgres)", () => {
     });
   });
 
-  describe("legacy/backwards compatibility", () => {
+  describe("spec versions", () => {
     describe("newer runs (specVersion > current)", () => {
       it("should reject events on runs with newer specVersion", async () => {
         const runId = "wrun_future";

@@ -74,8 +74,7 @@ export async function runMigrations(
 /**
  * Creates this tenant's partitions. Idempotent, and safe to call concurrently:
  * the duplicate_table race between two provisioning paths is treated as
- * success, mirroring how the legacy per-project bootstrap handles
- * duplicate_database.
+ * success.
  */
 export async function ensureTenantPartitions(pool: Pool, tenantId: string): Promise<void> {
   assertValidTenantId(tenantId);

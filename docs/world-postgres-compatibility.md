@@ -1,9 +1,11 @@
-# `@workflow/world-postgres` beta.34 compatibility contract
+# `@workflow/world-postgres` compatibility contract
 
-The compatibility target is behavioral equivalence with
-`@workflow/world-postgres@5.0.0-beta.34` at the public `@workflow/world` boundary,
-not identical SQL, topology, configuration names, or migration history. The
-matching public interface is `@workflow/world@5.0.0-beta.27`.
+The compatibility target is behavioral equivalence with upstream's
+`@workflow/world-postgres` at the public `@workflow/world` boundary this package
+pins (5.2.0), not identical SQL, topology, configuration names, or migration
+history. The storage, streamer, queue and schema modules were ported from
+world-postgres 5.0.0-beta.34 ([NOTICE](../NOTICE)) and follow upstream's
+behavior since.
 
 ## Required parity
 

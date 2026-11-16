@@ -26,7 +26,7 @@ export default defineChannel({
       return Response.json({ sessionId: session.sessionId });
     }),
     // Two routes rather than one, because the test has to sit between them:
-    // from eve 0.49 a session-create answers as soon as Workflow accepts the
+    // a session-create answers as soon as Workflow accepts the
     // run, before the address's continuation hook exists, and a delivery that
     // lands in that gap is a racing first message rather than a follow-up.
     //

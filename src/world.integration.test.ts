@@ -90,7 +90,7 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
   });
 
   test("declares deployment affinity, so eve keeps runs of every eve version on their own deployment", () => {
-    // Without it eve (0.76.1+) treats the World as running one eve version at a
+    // Without it eve treats the World as running one eve version at a
     // time: deliveries for runs another eve version created are parked or
     // cancelled, and a session owned by such a run is ended rather than handed
     // over to the deployment that received the message.

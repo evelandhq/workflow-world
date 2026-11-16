@@ -30,8 +30,8 @@ const TENANT = "prj_port_events";
 type EventsStorage = ReturnType<typeof createEventsStorage>;
 
 /**
- * `hook_conflict`'s `conflictingRunId` is not declared on the `Event` union in
- * the pinned @workflow/world 5.0.0-beta.25 (upstream reaches it through `any`).
+ * `hook_conflict`'s `conflictingRunId` is not reachable through the `Event`
+ * union's narrowing (upstream reaches it through `any`).
  * One narrowing helper keeps the cast out of the assertions.
  */
 function conflictData(event: Event | undefined): { token?: string; conflictingRunId?: string } {
@@ -112,9 +112,9 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
    * `workflow_steps` / `workflow_hooks` are keyed `(tenant_id, step_id)` /
    * `(tenant_id, hook_id)` — unique per *tenant*, not per run — so without the
    * reset a second run of this file would collide with the previous run's rows
-   * on creation. `listByCorrelationId` itself is run-scoped since
-   * `@workflow/world` 5.0.0-beta.25 made `runId` a required param, so it is the
-   * creation path, not the read path, that needs the clean slate.
+   * on creation. `listByCorrelationId` itself is run-scoped (`runId` is a
+   * required param), so it is the creation path, not the read path, that needs
+   * the clean slate.
    */
   async function deleteTenantRows() {
     for (const table of ["workflow_events", "workflow_steps", "workflow_hooks", "workflow_waits"]) {
@@ -602,7 +602,7 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
 
     /**
      * One correlationId, events owned by two runs — and each run sees only its
-     * own since `@workflow/world` 5.0.0-beta.25 made `runId` required here.
+     * own, because `runId` is required here.
      *
      * Upstream's version of this asserted the opposite: that all three events
      * came back from one call. That was the only reachable shape when the

@@ -197,8 +197,8 @@ export function createWorld(
       hookForceClaim: true,
       /**
        * An Eveland Deployment is one immutable build under a real id, and the
-       * dispatcher delivers every run to the deployment on its row. Since 0.76.1
-       * eve reads this flag as "this World routes each run to its own
+       * dispatcher delivers every run to the deployment on its row. eve reads
+       * this flag as "this World routes each run to its own
        * deployment": without it eve assumes one eve version runs at a time,
        * parks or cancels deliveries for runs another eve version created, and
        * ends a session whose owner run was created by another eve version
@@ -267,8 +267,8 @@ export function createWorld(
       // reach here, and a supervisor may signal twice. node-postgres is
       // unforgiving about the repeat — `pool.end()` throws "Called end on pool
       // more than once", and the streamer's LISTEN client throws "Client was
-      // closed and is not queryable" — so a second close used to fail loudly
-      // after having done its job correctly the first time.
+      // closed and is not queryable" — so an unguarded second close would fail
+      // loudly after the first had done its job.
       if (closed) return;
       closed = true;
       await streamer.close();

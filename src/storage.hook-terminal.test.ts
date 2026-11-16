@@ -9,13 +9,9 @@ import { ulid } from "ulid";
  * `hook_received` must not be appended to a run that has already finished.
  *
  * It is the one event type with no branch in the terminal-run guard — it neither
- * transitions the run nor creates an entity — so it used to fall straight through
- * to the generic event INSERT and land on a completed, failed or cancelled run.
- *
- * Two paths need the guard, and the legacy one is the more surprising of the two:
- * legacy runs (specVersion <= 1) are routed to `handleLegacyEventPostgres` BEFORE
- * the caller's terminal-run validation block runs, so nothing else was checking
- * them at all. Upstream's own suite does not cover that path.
+ * transitions the run nor creates an entity — so without its own check it would
+ * fall straight through to the generic event INSERT and land on a completed,
+ * failed or cancelled run.
  */
 const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const TENANT = "prj_hook_terminal";
