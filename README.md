@@ -3,46 +3,24 @@
 A multi-tenant [Workflow SDK](https://github.com/vercel/workflow) World backed by
 PostgreSQL, with a dispatcher for executors that scale to zero.
 
-> **Experimental, `0.x`.** This package has not carried production traffic yet.
+A deployment never runs its own queue. Every message it sends is a job in the
+shared database, and the dispatcher, an always-running host process, claims
+each job and delivers it back to the deployment that owns the run, waking that
+deployment through the host's activation API when it is stopped. Tenants share
+one database and are isolated by partitions.
 
 ## Quick start
 
-Requires Node.js 24+ and PostgreSQL. Install in an existing Workflow SDK app:
+Requires Node.js 24+ and PostgreSQL. Install in a Workflow SDK app:
 
 ```bash
 npm install @evelandhq/workflow-world
 ```
 
-Follow the [integration guide](./docs/guides/getting-started.md) to configure the
-SDK and provision the database and tenant.
-
-To try a working app, use the standalone [Next.js example](./examples/nextjs/README.md).
-It uses the published package and an embedded runner, with no Eve or activation
-service required. The example pins its own verified package and SDK versions.
-
-```bash
-git clone https://github.com/evelandhq/workflow-world.git
-cd workflow-world/examples/nextjs
-npm ci
-cp .env.example .env.local
-```
-
-Set `WORKFLOW_WORLD_URL` in `.env.local` to a dedicated development database
-(the example includes [Docker setup](./examples/nextjs/README.md#run)). Then:
-
-```bash
-npm run setup
-npm run dev
-```
-
-Setup applies migrations, initializes Graphile, and provisions the tenant's
-partitions. In another terminal, run `npm run smoke` from `examples/nextjs` to
-verify a workflow completes with `Hello, World!`.
-
-For executors that scale to zero, follow the
-[external runner setup](./docs/guides/getting-started.md#external-runner).
-See the [documentation index](./docs/README.md) for configuration, operations,
-and architecture.
+Follow the [integration guide](./docs/guides/getting-started.md) to provision
+the database and tenants, configure deployments, and run the dispatcher. See
+the [documentation index](./docs/README.md) for configuration, operations, and
+architecture.
 
 ## Development
 
@@ -70,7 +48,7 @@ Once PostgreSQL reports that it is accepting connections, run:
 
 ```bash
 pnpm run typecheck
-EVELAND_WORKFLOW_WORLD_TEST_URL=postgres://wfw:wfw@127.0.0.1:5433/wfw_test pnpm test
+WORKFLOW_WORLD_TEST_URL=postgres://wfw:wfw@127.0.0.1:5433/wfw_test pnpm test
 ```
 
 The tests apply migrations and provision their own tenants. With an existing

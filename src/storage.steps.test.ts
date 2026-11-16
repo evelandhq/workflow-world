@@ -15,9 +15,9 @@ import { createEventsStorage, createStepsStorage } from "./storage.js";
  * paths (lazy step start, the event-id-after-lock ordering) that no other suite
  * in this repo touches.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 
 /**
  * One tenant per test file. Files run serially (`fileParallelism: false`) but

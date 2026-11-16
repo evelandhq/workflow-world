@@ -22,9 +22,9 @@ import { startDispatcher, type DispatcherRuntime } from "./runner.js";
  * shape it returns is asserted against the real schema in the architecture
  * tests instead.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_loop_${suffix}`;
 const DEPLOYMENT = `dep_loop_${suffix}`;
@@ -52,8 +52,8 @@ describe.skipIf(!testUrl)("dispatch loop", () => {
   const held = new Map<string, Promise<void>>();
 
   beforeAll(async () => {
-    process.env.EVELAND_SCHEDULER_RUNTIME_SECRET = RUNTIME_SECRET;
-    process.env.EVELAND_DEPLOYMENT_ID = DEPLOYMENT;
+    process.env.WORKFLOW_WORLD_RUNTIME_SECRET = RUNTIME_SECRET;
+    process.env.WORKFLOW_WORLD_DEPLOYMENT_ID = DEPLOYMENT;
 
     admin = new Pool({ connectionString: testUrl, max: 2 });
     await runMigrations(admin);
@@ -63,7 +63,6 @@ describe.skipIf(!testUrl)("dispatch loop", () => {
       connectionString: testUrl!,
       tenantId: TENANT,
       deploymentId: DEPLOYMENT,
-      runner: "external",
     });
 
     // eve's real queue handler, wrapped by ours. This is what validates the

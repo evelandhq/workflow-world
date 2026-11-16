@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { ensureTenantPartitions, runMigrations } from "../src/index.js";
 import { dropTenantPartitions } from "../src/migrate.js";
 import { FIRST_TURN_EVENT_TYPES, waitForRequiredEventTypes } from "./event-types.mts";
+import type { DispatcherService } from "../src/dispatcher/service.js";
 import { ENABLED_EVE_VERSIONS } from "./eve-versions.mts";
 import {
   buildAgent,
@@ -15,6 +16,7 @@ import {
   installedWorldVersion,
   packWorld,
   startAgent,
+  startDispatcher,
   startPersistentSession,
   startScheduledSession,
   startSession,
@@ -87,6 +89,7 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
 
       let pool: Pool;
       let agent: StartedAgent;
+      let dispatcher: DispatcherService | undefined;
       let dir: string;
       let databaseUrl: string;
 
@@ -107,9 +110,15 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
 
         dir = buildAgent({ eveVersion: entry.version, worldTarball });
         agent = await startAgent({ dir, port, databaseUrl, tenantId, deploymentId });
+        dispatcher = await startDispatcher({
+          databaseUrl,
+          deploymentId,
+          origin: `http://127.0.0.1:${String(port)}`,
+        });
       });
 
       afterAll(async () => {
+        await dispatcher?.stop().catch(() => {});
         await agent?.stop();
         await dropTenantPartitions(pool, tenantId).catch(() => {});
         await pool?.end().catch(() => {});

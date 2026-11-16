@@ -373,20 +373,17 @@ export type Fairness = ReturnType<typeof createFairness>;
  * Suppresses a repeat delivery of a message that already completed, and collapses
  * two concurrent deliveries of the same one.
  *
- * Restores parity with `embedded` mode, where the World's task handler keeps
- * exactly these two structures — a bounded set of completed idempotency keys and a
- * map of in-flight ones — and where they are unreachable once no in-process runner
- * is registered.
+ * The same two structures upstream's in-process runner keeps: a bounded set of
+ * completed idempotency keys and a map of in-flight ones.
  *
  * Only messages carrying an `idempotencyKey` participate, which is upstream's rule
  * too: without one there is nothing stable to key on, and ordering for those is
  * the per-run graphile queue's job instead.
  *
- * Deliberately in-process and bounded, matching embedded mode rather than
- * exceeding it. A durable table would give `external` mode a *stronger* guarantee
- * than `embedded` has ever offered, at the cost of a write per message on the
- * hottest table in a database every tenant shares — and it would still not be a
- * correctness boundary, because the thing that makes redelivery safe is the
+ * Deliberately in-process and bounded. A durable table would cost a write per
+ * message on the hottest table in a database every tenant shares, and it would
+ * still not be a correctness boundary, because the thing that makes redelivery
+ * safe is the
  * runtime replaying from the event log, not this cache. Treat it as the waste
  * filter it is: a restart legitimately forgets, and the consequence is a replay
  * rather than a wrong answer.

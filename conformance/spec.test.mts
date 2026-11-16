@@ -9,11 +9,9 @@ const require = createRequire(import.meta.url);
 
 /**
  * Guards the setup itself. Every assertion below is something that, if wrong,
- * makes the suite pass for the wrong reason — an embedded-mode run would go green
- * while proving nothing about the dispatcher.
+ * makes the suite pass for the wrong reason.
  */
-test("the harness is really configured for external mode", () => {
-  expect(process.env.WORKFLOW_WORLD_RUNNER).toBe("external");
+test("the harness is configured for the dispatcher", () => {
   expect(Number(process.env.PORT)).toBe(EXECUTOR_PORT);
   expect(process.env.WORKFLOW_WORLD_RUNTIME_SECRET).toBeTruthy();
   expect(process.env.WORKFLOW_WORLD_TENANT_ID).toBe(TENANT_ID);

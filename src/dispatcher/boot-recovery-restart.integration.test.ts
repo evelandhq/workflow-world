@@ -21,9 +21,9 @@ import { startDispatcher, type DispatcherRuntime } from "./runner.js";
  * `__acme_wkf_workflow_greet`, and it rejects it with the non-retryable 400 that
  * dead-letters the run.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_bootrs_${suffix}`;
 const DEPLOYMENT = `dep_bootrs_${suffix}`;
@@ -53,8 +53,8 @@ describe.skipIf(!testUrl)("namespaced boot recovery against eve's real handler",
     [];
 
   beforeAll(async () => {
-    process.env.EVELAND_SCHEDULER_RUNTIME_SECRET = RUNTIME_SECRET;
-    process.env.EVELAND_DEPLOYMENT_ID = DEPLOYMENT;
+    process.env.WORKFLOW_WORLD_RUNTIME_SECRET = RUNTIME_SECRET;
+    process.env.WORKFLOW_WORLD_DEPLOYMENT_ID = DEPLOYMENT;
 
     admin = new Pool({ connectionString: testUrl, max: 4 });
     await runMigrations(admin);
@@ -64,7 +64,6 @@ describe.skipIf(!testUrl)("namespaced boot recovery against eve's real handler",
       connectionString: testUrl!,
       tenantId: TENANT,
       deploymentId: DEPLOYMENT,
-      runner: "external",
       queueNamespace: NAMESPACE,
     });
 

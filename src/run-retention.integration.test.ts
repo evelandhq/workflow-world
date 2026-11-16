@@ -10,7 +10,7 @@ import {
 } from "./migrate.js";
 import { createEventsStorage } from "./storage.js";
 
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_run_retention_${suffix}`;
 

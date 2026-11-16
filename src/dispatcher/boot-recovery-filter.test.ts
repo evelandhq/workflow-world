@@ -16,9 +16,9 @@ import { reenqueueActiveRunsForAllTenants, type BootRecoveryRun } from "./boot-r
  * candidate list, and a skipped run must stay exactly as it was: still active,
  * offered again next boot.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run them.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run them.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_bootfilter_${suffix}`;
 
@@ -59,7 +59,6 @@ describe.skipIf(!testUrl)("boot recovery honours the host's run filter", () => {
       connectionString: testUrl!,
       tenantId: TENANT,
       deploymentId,
-      runner: "external",
     });
     worlds.push(world);
     const created = await world.events.create(null, {

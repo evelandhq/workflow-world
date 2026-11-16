@@ -18,7 +18,7 @@ import {
  * step bookkeeping surviving the round trip. Two worlds over the same
  * database share one fence, because the count lives in Postgres.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const TENANT = "prj_in_band_fence";
 
 type World = ReturnType<typeof createWorld>;
@@ -36,7 +36,6 @@ describe.skipIf(!testUrl)("in-band writer fence", () => {
       pool,
       tenantId: TENANT,
       deploymentId: "dep_fence",
-      runner: "external" as const,
     };
     world = createWorld(options);
     secondWorld = createWorld(options);
@@ -57,7 +56,6 @@ describe.skipIf(!testUrl)("in-band writer fence", () => {
         pool: pool!,
         tenantId: TENANT,
         deploymentId: "dep_fence",
-        runner: "external",
       });
       expect(asked.specVersion).toBe(9);
       await asked.close?.();

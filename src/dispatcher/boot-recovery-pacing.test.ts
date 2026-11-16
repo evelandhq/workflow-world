@@ -15,9 +15,9 @@ import { reenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
  * run whose own job is still queued needs no recovery job at all, and the
  * ones that do need one are released a few deployments at a time.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run them.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run them.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_bootpace_${suffix}`;
 
@@ -60,7 +60,6 @@ describe.skipIf(!testUrl)("boot recovery skips live jobs and paces by deployment
         connectionString: testUrl!,
         tenantId: TENANT,
         deploymentId,
-        runner: "external",
       });
       worlds.set(deploymentId, world);
     }

@@ -16,8 +16,7 @@ import {
  * The dispatcher's half of the dispatch contract: one held POST per in-flight
  * step, to the deployment's loopback port.
  *
- * The response vocabulary mirrors what the embedded runner does, because the
- * runtime cannot tell the two apart:
+ * The response vocabulary is the one eve's queue handler speaks:
  *   * `{ok:true}`      → the job is done;
  *   * `{timeoutSeconds}` → not done; the caller must re-enqueue the *same*
  *     messageId with that delay. eve uses this as its delayed backstop and the

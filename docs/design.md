@@ -71,33 +71,21 @@ the platform never loads tenant code.
 There is one route, `flow`, because `@workflow/world` has one queue kind. The
 runtime runs steps inline inside the flow handler.
 
-## Runner modes
+## Who runs the queue
 
-| mode       | who runs the queue                                      | for                                                    |
-| ---------- | ------------------------------------------------------- | ------------------------------------------------------ |
-| `embedded` | an in-process graphile runner, delivering over loopback | local development, and upstream's conformance topology |
-| `external` | the dispatcher in this package                          | production; the reason this package exists             |
+A deployment never runs a queue runner. It writes each message as a job under
+one shared graphile job name, and the dispatcher in this package claims those
+jobs across every tenant and delivers each to the deployment its run is pinned
+to. A deployment's flow route accepts only those deliveries: the runtime secret
+and the target deployment travel on every one, and the runtime's own
+queue-auth check is declared off (`queueAuthMode: 'skip'`).
 
-`embedded` is not a transitional mode — it is the local-development story
-permanently, and it is the mode upstream's suite assumes.
-
-Recovery follows the runner. The World's `start()` re-enqueues the tenant's
-active runs only in `embedded` mode, where the in-process runner is the sole
-claimer and a job locked by a runner that died with the process would otherwise
-wait out graphile's stale-lock threshold. In `external` mode it enqueues
-nothing: the dispatcher reclaims dead worker locks and replays on its own boot,
-and an agent boot is not a recovery event. It used to re-enqueue in both modes,
-and on a shared database that was a cascade — each enqueue is an un-keyed job,
-and the dispatcher routes it to the deployment the run is pinned to, so one
-deployment's boot woke every deployment with an active run, each of which booted
-and did the same.
-
-It needs isolation the single-tenant original did not. On a shared database an
-in-process runner claiming a shared graphile job name would claim other tenants'
-jobs, and graphile's `forbiddenFlags` is a deny-list that cannot express "only
-mine". So `embedded` job names carry a per-tenant suffix, and only `external`
-uses the shared name the dispatcher claims. A tenant switching modes drains its
-old suffixed jobs through the old deployment's runner.
+An agent boot is not a recovery event. The World's `start()` enqueues nothing:
+the dispatcher reclaims dead worker locks and replays on its own boot. A boot
+that re-enqueued its tenant's active runs would cascade on a shared database,
+because each enqueue is an un-keyed job the dispatcher routes to the
+deployment the run is pinned to, so one deployment's boot would wake every
+deployment with an active run, and each of those would do the same.
 
 ## Invariants
 
@@ -805,9 +793,7 @@ to 5 min): each retry is a delivery, so the retries thin out on a long step.
 The fence ends where the queue lock always ended: when the owner's delivery
 does. A delivery past the dispatch timeout is aborted and its job unlocked
 while the step body may still run on its executor; the owner's own redelivery
-then ran it again before this change too. A dead embedded runner leaves its job
-locked until graphile's four-hour stale-lock threshold, as it leaves a run's
-queue locked, so a step it owned waits that long to start again. Rows written
+then ran it again before this change too. Rows written
 before migration 0019, or by an older World, have no owner and are not fenced;
 their owner held the run's queue, which still orders the step message behind
 it.
@@ -860,8 +846,7 @@ covers the delivery, never the wait. See
 **Deduplication is a bounded in-process filter, not a durable record.** Only
 messages carrying an idempotency key participate, and only a _completed_ dispatch
 is suppressed — suppressing on failure would let one transient blip swallow a
-message permanently. The bound matches what embedded mode has always offered
-rather than exceeding it: a durable table would cost a write per message on the
+message permanently. The bound is deliberate: a durable table would cost a write per message on the
 hottest table in a shared database, and it would still not be a correctness
 boundary, because what makes redelivery safe is the runtime replaying from the
 event log. A restart legitimately forgets, and the consequence is a replay.
@@ -1020,14 +1005,14 @@ settle-or-readmit is not held behind graphile's stale-lock threshold.
 
 ## Configuration
 
-Every variable has one canonical `WORKFLOW_*` name, with `EVELAND_*` accepted as
-aliases. The full table is in the [configuration reference](./reference/configuration.md)
-and is not duplicated here — a second copy would drift.
+Every variable has one `WORKFLOW_*` name. The full table is in the
+[configuration reference](./reference/configuration.md) and is not duplicated
+here — a second copy would drift.
 
 Two properties of the surface are design rather than documentation. The database
 URL has **no fallback chain**: falling back onto a plausible-looking single-tenant
 database is worse than failing to start, so a missing value throws by name. And
-both ends of the system read the same ordered list of names, because a name
+both ends of the system read the same names, because a name
 honoured by only one end produces a dispatcher that starts cleanly and then polls
 a database nothing writes to.
 

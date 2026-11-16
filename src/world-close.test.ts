@@ -19,7 +19,7 @@ import { dropTenantPartitions } from "./migrate.js";
  * failed to end a pool it did create would leak a connection per construction
  * against the shared database's budget — the thing this world exists to conserve.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const TENANT = "prj_world_close";
 
 describe.skipIf(!testUrl)("createWorld close semantics", () => {
@@ -41,9 +41,6 @@ describe.skipIf(!testUrl)("createWorld close semantics", () => {
       ...(pool ? { pool } : { connectionString: testUrl! }),
       tenantId: TENANT,
       deploymentId: "dep_close_1",
-      // No in-process runner: this suite is about teardown, and a runner would
-      // add its own listeners and pool clients to the picture.
-      runner: "external",
     });
   }
 
@@ -99,7 +96,6 @@ describe.skipIf(!testUrl)("createWorld close semantics", () => {
         pool: shared,
         tenantId: TENANT,
         deploymentId: "dep_close_2",
-        runner: "external",
       });
 
       await first.close?.();

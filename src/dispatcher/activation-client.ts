@@ -5,7 +5,8 @@
  * with one addition that matters here: the lease must be *renewed* for as long
  * as a step is running. The gateway holds a lease for the length of an HTTP
  * request; a workflow step can be a model call with no bound, and the lease TTL
- * (`EVELAND_ACTIVATION_LEASE_TTL_MS`, 180s by default) is far shorter than that.
+ * (`WORKFLOW_DISPATCHER_ACTIVATION_LEASE_TTL_MS`, 180s by default) is far
+ * shorter than that.
  * A dispatcher that acquired and forgot would have the idle reaper stop the
  * executor out from under a step that was still running.
  */

@@ -30,12 +30,11 @@ describe("dispatch contract", () => {
     expect(rejection?.error).toContain("Rebuild the deployment");
   });
 
-  test("accepts a request with no version header", () => {
-    // Embedded mode POSTs to the same route over loopback carrying none of the
-    // Eveland headers; requiring the header would break it.
-    expect(checkDispatchVersion(null)).toBeUndefined();
-    expect(checkDispatchVersion(undefined)).toBeUndefined();
-    expect(checkDispatchVersion("")).toBeUndefined();
+  test("refuses a request with no version header", () => {
+    // Every delivery comes from the dispatcher, which always sends it.
+    for (const value of [null, undefined, ""]) {
+      expect(checkDispatchVersion(value)?.status, String(value)).toBe(401);
+    }
   });
 
   test("rejects a malformed version rather than coercing it", () => {

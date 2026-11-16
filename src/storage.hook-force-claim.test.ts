@@ -27,7 +27,7 @@ import { createEventsStorage, createHooksStorage } from "./storage.js";
  * are queued behind it (`waitForLockWaiters`). `vitest.config.ts` runs files
  * one at a time, so the lock waiters counted are this file's own.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const TENANT = "prj_hook_force_claim";
 const OTHER_TENANT = "prj_hook_force_claim_other";
 

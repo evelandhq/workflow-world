@@ -9,10 +9,8 @@ import { runQueueName } from "../dispatch-contract.js";
  * concurrency, and jobs in *different* queues still run in parallel.
  *
  * Asserted against a real database rather than taken from the documentation,
- * because the entire correctness argument for `external` mode rests on it. In
- * `embedded` mode an in-process map provides the guarantee; when no in-process
- * runner exists, this is what replaces it, and a process-local map could not do
- * the job anyway with N dispatchers.
+ * because the entire correctness argument for dispatch rests on it: a
+ * process-local map could not do the job with N dispatchers.
  *
  * Also pins the lifecycle of the queue rows themselves. graphile does not reclaim
  * them when the last job completes — measured, not assumed — so a queue per run
@@ -20,7 +18,7 @@ import { runQueueName } from "../dispatch-contract.js";
  * halves of that are asserted below, because the leak is invisible until it is
  * large.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 
 describe.skipIf(!testUrl)("graphile per-queue serialization", () => {
   let pool: Pool;

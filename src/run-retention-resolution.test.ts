@@ -81,7 +81,7 @@ describe("run creation retention resolution", () => {
       withRunRetentionIntent("scheduled", () =>
         resolveRunRetentionClassForCreation({
           attributes: {
-            [RUN_RETENTION_ATTRIBUTE]: "ephemeral",
+            [RUN_RETENTION_ATTRIBUTE]: "scheduled",
             $rootRunId: "wrun_root",
           },
           getAncestorRetentionClass: async () => "persistent",

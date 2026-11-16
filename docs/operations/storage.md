@@ -12,11 +12,9 @@ internal optimizations:
   a no-op guard against a v24-shaped write rather than a transform in daily
   use. Unknown framing and event shapes pass through unchanged; the
   deployment-side `WORKFLOW_WORLD_STREAM_COMPACTION=off` switch disables only new stripping. Readers serve the
-  stored bytes verbatim: nothing rebuilds a snapshot on read, and the
-  `workflow_stream_checkpoints` table that once held rehydration state is no
-  longer written (it stays declared until a migration drops it).
+  stored bytes verbatim: nothing rebuilds a snapshot on read.
 - `writeMulti` packs up to 64 logical chunks into a physical v2 block, capped at
-  256 KiB. Readers expand legacy rows and v2 blocks into the same logical stream.
+  256 KiB. Readers expand single-chunk rows and v2 blocks into the same logical stream.
   `packTerminalStreamBlocks` is the bounded, advisory-locked fallback for streams
   written one row at a time before EOF.
 
@@ -30,9 +28,9 @@ Every run has one internal retention class:
 
 | class / outcome                      | compact after | expire non-EOF stream data | expire workflow graph |
 | ------------------------------------ | ------------: | -------------------------: | --------------------: |
-| `scheduled` / `ephemeral`, completed |      1 minute |                 15 minutes |              24 hours |
-| `scheduled` / `ephemeral`, failed    |      1 minute |                     1 hour |                7 days |
-| `scheduled` / `ephemeral`, cancelled |      1 minute |                     1 hour |                3 days |
+| `scheduled`, completed               |      1 minute |                 15 minutes |              24 hours |
+| `scheduled`, failed                  |      1 minute |                     1 hour |                7 days |
+| `scheduled`, cancelled               |      1 minute |                     1 hour |                3 days |
 | `interactive` (default), any outcome |     5 minutes |                   24 hours |               30 days |
 | `persistent`                         |         never |                      never |                 never |
 
@@ -61,8 +59,8 @@ children, approvals, callbacks, or task-input capabilities remain live.
 
 ### Manual stream cleanup
 
-The legacy caller-selected primitive remains available for hosts that do not run
-the dispatcher and need to cap stream snapshot growth:
+A caller-selected primitive is available for hosts that need to cap stream
+snapshot growth outside the dispatcher's maintenance:
 
 ```ts
 import { Pool } from "pg";
@@ -88,52 +86,3 @@ cursor older than the retention window can no longer replay its expired chunks.
 Apply package migrations before enabling maintenance. Ordinary PostgreSQL
 `DELETE` makes pages reusable but does not necessarily shrink relation files on
 disk.
-
-### Previewing and repairing historical scheduler graphs
-
-Historical repair requires an exact, durable root attribute. It never infers a
-class from a workflow name or title. Preview first; the result is grouped by
-tenant, resolved root trigger, run type, workflow name, status, and current class:
-
-```ts
-import { Pool } from "pg";
-import {
-  backfillWorkflowRunRetentionClass,
-  inspectWorkflowRunRetentionMismatches,
-  previewWorkflowRunRetentionBackfill,
-} from "@evelandhq/workflow-world";
-
-const pool = new Pool({ connectionString: process.env.WORKFLOW_WORLD_URL });
-const selector = {
-  tenantId: "proj_example",
-  rootAttribute: "$eve.trigger",
-  rootValue: "channel:eveland-scheduler",
-  retentionClass: "scheduled" as const,
-};
-
-console.log(await previewWorkflowRunRetentionBackfill(pool, selector));
-console.log(await inspectWorkflowRunRetentionMismatches(pool, { ...selector, limit: 100 }));
-```
-
-Apply repeats one tenant-safe transaction at a time. Active runs are selected
-before terminal history, existing `persistent` rows are never changed, and the
-database trigger recomputes terminal deadlines from the original completion
-timestamp:
-
-```ts
-for (;;) {
-  const result = await backfillWorkflowRunRetentionClass(pool, {
-    ...selector,
-    batchSize: 1_000,
-  });
-  console.log(result);
-  if (!result.hitBatchLimit) break;
-}
-await pool.end();
-```
-
-After reclassification, use the normal bounded dispatcher maintenance rather
-than an unbounded delete. Report the backfill counts and maintenance deletion
-counts separately; dead tuples and relation size require PostgreSQL statistics,
-and ordinary deletion is expected to reuse a high-water mark rather than shrink
-the file immediately.

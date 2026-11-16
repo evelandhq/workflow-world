@@ -14,9 +14,9 @@ import { reconcileWorkflowRuns } from "./reconciliation.js";
  * creates them — seeding rows directly would let the tests pass while the
  * production write path produced rows the reconciler's guards don't match.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run them.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run them.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const FAILED = `p_recon_a_${suffix}`;
 const CANCELLED = `p_recon_b_${suffix}`;
@@ -79,8 +79,6 @@ describe.skipIf(!testUrl)("host-driven run reconciliation", () => {
       connectionString: testUrl!,
       tenantId: input.tenantId,
       deploymentId,
-      // `external` so no in-process runner claims anything while we look.
-      runner: "external",
       ...(input.queueNamespace !== undefined ? { queueNamespace: input.queueNamespace } : {}),
     });
     worlds.push(world);

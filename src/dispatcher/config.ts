@@ -95,11 +95,9 @@ export function deriveMaxInFlightPerTenant(machine: { cpuCoreCount: number }): n
 /**
  * `WORKFLOW_WORLD_*` and `WORKFLOW_DISPATCHER_*` are this package's namespace.
  *
- * The database URL additionally honours the `EVELAND_*` names, in the same order
- * as the World's own `resolveConnectionString`. This is deliberate and it is the
- * one place naming symmetry actually matters: the dispatcher must claim from the
- * database that deployments write to, and giving the two ends different names for
- * it makes that misconfiguration easy to reach and invisible to any test.
+ * The database URL is the one place naming symmetry actually matters: the
+ * dispatcher must claim from the database that deployments write to, so it
+ * reads the same `WORKFLOW_WORLD_URL` as the World's `resolveConnectionString`.
  *
  * The bootstrap override exists because the two ends can need different values
  * for the same database: a containerised deployment reaches Postgres as
@@ -107,11 +105,7 @@ export function deriveMaxInFlightPerTenant(machine: { cpuCoreCount: number }): n
  * `localhost`.
  */
 export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfiguration {
-  const worldUrl =
-    env.WORKFLOW_WORLD_BOOTSTRAP_URL ??
-    env.EVELAND_WORKFLOW_WORLD_BOOTSTRAP_URL ??
-    env.WORKFLOW_WORLD_URL ??
-    env.EVELAND_WORKFLOW_WORLD_URL;
+  const worldUrl = env.WORKFLOW_WORLD_BOOTSTRAP_URL ?? env.WORKFLOW_WORLD_URL;
   if (!worldUrl) {
     throw new Error(
       "WORKFLOW_WORLD_URL is required: the dispatcher claims jobs from the shared workflow database. " +
@@ -261,9 +255,7 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
       env.WORKFLOW_DISPATCHER_MAINTENANCE_RUN_BATCH_SIZE,
       1_000,
     ),
-    maintenanceCompactSnapshots: resolveStreamCompaction(
-      env.WORKFLOW_WORLD_STREAM_COMPACTION ?? env.EVELAND_WORKFLOW_STREAM_COMPACTION,
-    ),
+    maintenanceCompactSnapshots: resolveStreamCompaction(env.WORKFLOW_WORLD_STREAM_COMPACTION),
     leaseRenewIntervalMs,
     activationLeaseTtlMs,
   };

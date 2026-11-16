@@ -7,16 +7,16 @@ import { makeWorkerUtils, run as runWorker, type Runner, type WorkerUtils } from
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { runQueueName } from "../src/dispatch-contract.js";
-import { startDispatcherService, type DispatcherService } from "../src/dispatcher/service.js";
+import type { DispatcherService } from "../src/dispatcher/service.js";
 import { createWorld, ensureTenantPartitions, runMigrations } from "../src/index.js";
 import { ENABLED_EVE_VERSIONS } from "./eve-versions.mts";
 import {
   buildAgent,
   databaseFor,
   deploymentFor,
-  E2E_RUNTIME_SECRET,
   packWorld,
   startAgent,
+  startDispatcher,
   tenantFor,
   type StartedAgent,
 } from "./harness.mts";
@@ -126,7 +126,6 @@ describe.skipIf(!baseUrl)("a long step started by a bypassing wake", () => {
               databaseUrl,
               tenantId,
               deploymentId,
-              runner: "external",
               env: agentEnv,
             }),
           );
@@ -160,16 +159,10 @@ describe.skipIf(!baseUrl)("a long step started by a bypassing wake", () => {
         });
         await new Promise<void>((resolve) => proxy!.listen(proxyPort, "127.0.0.1", resolve));
 
-        dispatcher = await startDispatcherService({
-          env: {
-            NODE_ENV: "development",
-            WORKFLOW_WORLD_URL: databaseUrl,
-            WORKFLOW_WORLD_RUNTIME_SECRET: E2E_RUNTIME_SECRET,
-            WORKFLOW_DISPATCHER_STATIC_ENDPOINTS: `${deploymentId}=http://127.0.0.1:${String(proxyPort)}`,
-            WORKFLOW_DISPATCHER_POLL_INTERVAL_MS: "100",
-            WORKFLOW_DISPATCHER_MAINTENANCE_INTERVAL_MS: "0",
-          },
-          telemetry: { emit() {}, async shutdown() {} },
+        dispatcher = await startDispatcher({
+          databaseUrl,
+          deploymentId,
+          origin: `http://127.0.0.1:${String(proxyPort)}`,
         });
 
         worldOptions = { connectionString: databaseUrl, tenantId, deploymentId };
@@ -253,7 +246,6 @@ describe.skipIf(!baseUrl)("a long step started by a bypassing wake", () => {
         // The step message goes to the run's own flow queue, namespace included.
         world = createWorld({
           ...worldOptions,
-          runner: "external",
           ...(run.queue_namespace ? { queueNamespace: run.queue_namespace } : {}),
         });
 

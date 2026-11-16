@@ -15,7 +15,7 @@
  * Faking them would assert our fork's absence of a feature as if it were the
  * feature.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
 import type { Hook, HookCreatedEventRequest, Step, WorkflowRun } from "@workflow/world";
 import { and, eq } from "drizzle-orm";
@@ -26,7 +26,7 @@ import * as DrizzleSchema from "./drizzle/schema.js";
 import { ensureTenantPartitions, runMigrations } from "./index.js";
 import { createEventsStorage } from "./storage.js";
 
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 
 /**
  * One tenant per ported file. `vitest.config.ts` serialises test *files*, but

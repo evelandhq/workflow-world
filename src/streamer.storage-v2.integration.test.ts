@@ -9,7 +9,7 @@ import {
 } from "./migrate.js";
 import { compactStreamChunk } from "./stream-compaction.js";
 
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_stream_v2_${suffix}`;
 
@@ -50,13 +50,11 @@ describe.skipIf(!testUrl)("stream storage v2", () => {
       pool,
       tenantId: TENANT,
       deploymentId: "dep_stream_v2",
-      runner: "external",
     });
     uncompacted = createWorld({
       pool,
       tenantId: TENANT,
       deploymentId: "dep_stream_v2",
-      runner: "external",
       compactStreamSnapshots: false,
     });
   }, 60_000);

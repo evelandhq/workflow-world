@@ -1,21 +1,21 @@
 # Configuration
 
-Every variable has one canonical `WORKFLOW_*` name. The `EVELAND_*` names are
-accepted as aliases wherever they appear, and both ends of the system read the
-same ordered list — [`src/env-contract.test.ts`](../../src/env-contract.test.ts)
-asserts that, because a name honoured by only one end is a silent failure rather
-than a loud one.
+This package reads its own `WORKFLOW_WORLD_*` and `WORKFLOW_DISPATCHER_*`
+names, plus upstream's `WORKFLOW_*` names with upstream's meaning. Both ends of
+the system read the same names for what they share, the database and the
+dispatch secret; [`src/env-contract.test.ts`](../../src/env-contract.test.ts)
+asserts that, because a name honoured by only one end is a silent failure
+rather than a loud one.
 
 ## Deployment side (read by the World)
 
-| variable                           | alias                                | meaning                                                                                                                                      |
-| ---------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WORKFLOW_WORLD_URL`               | `EVELAND_WORKFLOW_WORLD_URL`         | the shared database. Required; there is no fallback chain, because falling back onto a single-tenant database is worse than failing to start |
-| `WORKFLOW_WORLD_TENANT_ID`         | `EVELAND_PROJECT_ID`                 | this deployment's tenant                                                                                                                     |
-| `WORKFLOW_WORLD_DEPLOYMENT_ID`     | `EVELAND_DEPLOYMENT_ID`              | recorded on every run, so an in-flight run stays pinned to an executor that can still run it                                                 |
-| `WORKFLOW_WORLD_RUNNER`            | `EVELAND_WORKFLOW_RUNNER`            | `embedded` (default) or `external`                                                                                                           |
-| `WORKFLOW_WORLD_RUNTIME_SECRET`    | `EVELAND_SCHEDULER_RUNTIME_SECRET`   | authenticates platform dispatch                                                                                                              |
-| `WORKFLOW_WORLD_STREAM_COMPACTION` | `EVELAND_WORKFLOW_STREAM_COMPACTION` | `on` (default); `off` is the emergency switch for write-side snapshot stripping                                                              |
+| variable                           | meaning                                                                                                                                      |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORKFLOW_WORLD_URL`               | the shared database. Required; there is no fallback chain, because falling back onto a single-tenant database is worse than failing to start |
+| `WORKFLOW_WORLD_TENANT_ID`         | this deployment's tenant. Required                                                                                                           |
+| `WORKFLOW_WORLD_DEPLOYMENT_ID`     | recorded on every run, so an in-flight run stays pinned to an executor that can still run it. Required                                       |
+| `WORKFLOW_WORLD_RUNTIME_SECRET`    | authenticates platform dispatch; a deployment without it refuses every delivery                                                              |
+| `WORKFLOW_WORLD_STREAM_COMPACTION` | `on` (default); `off` is the emergency switch for write-side snapshot stripping                                                              |
 
 Upstream's own names are also read on the deployment side, with upstream's
 meaning:
@@ -31,6 +31,7 @@ meaning:
 | variable                                                 | default            | meaning                                                                                                                                                                                                             |
 | -------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `WORKFLOW_WORLD_URL`                                     | —                  | same database as above                                                                                                                                                                                              |
+| `WORKFLOW_WORLD_RUNTIME_SECRET`                          | —                  | same secret as above, sent with every dispatch. Required unless `NODE_ENV` is `development` or `test`                                                                                                               |
 | `WORKFLOW_WORLD_BOOTSTRAP_URL`                           | —                  | override when the host and the containers reach one database by different hostnames                                                                                                                                 |
 | `WORKFLOW_DISPATCHER_ACTIVATION_API_URL`                 | —                  | the host's activation API. Required unless `WORKFLOW_DISPATCHER_STATIC_ENDPOINTS` is set; setting both is refused                                                                                                   |
 | `WORKFLOW_DISPATCHER_STATIC_ENDPOINTS`                   | —                  | `<deploymentId>=<origin>` pairs, comma-separated, for executors that are always running. No activation API or token is used — see [static endpoints](../operations/dispatcher.md#executors-that-are-always-running) |

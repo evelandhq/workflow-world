@@ -28,9 +28,9 @@ import { reenqueueActiveRunsForAllTenants } from "./boot-recovery.js";
  * The namespace therefore has to be durable on the run itself. These tests pin
  * that it is written at run creation and read back by the sweep.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run them.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run them.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const NAMESPACED = `p_bootns_a_${suffix}`;
 const PLAIN = `p_bootns_b_${suffix}`;
@@ -55,7 +55,7 @@ describe.skipIf(!testUrl)("boot recovery preserves the queue namespace", () => {
   afterAll(async () => {
     await Promise.all(worlds.map(async (world) => await world.close?.()));
     await workerUtils?.release();
-    // These jobs are never claimed — every world here is `external` and no
+    // These jobs are never claimed — no
     // dispatcher runs in this file — so they would sit in the shared graphile
     // table for whichever later suite starts a real one.
     await admin
@@ -107,8 +107,6 @@ describe.skipIf(!testUrl)("boot recovery preserves the queue namespace", () => {
       connectionString: testUrl!,
       tenantId: input.tenantId,
       deploymentId: `dep_${input.tenantId}`,
-      // `external` so no in-process runner claims the job before we read it.
-      runner: "external",
       ...(input.queueNamespace !== undefined ? { queueNamespace: input.queueNamespace } : {}),
     });
     worlds.push(world);

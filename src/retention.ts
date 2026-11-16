@@ -34,7 +34,7 @@ export type WorkflowRunRetentionResult = {
 export type SetWorkflowRunRetentionClassOptions = {
   tenantId: string;
   runId: string;
-  retentionClass: RunRetentionClass | "ephemeral";
+  retentionClass: RunRetentionClass;
 };
 
 /**

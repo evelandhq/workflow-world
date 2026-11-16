@@ -2,9 +2,9 @@ import { run } from "graphile-worker";
 import { Pool } from "pg";
 
 const [taskName] = process.argv.slice(2);
-const databaseUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const databaseUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 if (!databaseUrl || !taskName) {
-  throw new Error("EVELAND_WORKFLOW_WORLD_TEST_URL and a task-name argument are required");
+  throw new Error("WORKFLOW_WORLD_TEST_URL and a task-name argument are required");
 }
 
 const pool = new Pool({

@@ -13,8 +13,7 @@ matching public interface is `@workflow/world@5.0.0-beta.27`.
 | `encryptionPublicKey` survives normal and resilient run creation                          | `src/storage.runs.test.ts`                                           |
 | Retained hooks remain visible until expiry, then become invisible and release their token | `src/storage.hook-retention.test.ts`                                 |
 | Logical stream bytes, indices, cursors, EOF and mixed legacy/v2 reads                     | `src/streamer.storage-v2.integration.test.ts` and stream unit suites |
-| Graphile delivery budget is 49 and an embedded worker shutdown aborts its HTTP request    | `src/queue.test.ts`                                                  |
-| External dispatcher reschedule and boot recovery use the same 49-attempt budget           | `src/dispatcher/runner.test.ts`                                      |
+| Graphile delivery budget is 49, for the World's sends and the dispatcher's reschedules    | `src/queue.test.ts` and `src/dispatcher/runner.test.ts`              |
 | Public World conformance and supported Eve integration                                    | `conformance/` and `e2e-tests/`                                      |
 
 These behaviors are release blockers. An upstream version bump must re-run this
@@ -28,7 +27,7 @@ without an explicit architecture decision:
 
 - Tenant columns, tenant-scoped keys/predicates/NOTIFY channels and partitions.
 - Real deployment affinity instead of the constant deployment id `postgres`.
-- Embedded/external runner topology, dispatcher job names, fairness flags,
+- No in-process runner: an out-of-process dispatcher, shared job names, fairness flags,
   activation leases, dead letters and per-run Graphile queues.
 - Write-side snapshot stripping and packed physical stream blocks. Public
   logical chunks and cursors remain compatible.

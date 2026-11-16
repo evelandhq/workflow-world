@@ -66,9 +66,7 @@ under the same job key, so the delivery itself is still serialized. Deployments
 enqueue exactly what they did before, so this applies to every build already
 deployed, and no deployment ever writes a job that only a newer dispatcher could
 claim. Jobs that have been attempted keep their place, since moving one would
-reset its retry count. An `embedded` runner does the same for its own tenant,
-under its per-tenant task names: it holds far-off deliveries as timers when it
-enqueues them, and moves its older ones once at startup.
+reset its retry count.
 
 **Rolling the dispatcher back below this version** leaves held timers with no
 consumer: an older dispatcher does not claim `eveland_wf_timers`. Stop it and
@@ -96,9 +94,6 @@ update graphile_worker._private_jobs as jobs
    and jobs.locked_at is null;
 commit;
 ```
-
-An `embedded` tenant rolled back to an older build has the same gap for its
-own timers, until a build of this version or later runs again.
 
 The number of `_private_job_queues` rows now tracks runs with work due, not
 runs that are alive:
@@ -134,8 +129,7 @@ that differ from a platform host:
   never holds those wakes back, and its boot recovery does not release a dead
   worker's lock on one. The upgraded dispatcher also applies migration 0019 at
   start, which that World needs: every `step_started` it writes sets
-  `workflow_steps.owner_message_id`. Without a dispatcher (embedded mode), run
-  `workflow-world-setup` before the agents start.
+  `workflow_steps.owner_message_id`.
 - **Leave `WORKFLOW_OPTIMISTIC_INLINE_START` unset on the agents.** With it on,
   a step's body starts before its claim resolves, and a hook wake running beside
   another delivery can then run a step a second time (design.md, "Delivery and

@@ -3,23 +3,23 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { startDispatcherService, type DispatcherService } from "../src/dispatcher/service.js";
+import type { DispatcherService } from "../src/dispatcher/service.js";
 import { ensureTenantPartitions, runMigrations } from "../src/index.js";
 import { ENABLED_EVE_VERSIONS } from "./eve-versions.mts";
 import {
   buildAgent,
   databaseFor,
   deploymentFor,
-  E2E_RUNTIME_SECRET,
   packWorld,
   startAgent,
+  startDispatcher,
   tenantFor,
   type StartedAgent,
 } from "./harness.mts";
 
 /**
  * A cancel stops a tool that is running, through a real eve agent in the
- * topology a platform ships: `external` runner, the dispatcher in the loop.
+ * topology a platform ships: the dispatcher in the loop.
  *
  * eve runs the tool inside the delivery that claimed its step, and reaches it
  * only through the replay that the cancel's hook wake starts. With every
@@ -79,21 +79,14 @@ describe.skipIf(!baseUrl)("cancelling a running tool through a real eve agent", 
           databaseUrl,
           tenantId,
           deploymentId,
-          runner: "external",
           // vitest sets NODE_ENV=test, under which eve swaps the agent's own
           // model for its mock and the scripted tool call never happens.
           env: { NODE_ENV: "production" },
         });
-        dispatcher = await startDispatcherService({
-          env: {
-            NODE_ENV: "development",
-            WORKFLOW_WORLD_URL: databaseUrl,
-            WORKFLOW_WORLD_RUNTIME_SECRET: E2E_RUNTIME_SECRET,
-            WORKFLOW_DISPATCHER_STATIC_ENDPOINTS: `${deploymentId}=http://127.0.0.1:${String(port)}`,
-            WORKFLOW_DISPATCHER_POLL_INTERVAL_MS: "100",
-            WORKFLOW_DISPATCHER_MAINTENANCE_INTERVAL_MS: "0",
-          },
-          telemetry: { emit() {}, async shutdown() {} },
+        dispatcher = await startDispatcher({
+          databaseUrl,
+          deploymentId,
+          origin: `http://127.0.0.1:${String(port)}`,
         });
       });
 

@@ -9,9 +9,9 @@ import { createClient, type Drizzle } from "./drizzle/index.js";
  * Against a real graphile schema, because the read is graphile's private job
  * table and a savepoint inside the caller's transaction.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const MESSAGE = "msg_liveness_probe";
 
 describe.skipIf(!testUrl)("deliveryInFlight", () => {

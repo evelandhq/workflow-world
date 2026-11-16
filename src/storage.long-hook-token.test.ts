@@ -20,7 +20,7 @@ import { ulid } from "ulid";
  * The btree limit applies to the entry after compression, so a repetitive token
  * would pass and prove nothing; the tokens here are random bytes.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const TENANT = "prj_long_hook_token";
 
 type EventsStorage = ReturnType<typeof createEventsStorage>;

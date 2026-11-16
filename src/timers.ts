@@ -28,15 +28,10 @@ import { MAX_GRAPHILE_JOB_ATTEMPTS } from "./queue-policy.js";
  * due. Serialization still covers the delivery itself, which is the only thing
  * it ever protected.
  *
- * Who creates timers depends on who will claim them:
- *
- *   - `external` mode: the dispatcher alone. A deployment's world is baked at
- *     build time, so it keeps writing flow jobs straight onto the run's queue;
- *     the dispatcher's sweep moves them, for old builds and new alike, and its
- *     own reschedules skip the queue from the start. Deployments never write a
- *     job only a newer dispatcher could claim.
- *   - `embedded` mode: the world itself, under its per-tenant names, because the
- *     process that enqueues is the process that claims.
+ * The dispatcher alone creates timers. A deployment's world is baked at build
+ * time, so it writes flow jobs straight onto the run's queue; the dispatcher's
+ * sweep moves them, and its own reschedules skip the queue from the start.
+ * Deployments never write a job only a newer dispatcher could claim.
  */
 
 /**
@@ -129,12 +124,12 @@ export async function addDelayedDelivery(
  * No fairness accounting: promoting costs the tenant nothing, and the flow job
  * it creates carries the tenant flag the claim loop throttles on.
  */
-export function createTimerHandler(input: { addJob: AddJob; flowJobName: string }) {
+export function createTimerHandler(input: { addJob: AddJob }) {
   return async (payload: unknown, helpers: unknown): Promise<void> => {
     const message = MessageData.parse(payload);
     const runQueue = TimerTarget.parse(payload).runQueue ?? runQueueOfMessage(message);
     const jobKey = readJobKey(helpers);
-    await input.addJob(input.flowJobName, MessageData.encode(message), {
+    await input.addJob(FLOW_JOB_NAME, MessageData.encode(message), {
       ...(jobKey ? { jobKey } : {}),
       ...(runQueue ? { queueName: runQueue } : {}),
       maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
@@ -157,8 +152,7 @@ export function createTimerHandler(input: { addJob: AddJob; flowJobName: string 
  *   - only unlocked jobs that have never been attempted. A retry carries an
  *     attempt count, and a promoted timer starts over at zero — moving one
  *     would quietly lift its retry budget;
- *   - only the given flow task. The dispatcher passes the shared, unsuffixed
- *     name; an embedded runner passes its own tenant's suffixed one;
+ *   - only the flow task ({@link FLOW_JOB_NAME});
  *   - only `wfrun:` queues, recorded on the payload so the promotion and boot
  *     recovery can still find the run.
  *
@@ -172,7 +166,7 @@ export function createTimerHandler(input: { addJob: AddJob; flowJobName: string 
  */
 export async function moveDelayedJobsToTimers(
   pool: Pick<Pool, "query">,
-  options: { flowJobName?: string; timerJobName?: string; horizonSeconds?: number } = {},
+  options: { horizonSeconds?: number } = {},
 ): Promise<number> {
   const { rowCount } = await pool.query(
     `update graphile_worker._private_jobs as jobs
@@ -194,11 +188,7 @@ export async function moveDelayedJobsToTimers(
         and jobs.attempts = 0
         and jobs.run_at > now() + make_interval(secs => $3)
         and json_typeof(jobs.payload) = 'object'`,
-    [
-      options.flowJobName ?? FLOW_JOB_NAME,
-      options.timerJobName ?? TIMER_JOB_NAME,
-      options.horizonSeconds ?? TIMER_HORIZON_SECONDS,
-    ],
+    [FLOW_JOB_NAME, TIMER_JOB_NAME, options.horizonSeconds ?? TIMER_HORIZON_SECONDS],
   );
   return rowCount ?? 0;
 }
@@ -208,13 +198,10 @@ export async function moveDelayedJobsToTimers(
  * the runner having claimed — which is what registers task names — first.
  * Graphile's own `add_job` creates task rows the same way.
  */
-export async function registerTimerTask(
-  pool: Pick<Pool, "query">,
-  timerJobName: string = TIMER_JOB_NAME,
-): Promise<void> {
+export async function registerTimerTask(pool: Pick<Pool, "query">): Promise<void> {
   await pool.query(
     "insert into graphile_worker._private_tasks (identifier) values ($1) on conflict do nothing",
-    [timerJobName],
+    [TIMER_JOB_NAME],
   );
 }
 

@@ -23,9 +23,9 @@ import { FLOW_JOB_NAME } from "./runner.js";
  * wake-up, so once its worker id is released graphile delivers it under its
  * original message id; the sweep must not add a recovery job beside it.
  *
- * Set `EVELAND_WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
+ * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_bootlock_${suffix}`;
 const DEPLOYMENT = `dep_bootlock_${suffix}`;
@@ -33,8 +33,8 @@ const NAMESPACE = "locktest";
 const RUNTIME_SECRET = "boot-lock-runtime-secret-000000";
 const LIVE_TASK = `wfw_live_lock_probe_${suffix}`;
 const LIVE_QUEUE = `wflive:${suffix}`;
-const previousRuntimeSecret = process.env.EVELAND_SCHEDULER_RUNTIME_SECRET;
-const previousDeploymentId = process.env.EVELAND_DEPLOYMENT_ID;
+const previousRuntimeSecret = process.env.WORKFLOW_WORLD_RUNTIME_SECRET;
+const previousDeploymentId = process.env.WORKFLOW_WORLD_DEPLOYMENT_ID;
 const BLOCKER_SCRIPT = fileURLToPath(
   new URL("../../scripts/blocking-graphile-worker.mjs", import.meta.url),
 );
@@ -56,8 +56,8 @@ describe.skipIf(!testUrl)("boot recovery of a stranded Graphile queue lock", () 
   const workerIdsToClean = new Set<string>();
 
   beforeAll(async () => {
-    process.env.EVELAND_SCHEDULER_RUNTIME_SECRET = RUNTIME_SECRET;
-    process.env.EVELAND_DEPLOYMENT_ID = DEPLOYMENT;
+    process.env.WORKFLOW_WORLD_RUNTIME_SECRET = RUNTIME_SECRET;
+    process.env.WORKFLOW_WORLD_DEPLOYMENT_ID = DEPLOYMENT;
 
     admin = new Pool({ connectionString: testUrl, max: 6 });
     await runMigrations(admin);
@@ -69,7 +69,6 @@ describe.skipIf(!testUrl)("boot recovery of a stranded Graphile queue lock", () 
       connectionString: testUrl!,
       tenantId: TENANT,
       deploymentId: DEPLOYMENT,
-      runner: "external",
       queueNamespace: NAMESPACE,
     });
 
@@ -142,8 +141,8 @@ describe.skipIf(!testUrl)("boot recovery of a stranded Graphile queue lock", () 
     await workerUtils?.cleanup({ tasks: ["GC_JOB_QUEUES"] }).catch(() => {});
     await Promise.resolve(workerUtils?.release()).catch(() => {});
     await admin?.end().catch(() => {});
-    restoreEnv("EVELAND_SCHEDULER_RUNTIME_SECRET", previousRuntimeSecret);
-    restoreEnv("EVELAND_DEPLOYMENT_ID", previousDeploymentId);
+    restoreEnv("WORKFLOW_WORLD_RUNTIME_SECRET", previousRuntimeSecret);
+    restoreEnv("WORKFLOW_WORLD_DEPLOYMENT_ID", previousDeploymentId);
   });
 
   test("a replacement dispatcher unlocks only the dead generation and resumes within seconds", async () => {
@@ -356,7 +355,7 @@ type QueueLock = {
 
 async function startBlockingWorker(taskName: string): Promise<ChildProcessWithoutNullStreams> {
   const child = spawn(process.execPath, [BLOCKER_SCRIPT, taskName], {
-    env: { ...process.env, EVELAND_WORKFLOW_WORLD_TEST_URL: testUrl! },
+    env: { ...process.env, WORKFLOW_WORLD_TEST_URL: testUrl! },
   });
   try {
     await waitForOutput(child, "wfw-blocker:ready", 30_000);

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { resolveConnectionString } from "./config.js";
-import { RUNTIME_SECRET_ENV_NAMES, readRuntimeSecretFromEnv } from "./dispatch-contract.js";
+import { RUNTIME_SECRET_ENV_NAME, readRuntimeSecretFromEnv } from "./dispatch-contract.js";
 import { resolveDispatcherConfig } from "./dispatcher/config.js";
 import { resolveDispatchRuntimeSecret } from "./dispatcher/secrets.js";
 
@@ -9,12 +9,9 @@ import { resolveDispatchRuntimeSecret } from "./dispatcher/secrets.js";
  * tenant deployment, the dispatcher on the host — and they have to agree on the
  * names of the two things they share: the database and the dispatch secret.
  *
- * These are not hypothetical. An earlier draft gave the dispatcher a
- * `WORKFLOW_WORLD_*` namespace while leaving the deployment side on `EVELAND_*`,
- * which produced a dispatcher that started clean, passed every other test, and
- * then 401'd every single dispatch — and a second variant where the two ends
- * pointed at different databases, so the dispatcher polled a database nothing
- * wrote to and simply never delivered anything.
+ * A name honoured by only one end produces a dispatcher that starts clean and
+ * then 401s every dispatch, or polls a database nothing writes to and never
+ * delivers anything.
  */
 describe("shared environment contract", () => {
   const baseDispatcherEnv = {
@@ -22,44 +19,21 @@ describe("shared environment contract", () => {
   } satisfies NodeJS.ProcessEnv;
 
   describe("database URL", () => {
-    // Each entry is a name a host might legitimately set on its own.
-    for (const name of ["WORKFLOW_WORLD_URL", "EVELAND_WORKFLOW_WORLD_URL"] as const) {
-      test(`${name} alone is honoured by BOTH ends`, () => {
-        const env = { ...baseDispatcherEnv, [name]: "postgres://host/shared" };
+    test("WORKFLOW_WORLD_URL is honoured by BOTH ends", () => {
+      const env = { ...baseDispatcherEnv, WORKFLOW_WORLD_URL: "postgres://host/shared" };
 
-        expect(resolveConnectionString(env)).toBe("postgres://host/shared");
-        expect(resolveDispatcherConfig(env).worldUrl).toBe("postgres://host/shared");
-      });
-    }
-
-    test("both ends prefer this package's own name over the legacy one", () => {
-      const env = {
-        ...baseDispatcherEnv,
-        WORKFLOW_WORLD_URL: "postgres://host/canonical",
-        EVELAND_WORKFLOW_WORLD_URL: "postgres://host/legacy",
-      };
-
-      expect(resolveConnectionString(env)).toBe("postgres://host/canonical");
-      expect(resolveDispatcherConfig(env).worldUrl).toBe("postgres://host/canonical");
+      expect(resolveConnectionString(env)).toBe("postgres://host/shared");
+      expect(resolveDispatcherConfig(env).worldUrl).toBe("postgres://host/shared");
     });
 
-    test("the dispatcher's bootstrap override outranks both, in either spelling", () => {
-      // The host and the containers can reach one database by different
-      // hostnames, so only the dispatcher takes the override — but it must still
-      // be reading the same *variable* the deployment side falls back to.
+    test("the dispatcher's bootstrap override outranks it", () => {
+      // The host and the deployments can reach one database by different
+      // hostnames, so only the dispatcher takes the override.
       expect(
         resolveDispatcherConfig({
           ...baseDispatcherEnv,
           WORKFLOW_WORLD_URL: "postgres://host.docker.internal/shared",
           WORKFLOW_WORLD_BOOTSTRAP_URL: "postgres://localhost/shared",
-        }).worldUrl,
-      ).toBe("postgres://localhost/shared");
-
-      expect(
-        resolveDispatcherConfig({
-          ...baseDispatcherEnv,
-          EVELAND_WORKFLOW_WORLD_URL: "postgres://host.docker.internal/shared",
-          EVELAND_WORKFLOW_WORLD_BOOTSTRAP_URL: "postgres://localhost/shared",
         }).worldUrl,
       ).toBe("postgres://localhost/shared");
     });
@@ -68,7 +42,8 @@ describe("shared environment contract", () => {
       const decoys = {
         ...baseDispatcherEnv,
         DATABASE_URL: "postgres://host/unrelated",
-        WORKFLOW_POSTGRES_URL: "postgres://host/legacy-single-tenant",
+        WORKFLOW_POSTGRES_URL: "postgres://host/single-tenant",
+        EVELAND_WORKFLOW_WORLD_URL: "postgres://host/other-name",
       };
 
       expect(() => resolveConnectionString(decoys)).toThrow(/WORKFLOW_WORLD_URL is required/);
@@ -77,32 +52,18 @@ describe("shared environment contract", () => {
   });
 
   describe("dispatch runtime secret", () => {
-    for (const name of RUNTIME_SECRET_ENV_NAMES) {
-      test(`${name} alone is honoured by BOTH ends`, () => {
-        // The deployment side reads the shared resolver directly in
-        // `createQueueHandler`; the host side wraps it in the dev fallback.
-        expect(readRuntimeSecretFromEnv({ [name]: "s3cret" })).toBe("s3cret");
-        expect(resolveDispatchRuntimeSecret({ [name]: "s3cret" })).toBe("s3cret");
-      });
-    }
-
-    test("precedence is this package's own name first", () => {
-      const env = {
-        WORKFLOW_WORLD_RUNTIME_SECRET: "canonical",
-        EVELAND_SCHEDULER_RUNTIME_SECRET: "legacy",
-      };
-
-      expect(readRuntimeSecretFromEnv(env)).toBe("canonical");
-      expect(resolveDispatchRuntimeSecret(env)).toBe("canonical");
+    test(`${RUNTIME_SECRET_ENV_NAME} is honoured by BOTH ends`, () => {
+      // The deployment side reads the shared resolver directly in
+      // `createQueueHandler`; the host side wraps it in the dev fallback.
+      const env = { [RUNTIME_SECRET_ENV_NAME]: "s3cret" };
+      expect(readRuntimeSecretFromEnv(env)).toBe("s3cret");
+      expect(resolveDispatchRuntimeSecret(env)).toBe("s3cret");
     });
 
-    test("an empty value does not shadow the next name", () => {
-      expect(
-        readRuntimeSecretFromEnv({
-          WORKFLOW_WORLD_RUNTIME_SECRET: "",
-          EVELAND_SCHEDULER_RUNTIME_SECRET: "legacy",
-        }),
-      ).toBe("legacy");
+    test("no other name is read by either end", () => {
+      const env = { EVELAND_SCHEDULER_RUNTIME_SECRET: "other-name" };
+      expect(readRuntimeSecretFromEnv(env)).toBeUndefined();
+      expect(resolveDispatchRuntimeSecret(env)).toBeUndefined();
     });
 
     test("an unset NODE_ENV counts as production: no secret, no dev fallback", () => {

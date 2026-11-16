@@ -12,7 +12,7 @@ import {
 import { withRunRetentionIntent } from "./run-retention-resolution.js";
 import { createEventsStorage } from "./storage.js";
 
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const TENANT = "prj_retention_resolution";
 const STABLE_EVE_WORKFLOW_NAMES = [
   "workflow//eve//workflowEntry",

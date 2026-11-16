@@ -9,11 +9,10 @@ let warnedReadFailure = false;
 
 /**
  * Whether the delivery with this message id is in flight: a worker holds its
- * graphile job. The dispatcher (or the embedded runner) keeps the job locked
- * for the whole delivery and releases it when the delivery ends, fails or times
- * out. A dead worker's lock lasts until boot recovery releases it or, for an
- * embedded runner, until graphile's four-hour stale-lock rule, which this read
- * applies too.
+ * graphile job. The dispatcher keeps the job locked for the whole delivery and
+ * releases it when the delivery ends, fails or times out. A dead worker's lock
+ * lasts until boot recovery releases it or until graphile's four-hour
+ * stale-lock rule, which this read applies too.
  *
  * Reads graphile-worker 0.16's private job table, which has no index on the
  * payload, so callers ask only on the rare path that needs it. The read runs in

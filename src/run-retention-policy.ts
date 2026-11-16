@@ -11,10 +11,11 @@ export function resolveRunRetentionClass(
   attributes?: Record<string, string>,
 ): RunRetentionClass {
   const selected = value ?? attributes?.[RUN_RETENTION_ATTRIBUTE] ?? "interactive";
-  if (selected === "scheduled" || selected === "ephemeral") return "scheduled";
-  if (selected === "interactive" || selected === "persistent") return selected;
+  if (selected === "scheduled" || selected === "interactive" || selected === "persistent") {
+    return selected;
+  }
   throw new TypeError(
-    `Invalid workflow run retention class "${selected}": expected scheduled/ephemeral, interactive, or persistent.`,
+    `Invalid workflow run retention class "${selected}": expected scheduled, interactive, or persistent.`,
   );
 }
 

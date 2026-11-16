@@ -1,13 +1,12 @@
 # External-mode conformance
 
-Runs upstream's `@workflow/world-testing` suite against this World in
-`runner: external` — the topology the platform actually ships — with the
+Runs upstream's `@workflow/world-testing` suite against this World with the
 dispatcher in the loop and a stub standing in for the host's activation API.
 
 This is the gate that matters. Upstream's suite normally exercises a World whose
-queue runner lives inside the executor process; here nothing runs the queue
-except the dispatcher, so a green run means the whole out-of-process dispatch
-path works: enqueue → graphile claim → activation → held vqs POST → executor.
+queue runner lives inside the executor process; this World has none, so a green
+run means the whole out-of-process dispatch path works: enqueue → graphile
+claim → activation → held vqs POST → executor.
 
 ## How it closes the loop
 
@@ -24,7 +23,7 @@ executors would collide on bind.
 
 ## What it does and does not prove
 
-Proves: the World satisfies upstream's spec in external mode, and every dispatch
+Proves: the World satisfies upstream's spec, and every dispatch
 in the run went out through the real out-of-process path.
 
 Does **not** prove the dispatch guard. A wrong runtime secret producing a 401,
