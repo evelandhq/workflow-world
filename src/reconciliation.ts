@@ -125,25 +125,15 @@ async function settleRuns(
   params: unknown[],
 ): Promise<ReconciledWorkflowRun[]> {
   const status = options.disposition === "fail" ? "failed" : "cancelled";
-  const errorParams = [...params];
-  let errorClause = "";
+  // `error_cbor` stays NULL deliberately: it holds runtime-serialized data
+  // the workflow's own pipeline produced, and this process cannot mint that
+  // honestly. `error_code` is the machine-readable verdict of a failure, and
+  // `reconciled_reason` tells an operator reading the row why the host settled it.
+  const settleParams = [...params, options.reason];
+  let settleClause = `, reconciled_reason = $${String(settleParams.length)}`;
   if (options.disposition === "fail") {
-    // `error_cbor` stays NULL deliberately: it holds runtime-serialized data
-    // the workflow's own pipeline produced, and this process cannot mint that
-    // honestly. `error_code` is the machine-readable verdict; the deprecated
-    // text column gets a StructuredError-shaped breadcrumb so an operator
-    // reading the row sees why the host failed it (the current read path
-    // ignores it, and legacy readers parse exactly this shape).
-    errorParams.push(options.errorCode ?? DEFAULT_ERROR_CODE);
-    const codeParam = errorParams.length;
-    errorParams.push(
-      JSON.stringify({
-        name: "WorkflowRunReconciled",
-        message: options.reason,
-        code: options.errorCode ?? DEFAULT_ERROR_CODE,
-      }),
-    );
-    errorClause = `, error_code = $${String(codeParam)}, error = $${String(errorParams.length)}`;
+    settleParams.push(options.errorCode ?? DEFAULT_ERROR_CODE);
+    settleClause += `, error_code = $${String(settleParams.length)}`;
   }
 
   const settled = await client.query<{
@@ -153,7 +143,7 @@ async function settleRuns(
     previous_status: "pending" | "running";
   }>(
     `update workflow.workflow_runs as runs
-        set status = '${status}', completed_at = now(), updated_at = now()${errorClause}
+        set status = '${status}', completed_at = now(), updated_at = now()${settleClause}
        from (select tenant_id, id, status as previous_status
                from workflow.workflow_runs as runs
               where runs.tenant_id = $1
@@ -163,7 +153,7 @@ async function settleRuns(
       where runs.tenant_id = active.tenant_id
         and runs.id = active.id
       returning runs.id, runs.name, runs.deployment_id, active.previous_status`,
-    errorParams,
+    settleParams,
   );
   if (settled.rows.length > 0) {
     const runIds = settled.rows.map((row) => row.id);
@@ -212,7 +202,7 @@ async function quarantineRuns(
     id: string;
     name: string;
     deployment_id: string;
-    queue_namespace: string | null;
+    queue_namespace: string;
     status: "pending" | "running";
   }>(
     `select runs.id, runs.name, runs.deployment_id, runs.queue_namespace, runs.status

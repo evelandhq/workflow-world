@@ -19,8 +19,9 @@ npm install @evelandhq/workflow-world
 ## Provision the database and tenants
 
 Run `workflow-world-setup` with `WORKFLOW_WORLD_URL` in its environment. It
-applies the schema migrations and initializes Graphile; **it does not create
-tenant partitions**. Call `ensureTenantPartitions(pool, tenantId)` once per
+creates the `workflow` schema from its baseline migration (on a database that
+does not hold one yet) and initializes Graphile; **it does not create tenant
+partitions**. Call `ensureTenantPartitions(pool, tenantId)` once per
 tenant afterwards:
 
 ```ts

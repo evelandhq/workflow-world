@@ -1,8 +1,6 @@
 import type { Event, Hook, HookCreatedEventRequest, Step, WorkflowRun } from "@workflow/world";
 import { slotToEventId, SPEC_VERSION_SUPPORTS_SLOT_IDENTITY } from "@workflow/world";
-import { encode } from "cbor-x";
 import { Pool } from "pg";
-import { ulid } from "ulid";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "./drizzle/index.js";
 import { dropTenantPartitions, ensureTenantPartitions, runMigrations } from "./index.js";
@@ -283,43 +281,6 @@ describe.skipIf(!testUrl)("events storage (postgres)", () => {
       ]);
       expect(result.cursor).toBe(slotToEventId(4));
       expect(result.hasMore).toBe(false);
-    });
-
-    it("keeps pre-upgrade v5 runs on legacy ULID event ids", async () => {
-      const runId = `wrun_${ulid()}`;
-      const firstEventId = `wevt_${ulid()}`;
-      await pool.query(
-        `insert into workflow.workflow_runs
-           (tenant_id, id, deployment_id, status, name, spec_version, input_cbor, queue_namespace)
-         values ($1, $2, 'deployment-v5', 'pending', 'legacy-v5', 5, $3, '')`,
-        [TENANT, runId, Buffer.from(encode(new Uint8Array()))],
-      );
-      await pool.query(
-        `insert into workflow.workflow_events
-           (tenant_id, id, type, run_id, payload_cbor, spec_version)
-         values ($1, $2, 'run_created', $3, $4, 5)`,
-        [
-          TENANT,
-          firstEventId,
-          runId,
-          Buffer.from(
-            encode({
-              deploymentId: "deployment-v5",
-              workflowName: "legacy-v5",
-              input: new Uint8Array(),
-            }),
-          ),
-        ],
-      );
-
-      const result = await events.create(runId, {
-        eventType: "step_created",
-        correlationId: "legacy-v5-step",
-        eventData: { stepName: "legacy-v5-step", input: new Uint8Array() },
-        specVersion: 5,
-      });
-
-      expect(result.event?.eventId).toMatch(/^wevt_[0-9A-HJKMNP-TV-Z]{26}$/);
     });
 
     it("should create a new event", async () => {

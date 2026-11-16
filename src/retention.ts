@@ -119,7 +119,6 @@ export async function pruneTerminalStreamChunks(
       deletedRows += batchDeletedRows;
 
       if (batchDeletedRows < options.batchSize) {
-        await deleteTerminalCheckpointsByAge(client, options.retentionMs);
         return {
           deletedRows,
           batches,
@@ -129,7 +128,6 @@ export async function pruneTerminalStreamChunks(
       }
     }
 
-    await deleteTerminalCheckpointsByAge(client, options.retentionMs);
     return {
       deletedRows,
       batches: options.maxBatches,
@@ -215,7 +213,6 @@ export async function pruneExpiredStreamChunks(
       const batchDeletedRows = result.rows.length;
       deletedRows += batchDeletedRows;
       if (batchDeletedRows < options.batchSize) {
-        await deleteExpiredCheckpoints(client);
         return {
           deletedRows,
           batches,
@@ -225,7 +222,6 @@ export async function pruneExpiredStreamChunks(
       }
     }
 
-    await deleteExpiredCheckpoints(client);
     return {
       deletedRows,
       batches: options.maxBatches,
@@ -302,7 +298,6 @@ export async function pruneExpiredWorkflowRuns(
           const tenants = victims.rows.map((row) => row.tenant_id);
           const runIds = victims.rows.map((row) => row.id);
           for (const { table, extraPredicate } of [
-            { table: "workflow_stream_checkpoints", extraPredicate: "" },
             {
               table: "workflow_stream_chunks",
               // EOF is the durable tombstone proving an expired stream ended.
@@ -342,14 +337,6 @@ export async function pruneExpiredWorkflowRuns(
                  where runs.tenant_id = hooks.tenant_id
                    and runs.id = hooks.run_id
               )`,
-        );
-        await client.query(
-          `delete from workflow.workflow_stream_checkpoints as checkpoints
-            where not exists (
-              select 1 from workflow.workflow_runs as runs
-               where runs.tenant_id = checkpoints.tenant_id
-                 and runs.id = checkpoints.run_id
-            )`,
         );
         await client.query("commit");
 
@@ -395,80 +382,6 @@ export async function setWorkflowRunRetentionClass(
     [options.tenantId, options.runId, retentionClass],
   );
   return { updated: result.rows.length === 1, retentionClass };
-}
-
-async function deleteExpiredCheckpoints(client: {
-  query(query: string): Promise<unknown>;
-}): Promise<void> {
-  await client.query(
-    `delete from workflow.workflow_stream_checkpoints as checkpoints
-      using workflow.workflow_runs as runs
-      where runs.tenant_id = checkpoints.tenant_id
-        and runs.id = checkpoints.run_id
-        and runs.status in ('completed', 'failed', 'cancelled')
-        and runs.expire_after is not null
-        and runs.expire_after <= now()
-        and not exists (
-          select 1
-            from workflow.workflow_runs as lineage
-           where lineage.tenant_id = runs.tenant_id
-             and lineage.retention_root_run_id = runs.retention_root_run_id
-             and (
-               lineage.status not in ('completed', 'failed', 'cancelled')
-               or lineage.retention_class = 'persistent'
-               or lineage.expire_after is null
-               or lineage.expire_after > now()
-             )
-        )
-        and not exists (
-          select 1
-            from workflow.workflow_hooks as capabilities
-            join workflow.workflow_runs as owners
-              on owners.tenant_id = capabilities.tenant_id
-             and owners.id = capabilities.run_id
-           where owners.tenant_id = runs.tenant_id
-             and owners.retention_root_run_id = runs.retention_root_run_id
-             and capabilities.token_retention_until > now()
-        )`,
-  );
-}
-
-async function deleteTerminalCheckpointsByAge(
-  client: { query(query: string, values: unknown[]): Promise<unknown> },
-  retentionMs: number,
-): Promise<void> {
-  await client.query(
-    `delete from workflow.workflow_stream_checkpoints as checkpoints
-      using workflow.workflow_runs as runs
-      where runs.tenant_id = checkpoints.tenant_id
-        and runs.id = checkpoints.run_id
-        and runs.status in ('completed', 'failed', 'cancelled')
-        and coalesce(runs.completed_at, runs.updated_at)
-              < now() - ($1::bigint * interval '1 millisecond')
-        and not exists (
-          select 1
-            from workflow.workflow_runs as lineage
-           where lineage.tenant_id = runs.tenant_id
-             and lineage.retention_root_run_id = runs.retention_root_run_id
-             and (
-               lineage.status not in ('completed', 'failed', 'cancelled')
-               or lineage.retention_class = 'persistent'
-               or coalesce(lineage.completed_at, lineage.updated_at)
-                    >= now() - ($1::bigint * interval '1 millisecond')
-             )
-        )
-        and not exists (
-          select 1
-            from workflow.workflow_hooks as capabilities
-            join workflow.workflow_runs as owners
-              on owners.tenant_id = capabilities.tenant_id
-             and owners.id = capabilities.run_id
-           where owners.tenant_id = runs.tenant_id
-             and owners.retention_root_run_id = runs.retention_root_run_id
-             and capabilities.token_retention_until > now()
-        )`,
-    [retentionMs],
-  );
 }
 
 function emptyStreamResult(lockAcquired: boolean): StreamRetentionResult {

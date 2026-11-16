@@ -98,11 +98,11 @@ describe.skipIf(!testUrl)("host-driven run reconciliation", () => {
     const { rows } = await admin.query<{
       status: string;
       error_code: string | null;
-      error: string | null;
+      reconciled_reason: string | null;
       completed_at: Date | null;
       expire_after: Date | null;
     }>(
-      `select status, error_code, error, completed_at, expire_after
+      `select status, error_code, reconciled_reason, completed_at, expire_after
          from workflow.workflow_runs where tenant_id = $1 and id = $2`,
       [tenantId, runId],
     );
@@ -153,11 +153,7 @@ describe.skipIf(!testUrl)("host-driven run reconciliation", () => {
     const row = await runRow(FAILED, runId);
     expect(row.status).toBe("failed");
     expect(row.error_code).toBe("RUN_ORPHANED");
-    expect(JSON.parse(row.error!)).toMatchObject({
-      name: "WorkflowRunReconciled",
-      message: "RuntimeInstance reaped while the run was active",
-      code: "RUN_ORPHANED",
-    });
+    expect(row.reconciled_reason).toBe("RuntimeInstance reaped while the run was active");
     expect(row.completed_at).not.toBeNull();
     // The retention trigger fired: a terminal interactive run has deadlines.
     expect(row.expire_after).not.toBeNull();
@@ -192,7 +188,7 @@ describe.skipIf(!testUrl)("host-driven run reconciliation", () => {
     const row = await runRow(CANCELLED, runId);
     expect(row.status).toBe("cancelled");
     expect(row.error_code).toBeNull();
-    expect(row.error).toBeNull();
+    expect(row.reconciled_reason).toBe("operator abandoned the run");
     expect(row.completed_at).not.toBeNull();
   }, 60_000);
 

@@ -147,7 +147,7 @@ describe.skipIf(!testUrl)("stream storage v2", () => {
     });
   });
 
-  test("cursor reads preserve stored bytes and write no checkpoints", async () => {
+  test("cursor reads preserve stored bytes", async () => {
     const streamId = `strm_cursor_${suffix}`;
     let soFar = "";
     const wire = Array.from({ length: 140 }, () => {
@@ -168,12 +168,6 @@ describe.skipIf(!testUrl)("stream storage v2", () => {
     expect(second.data.map(({ index }) => index)).toEqual(
       Array.from({ length: 64 }, (_, offset) => 64 + offset),
     );
-
-    const checkpoints = await pool.query(
-      `select 1 from workflow.workflow_stream_checkpoints where tenant_id = $1 and stream_id = $2`,
-      [TENANT, streamId],
-    );
-    expect(checkpoints.rowCount).toBe(0);
   });
 
   test("new readers continue to read legacy one-row chunks", async () => {

@@ -34,7 +34,6 @@ const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const NAMESPACED = `p_bootns_a_${suffix}`;
 const PLAIN = `p_bootns_b_${suffix}`;
-const LEGACY = `p_bootns_c_${suffix}`;
 const DEADLETTERED = `p_bootns_d_${suffix}`;
 
 describe.skipIf(!testUrl)("boot recovery preserves the queue namespace", () => {
@@ -45,7 +44,7 @@ describe.skipIf(!testUrl)("boot recovery preserves the queue namespace", () => {
   beforeAll(async () => {
     admin = new Pool({ connectionString: testUrl, max: 4 });
     await runMigrations(admin);
-    for (const tenant of [NAMESPACED, PLAIN, LEGACY, DEADLETTERED]) {
+    for (const tenant of [NAMESPACED, PLAIN, DEADLETTERED]) {
       await ensureTenantPartitions(admin, tenant);
     }
     workerUtils = await makeWorkerUtils({ pgPool: admin });
@@ -60,7 +59,7 @@ describe.skipIf(!testUrl)("boot recovery preserves the queue namespace", () => {
     // table for whichever later suite starts a real one.
     await admin
       .query("delete from graphile_worker._private_jobs where payload->>'tenantId' = any($1)", [
-        [NAMESPACED, PLAIN, LEGACY, DEADLETTERED],
+        [NAMESPACED, PLAIN, DEADLETTERED],
       ])
       .catch(() => {});
     // The sweep under test is global: it re-enqueues every active run in the
@@ -79,15 +78,15 @@ describe.skipIf(!testUrl)("boot recovery preserves the queue namespace", () => {
     // like a product bug in a suite that shares one database.
     await admin
       .query("delete from workflow.workflow_runs where tenant_id = any($1)", [
-        [NAMESPACED, PLAIN, LEGACY, DEADLETTERED],
+        [NAMESPACED, PLAIN, DEADLETTERED],
       ])
       .catch(() => {});
     await admin
       .query("delete from workflow.dispatch_dead_letters where tenant_id = any($1)", [
-        [NAMESPACED, PLAIN, LEGACY, DEADLETTERED],
+        [NAMESPACED, PLAIN, DEADLETTERED],
       ])
       .catch(() => {});
-    for (const tenant of [NAMESPACED, PLAIN, LEGACY, DEADLETTERED]) {
+    for (const tenant of [NAMESPACED, PLAIN, DEADLETTERED]) {
       await dropTenantPartitions(admin, tenant).catch(() => {});
     }
     await admin?.end().catch(() => {});
@@ -174,37 +173,6 @@ describe.skipIf(!testUrl)("boot recovery preserves the queue namespace", () => {
     expect(`${getQueueTopicPrefix("workflow", message.queueNamespace)}${message.id}`).toBe(
       "__wkf_workflow_greet",
     );
-  }, 60_000);
-
-  test("a run created before the column existed is reported, not silently defaulted", async () => {
-    // A row from before the migration. NULL there is genuinely ambiguous: it can
-    // mean an un-namespaced run, or a namespaced one created when there was
-    // nowhere to record the namespace. New rows never look like this — they
-    // write the empty string for "no namespace" — so the sweep can tell the two
-    // apart and say so rather than guessing quietly.
-    const runId = await createActiveRun({
-      tenantId: LEGACY,
-      queueNamespace: "acme",
-      workflowName: "greet",
-    });
-    await admin.query(
-      "update workflow.workflow_runs set queue_namespace = null where tenant_id = $1 and id = $2",
-      [LEGACY, runId],
-    );
-
-    const logged: Array<{ message: string; meta?: Record<string, unknown> }> = [];
-    await reenqueueActiveRunsForAllTenants({
-      pool: admin,
-      workerUtils,
-      log: (message, meta) => logged.push({ message, ...(meta ? { meta } : {}) }),
-    });
-
-    const message = await recoveredMessage(runId);
-    expect(message.queueNamespace).toBeUndefined();
-
-    const warning = logged.find((entry) => entry.meta?.runId === runId);
-    expect(warning).toBeDefined();
-    expect(warning!.message).toMatch(/namespace/i);
   }, 60_000);
 
   test("an unresolved dead letter quarantines boot recovery until an operator resolves it", async () => {

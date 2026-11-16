@@ -247,15 +247,12 @@ back and falls back to its `run_started` setup. Answering it demands the whole l
 read atomically with the `hook_received` write and `hasMore: false`, so it is a
 performance option to take deliberately, not a field to fill in.
 
-5.0.0-beta.26 made the replay page on `EventResult` an all-or-none group;
-beta.27 is the line eve 0.38.3 installs and the one pinned here. This World
-returns `events`, `cursor` and `hasMore` together for `run_started`, and omits all
-three keys for ordinary events unless `eventCount` or `sinceCursor` requests an
-inline delta. New runs receive a marker in `workflow_event_slots`, start at
-`evnt_…0001`, and allocate dense positions inside the INSERT that occupies
-them. The event key is therefore
-`(tenant_id, run_id, id)`. Runs with no marker predate the migration and continue
-minting `wevt_` ULIDs, preserving v5 replay order without a backfill.
+The replay page on `EventResult` is an all-or-none group. This World returns
+`events`, `cursor` and `hasMore` together for `run_started`, and omits all three
+keys for ordinary events unless `eventCount` or `sinceCursor` requests an inline
+delta. Every run gets a `workflow_event_slots` row when it is created, starts at
+`evnt_…0001`, and allocates dense positions inside the INSERT that occupies
+them. The event key is therefore `(tenant_id, run_id, id)`.
 
 ### Hook force-claim
 
@@ -288,7 +285,7 @@ with the tenant predicate in every statement:
    by-token lookup already does.
 3. Write, in this order: the victim's `hook_disposed{token, forceClaimedBy}`
    (only for a running victim), delete the victim's hook row, insert the
-   claimer's with `claimed_from` (migration 0020), and journal the claimer's
+   claimer's with `claimed_from`, and journal the claimer's
    `hook_created{force, forceClaimedFrom}`. `claimedFrom` carries the victim's
    run and hook and, for a running victim, the workflow name, deployment and
    stamped version the claimer's runtime wakes it with; every hook read returns
@@ -318,7 +315,7 @@ claimer hook.
 ### In-band writer fence
 
 A spec 9 run is driven by one orchestrator invocation at a time, and declares
-`capabilities.inBandFence`. `workflow_event_slots.seq_in_band` (migration 0021)
+`capabilities.inBandFence`. `workflow_event_slots.seq_in_band`
 counts the positions accepted from the run's in-band writes -- everything its
 orchestrator writes -- with `run_created` as the first. An in-band create
 carries the count its writer expects (`expectedSeqInBand`), and storage runs it
@@ -372,7 +369,7 @@ the queued copy writes a resilient `run_started` carrying the same
 `startHook`. Either may arrive first, so both decide in the transaction that
 would create the run (`decideStartHookAdmission`, `src/start-hook.ts`). The
 first attempt for a candidate run id records one immutable decision in
-`workflow_start_hook_admissions` (migration 0022), which every later attempt,
+`workflow_start_hook_admissions`, which every later attempt,
 through either path, returns:
 
 - accepted: the run, its `run_created` (naming the start Hook) and the start
@@ -384,26 +381,16 @@ through either path, returns:
 - rejected: nothing but the decision is written, and the refusal is
   `HookConflictError` naming the owner, thrown only after the decision commits.
 
-Every Hook row written from 0022 on claims its token (`claims_token`), and a
+Every Hook row claims its token (`claims_token`), and a
 partial unique index allows one claiming row per token in a tenant, so the
 insert, not the preceding read, decides between two admissions, or between an
 admission and another run's `createHook`. A plain creation that loses the
 claim answers `hook_conflict` like any other conflict. The index keys on
 `workflow.hook_token_digest(token)`, a sha256, because a token can run to
-several kilobytes (migration 0018); rows written before 0022 claim nothing, so
-the index cannot fail on existing data. Past the 24h orphan bound
+several kilobytes. Past the 24h orphan bound
 (`START_HOOK_CANDIDATE_MAX_AGE_MS`) a candidate is refused permanently with
 `START_HOOK_ADMISSION_REJECTED`, which stops its queued copy retrying, and
 decisions older than that are deleted as admissions go.
-
-Older Worlds can share the database: Eveland bundles a World into each
-Release, and only the deployment that created a run writes to it. A candidate's
-queued copy is therefore handled by the World that admitted it, never by one
-that would create the run without its start Hook. An older World leaves
-`claims_token` false and never reads the new columns; its by-token read still
-finds a start Hook as the token's owner, so only a creation of its own racing an
-admission for the same token in the same instant is unprotected, as it was
-between any two creations before 0022.
 
 This is upstream world-postgres 5.1.1's implementation, scoped by tenant. Its
 admission, Hook row and run commit in one transaction, so the orphan states a
@@ -431,8 +418,8 @@ meaning and is not read here.
 | `workflow_hooks`                 | no          | plus `token_retention_until`, `claimed_from`, `claims_token`    |
 | `workflow_waits`                 | no          | `resume_at` is the sleeping timer; graphile's `run_at` fires it |
 | `workflow_events`                | LIST        | append-heavy, and the only write path for run state             |
-| `workflow_stream_chunks`         | LIST        | legacy logical rows plus v2 packed physical blocks              |
-| `workflow_stream_checkpoints`    | no          | retired: no longer written, kept until a migration drops it     |
+| `workflow_stream_chunks`         | LIST        | one-row-per-chunk rows plus v2 packed physical blocks           |
+| `workflow_event_slots`           | no          | one row per run: the in-band writer fence's count               |
 | `workflow_start_hook_admissions` | no          | one decision per start Hook candidate; kept for 25 hours        |
 | `dispatch_dead_letters`          | no          | platform-owned; see [Dead letters](#dead-letters)               |
 
@@ -485,10 +472,9 @@ graphile's own tables live in the same database, in their own schema, untouched.
 The stream boundary is logical, not physical. Write-side snapshot stripping turns
 a v24-shaped `messageSoFar` / `reasoningSoFar` append back into a delta; every
 supported Eve line already writes deltas (stream v25), so the guard is normally
-a no-op. Readers serve stored bytes verbatim. The read-side rehydrator and its
-`workflow_stream_checkpoints` rows were removed when the last v24 line left the
-window: rebuilding snapshots re-inflated every read to O(n²) bytes that a v25
-runtime normalized away again. Packed rows retain every logical chunk id, so a
+a no-op. Readers serve stored bytes verbatim: rebuilding snapshots on read
+would re-inflate every read to O(n²) bytes that the runtime normalizes away
+again. Packed rows retain every logical chunk id, so a
 terminal rewrite and a rolling upgrade do not change cursors, `startIndex`, or
 `tailIndex`.
 
@@ -550,41 +536,13 @@ So the value is stamped on the run at creation, in both production write paths
 provenance — the inserts are `onConflictDoNothing`, so a later process replaying
 the same run cannot overwrite what the creating deployment recorded.
 
-Three states, and the third is the point:
-
-| value  | meaning                                          |
-| ------ | ------------------------------------------------ |
-| `'ns'` | the creating deployment resolved that namespace  |
-| `''`   | it resolved none — the default prefix is correct |
-| `NULL` | unknown: written by code that did not record one |
-
-`''` is a safe sentinel because upstream requires a namespace to match
-`^[a-z][a-z0-9]*$`, so it can never collide with a real one. `NULL` is kept
-distinct rather than folded into "no namespace" because they are not the same
-claim — see [Upgrading past 0.3.0](#upgrading-past-030).
+`''` means the creating deployment resolved none, so the default prefix is
+correct. It is a safe sentinel because upstream requires a namespace to match
+`^[a-z][a-z0-9]*$`, so it can never collide with a real one.
 
 This is **not** tenancy. Invariant 2 stands: prefix and namespace isolation leak,
 and tenancy is the `tenant_id` column. This column exists only so the platform
 can address the topic eve already chose.
-
-### Upgrading past 0.3.0
-
-`0.3.0` and earlier had nowhere to record the namespace, so every run they
-created reads back `NULL`. An older deployment still running mid-upgrade keeps
-writing `NULL` too — the world is baked into a release and is never upgraded in
-place.
-
-For those rows boot recovery falls back to the default prefix and **logs each
-one**, with a `runsWithUnknownQueueNamespace` count on the summary line. That is
-correct for an un-namespaced deployment and wrong for a namespaced one, and the
-package cannot tell which from the row alone. Deriving it is not an option: the
-namespace is eve's, and reimplementing how eve mints it would fork the algorithm
-against a version this package only pins.
-
-The supported procedure is therefore to drain: let active runs finish, or cancel
-them, before cutting over. The shared-world path has not carried production
-traffic, so an explicit drain is cheap here — and it is a stated policy with a
-test behind it rather than a silent "null means default".
 
 ## The dispatch contract
 
@@ -893,9 +851,10 @@ active runs (by run id and/or deployment id — there is deliberately no
 - **fail** / **cancel** write the run row the way the World's own terminal
   transitions do: conditional on the run still being active, hooks deleted
   except retained tokens, waits deleted, retention deadlines recomputed by the
-  database trigger. `fail` records a machine-readable `error_code` and leaves
-  `error_cbor` NULL — this process cannot honestly mint runtime-serialized
-  error data, and pretending otherwise would poison hydration.
+  database trigger. Both record the caller's reason in `reconciled_reason`.
+  `fail` also records a machine-readable `error_code` and leaves `error_cbor`
+  NULL — this process cannot honestly mint runtime-serialized error data, and
+  pretending otherwise would poison hydration.
 - **quarantine** leaves the run's status alone and parks it behind an
   unresolved dead letter whose payload is the same message boot recovery would
   have reconstructed. Operator replay of a host quarantine and of a
@@ -980,10 +939,6 @@ Properties of these choices worth watching, as distinct from defects.
 - **`@workflow/*` is a moving beta target.** The `specVersion` range the
   runtime accepts is compiled into eve per release, so every eve bump has to
   re-verify the contract rather than assume it.
-- **Migration 0006 replaces the event primary key.** PostgreSQL takes an
-  `ACCESS EXCLUSIVE` lock for that catalog change. The migration bounds the wait
-  at ten seconds; large installations should apply it in a maintenance window
-  rather than let an unbounded lock queue stall event traffic.
 - **A single dispatcher is a restart-pause single point of failure.** Keeping it
   stateless — all claim state in Postgres — is what makes a restart a brief pause
   plus boot recovery rather than data loss.

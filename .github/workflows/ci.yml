@@ -209,7 +209,7 @@ jobs:
             console.log("exports ok");
           '
           # Migrations ship as files, not just as code that references them.
-          test -f node_modules/@evelandhq/workflow-world/migrations/0001_initial.sql
+          test -f node_modules/@evelandhq/workflow-world/migrations/0001_baseline.sql
           # The licence obligations are part of the artifact, not of the repo.
           test -f node_modules/@evelandhq/workflow-world/LICENSE
           test -f node_modules/@evelandhq/workflow-world/NOTICE

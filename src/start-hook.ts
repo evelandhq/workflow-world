@@ -103,7 +103,7 @@ export function startHookConflict(
 
 /**
  * Same predicate as `hookTokenEquals` in storage.ts: filters on `md5(token)`
- * so the lookup can use migration 0018's expression index, and keeps the exact
+ * so the lookup can use the `md5(token)` expression index, and keeps the exact
  * comparison so a digest collision cannot resolve to another token.
  */
 function tokenEquals(token: string): SQL {
