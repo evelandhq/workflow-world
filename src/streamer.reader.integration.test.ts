@@ -10,7 +10,7 @@ import {
 } from "./migrate.js";
 import { packStreamChunks } from "./stream-blocks.js";
 
-const testUrl = process.env.EVELAND_WORKFLOW_WORLD_TEST_URL;
+const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
 const TENANT = `p_stream_reader_${suffix}`;
 const RUN = "wrun_reader";
@@ -42,7 +42,6 @@ describe.skipIf(!testUrl)("stream readers", () => {
       pool,
       tenantId: TENANT,
       deploymentId: "dep_stream_reader",
-      runner: "external",
       compactStreamSnapshots: false,
     });
   }, 60_000);
