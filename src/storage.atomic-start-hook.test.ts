@@ -18,7 +18,7 @@ import {
 
 /**
  * Atomic start Hook admission (`capabilities.atomicStartHook`), which eve
- * 1.0.0-rc.6 requires to start a session: checked with upstream's own
+ * 1.0 requires to start a session: checked with upstream's own
  * conformance module, plus what is particular to this World -- a tenant owns
  * its tokens, and a token of several kilobytes (eveland#521) is admitted and
  * refused like any other.

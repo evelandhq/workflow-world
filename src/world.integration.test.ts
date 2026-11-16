@@ -174,43 +174,18 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
   test("specVersion is what upstream mints: hook force-claim, 8", () => {
     // @workflow/world beta.38 (eve 0.66.3) minted spec 8, the hook force-claim
     // reader contract, while the runtime floor stayed at slot identity (6).
-    // The World declares exactly `mintedSpecVersion()` -- unless
-    // WORKFLOW_SEALED_LOG opts the process out -- and pairs it with
+    // The World declares exactly `mintedSpecVersion()` and pairs it with
     // `capabilities.hookForceClaim`; see the note on `specVersion` in
     // src/index.ts. The run created above is stamped with it, so the suite
     // exercises writing and reading 8.
     expect(SPEC_VERSION_SUPPORTS_SLOT_IDENTITY).toBe(6);
     expect(SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM).toBe(8);
     expect(SPEC_VERSION_CURRENT).toBe(8);
-    expect(process.env.WORKFLOW_SEALED_LOG).toBeUndefined();
     expect(alpha.specVersion).toBe(mintedSpecVersion());
     expect(alpha.specVersion).toBe(SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM);
     expect(alpha.specVersion).toBeLessThanOrEqual(SPEC_VERSION_MAX_SUPPORTED);
     expect(alpha.capabilities?.hookForceClaim).toBe(true);
     expect(alpha.capabilities?.hookRetention?.active).toBe(true);
-  });
-
-  test("WORKFLOW_SEALED_LOG=0 puts a deployment back on slot identity", async () => {
-    // The kill switch is read per createWorld(), not at module load, so one
-    // process can hold worlds in both modes. Declaring 6 is still inside the
-    // runtime's accepted range, which is what makes it a usable fallback.
-    process.env.WORKFLOW_SEALED_LOG = "0";
-    try {
-      const optedOut = createWorld({
-        connectionString: testUrl!,
-        tenantId: ALPHA,
-        deploymentId: "dep_alpha_sealed_off",
-        runner: "external",
-      });
-      try {
-        expect(optedOut.specVersion).toBe(SPEC_VERSION_SUPPORTS_SLOT_IDENTITY);
-      } finally {
-        await optedOut.close?.();
-      }
-    } finally {
-      delete process.env.WORKFLOW_SEALED_LOG;
-    }
-    expect(alpha.specVersion).toBe(SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM);
   });
 
   test("writing for an unprovisioned tenant fails loudly", async () => {

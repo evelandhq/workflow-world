@@ -99,9 +99,8 @@ describe("@workflow/* pins track the installed eve", () => {
 
   test("the installed eve is the one this package claims to target", () => {
     const evePin = (manifest.devDependencies as Record<string, unknown>).eve;
-    // The registry drift check needs an exact version as its baseline. Eveland
-    // verifies 1.0 release candidates, so a prerelease is exact enough.
-    expect(evePin).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/);
+    // The registry drift check needs an exact version as its baseline.
+    expect(evePin).toMatch(/^\d+\.\d+\.\d+$/);
     expect(eve.version).toBe(evePin);
     // Sanity: if eve stopped declaring @workflow/* at all, every assertion below
     // would vacuously pass.
@@ -135,29 +134,13 @@ describe("@workflow/* pins track the installed eve", () => {
    */
   const EXEMPT_FROM_EVE_PINS: Record<string, string> = {
     // The conformance harness, and deliberately not part of the runtime pairing:
-    // it ships its *own* runtime bundle and tracks a separate release line. That
-    // line has sat on either side of eve's pin before (beta.42 pinned
-    // @workflow/world beta.27 while eve 0.45.0 installed beta.28; beta.51 pins
-    // beta.35 while eve 0.54.3 installs beta.34), which is fine for the same
-    // reason agreeing was: the pairing is a coincidence of timing, not a
-    // constraint — the harness releases on its own cadence.
-    // Forcing it onto eve's set would mean testing against a runtime eve does not
-    // ship; picking up its own next release, which is what an eve bump here does,
-    // is not the same thing and nothing enforces the outcome either way.
-    // The agreement is verified rather than assumed: conformance/spec.test.mts
-    // asserts our specVersion lies in the range the harness runtime accepts,
-    // resolved from the harness's own @workflow/world, which is the property that
-    // actually matters and the one that survives the harness drifting again and
-    // re-nesting its own @workflow/world in the tree. Bumping the harness is the
-    // move when it stops accepting what we declare (beta.42 read only through
-    // spec 6; beta.51 read 7).
-    // It was held on beta.55 while this World capped its declaration at 7: from
-    // beta.56 on (every stable 5.x included) the harness requires every run to be
-    // stamped at least `mintedSpecVersion()`, which is 8. With force-claim
-    // implemented the World declares 8 (see `specVersion` in src/index.ts), and
-    // the harness tracks the newest stable release. 5.0.8 bundles core 5.4.0 /
-    // world 5.1.0, the same set eve 1.0.0-rc.6 bundles, but that is timing, not
-    // a constraint. The real-eve e2e is what exercises the pinned core.
+    // it ships its *own* runtime bundle and tracks a separate release line, so
+    // agreeing with eve's set is a coincidence of timing, not a constraint.
+    // Forcing it onto eve's set would mean testing against a runtime eve does
+    // not ship. What matters is verified rather than assumed:
+    // conformance/spec.test.mts asserts our specVersion lies in the range the
+    // harness runtime accepts, resolved from the harness's own
+    // `@workflow/world`. The real-eve e2e is what exercises the pinned core.
     "@workflow/world-testing": "test-only harness; ships its own runtime bundle",
   };
 

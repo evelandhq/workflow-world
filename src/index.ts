@@ -184,8 +184,7 @@ export function createWorld(
     /**
      * The single-orchestrator version (9) when `WORKFLOW_SPEC_VERSION=9` asks
      * for it, as eve 1.0 does by default, else the hook force-claim version
-     * (8), or slot identity (6) when `WORKFLOW_SEALED_LOG=0` opts a deployment
-     * out: exactly `mintedSpecVersion(env, { inBandFence: true })`
+     * (8): exactly `mintedSpecVersion(env, { inBandFence: true })`
      * (`worldSpecVersion`), as upstream tells a World with the fence to
      * declare. The runtime
      * stamps every run it creates with whatever is declared here (`run_created`
@@ -220,13 +219,6 @@ export function createWorld(
      * occupies it (`insertEventRow`), so there is never a hole to seal and it
      * never writes one.
      *
-     * `WORKFLOW_SEALED_LOG=0` puts a deployment back on 6 without a release,
-     * if a v6-only executor ever has to be served again. Versions are linear,
-     * so its runs can still force-claim but can never be claimed from: a
-     * takeover answers them with `hook_conflict{forceRefusedReason}`. An
-     * in-flight run is pinned to the deployment that created it, so a version
-     * stamped by a newer Release is never replayed by an older one.
-     *
      * Read once per `createWorld()`, and the same value is handed to storage so
      * its run-creation fallback and legacy event stamps agree with what the
      * runtime was told. Pre-upgrade v5 runs stay on ULIDs through the per-run
@@ -246,7 +238,7 @@ export function createWorld(
        * start-hook.ts): one immutable decision per candidate run, a duplicate
        * start refused with `HookConflictError` naming the owner, and the start
        * Hook resumable from the moment `run_created` returns. eve
-       * 1.0.0-rc.6 starts every session this way, claiming its channel address,
+       * 1.0 starts every session this way, claiming its channel address,
        * and refuses to start one on a World that does not declare this.
        */
       atomicStartHook: { active: true },
