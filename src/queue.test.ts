@@ -911,6 +911,17 @@ describe("postgres queue http execution", () => {
     );
   });
 
+  it("leaves the flow route to the dispatch check and never writes a queue auth key", async () => {
+    const queue = buildQueue(buildConfig({ runner: "external" }), pool);
+
+    // The runtime's own delivery check stays off: platform dispatch carries
+    // the runtime secret instead, checked by `createQueueHandler`.
+    expect(queue.queueAuthMode).toBe("skip");
+    // The internal Local World only serves the handler, so it must not
+    // create a key file (or the data directory it lives in).
+    expect(createWorld).toHaveBeenCalledWith(expect.objectContaining({ queueAuthKey: "read" }));
+  });
+
   it("rejects platform dispatch that cannot prove itself before eve's handler runs", async () => {
     const queue = buildQueue(buildConfig({ runner: "external" }), pool);
     const handler = queue.createQueueHandler(getQueueTopicPrefix("workflow"), async () => {});

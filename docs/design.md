@@ -212,7 +212,9 @@ be worth recording:
   creation, which is a different key — so the capability stays unset and the
   runtime keeps the sequential single-writer path. Declaring it without the
   constraint would duplicate a `hook_received` on replay. Adding the constraint
-  is a real option later; it is a migration, not a flag.
+  is a real option later; it is a migration, not a flag. `resolvedHookResume`,
+  the cached-hook delivery eve uses for signed inbox handles, requires the same
+  deduplication, so it stays unset too and eve resolves those handles by token.
 - **`CreateEventParams.computeInstanceId`** is ambient per-event identity, read
   back through the analytics surface. It is dropped for the same reason
   `requestId` already is: this World does not implement `analytics`, so there is
@@ -387,7 +389,7 @@ upstream's own conformance module against it.
 
 `start(workflow, args, { experimental_hook: { token } })` admits a run together
 with a Hook on `token`, and the World declares `capabilities.atomicStartHook`.
-eve 1.0.0-rc.6 starts every session this way, with the session's channel
+eve 1.0 starts every session this way, with the session's channel
 address as the token, so two first messages racing to one address reach one
 session; it refuses to start a session on a World that does not declare it.
 

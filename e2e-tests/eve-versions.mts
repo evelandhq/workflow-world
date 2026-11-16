@@ -3,33 +3,30 @@
  * release bundles, not npm's `latest`, is what decides whether an entry earns
  * its install.
  *
- * Eveland supports one eve line, 1.0.x. eve 1.0 no longer installs the
- * Workflow runtime as dependencies: it bundles it, and records the set in
- * `dist/src/compiled/.vendor-stamp.json`. 1.0.0-rc.6 bundles the Workflow 5.4
- * runtime the pins here follow, the same set as rc.5:
+ * eve bundles the Workflow runtime rather than installing it, and records the
+ * set in `dist/src/compiled/.vendor-stamp.json`. 1.0.0 bundles the Workflow
+ * 5.5 runtime the pins here follow:
  *
- * | package                 | 1.0.0-rc.6 |
- * | ----------------------- | ---------- |
- * | `@workflow/core`        | 5.4.0      |
- * | `@workflow/world`       | 5.1.0      |
- * | `@workflow/world-local` | 5.2.1      |
- * | `@workflow/errors`      | 5.1.0      |
- * | `@workflow/utils`       | 5.0.2      |
+ * | package                 | 1.0.0 |
+ * | ----------------------- | ----- |
+ * | `@workflow/core`        | 5.5.0 |
+ * | `@workflow/world`       | 5.2.0 |
+ * | `@workflow/world-local` | 5.3.0 |
+ * | `@workflow/errors`      | 5.1.1 |
+ * | `@workflow/utils`       | 5.1.0 |
  *
- * eve 1.0 creates spec 9 (single-orchestrator) runs by default
- * (`WORKFLOW_SPEC_VERSION=9`) on a World that declares
- * `capabilities.inBandFence`, and spec 8 runs on one that does not. It moves a
- * session to a fresh run by force-claiming the session's hook tokens
- * (`capabilities.hookForceClaim`, `session-handoff.test.mts`) and reads
- * `capabilities.deploymentAffinity`. From rc.6 it starts every session with
- * an atomic start Hook on the session's channel address
- * (`capabilities.atomicStartHook`) and refuses to start one on a World that
- * does not declare it.
+ * eve 1.0 creates spec 9 (single-orchestrator) runs (`WORKFLOW_SPEC_VERSION=9`)
+ * on a World that declares `capabilities.inBandFence`. It moves a session to a
+ * fresh run by force-claiming the session's hook tokens
+ * (`capabilities.hookForceClaim`, `session-handoff.test.mts`), reads
+ * `capabilities.deploymentAffinity`, and starts every session with an atomic
+ * start Hook on the session's channel address (`capabilities.atomicStartHook`),
+ * refusing to start one on a World that does not declare it.
  *
- * Exact patches matter because Workflow pins move within a line: eve 1.0.0-rc.3
- * moved them, and so did rc.5. Each enabled entry costs an npm install plus a
- * full `eve build`. Local runs cover all enabled entries; CI supplies
- * EVE_VERSION so each matrix job covers only the release named in its label.
+ * Exact patches matter because Workflow pins can move within a line. Each
+ * enabled entry costs an npm install plus a full `eve build`. Local runs cover
+ * all enabled entries; CI supplies EVE_VERSION so each matrix job covers only
+ * the release named in its label.
  */
 export type EveVersion = {
   version: string;
@@ -37,7 +34,7 @@ export type EveVersion = {
   enabled: boolean;
 };
 
-export const EVE_VERSIONS: readonly EveVersion[] = [{ version: "1.0.0-rc.6", enabled: true }];
+export const EVE_VERSIONS: readonly EveVersion[] = [{ version: "1.0.0", enabled: true }];
 
 const eveVersionUnderTest = process.env.EVE_VERSION;
 

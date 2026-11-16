@@ -1,22 +1,17 @@
 # Following Eve
 
 An eve release is almost never a reason to do anything here. What matters is not
-that eve shipped, but whether the `@workflow/*` set it bundles moved. Eveland's
-supported window is the single line 1.0.x, verified at 1.0.0-rc.6, and the pins
-here follow the set that release bundles: core 5.4.0, world 5.1.0, world-local
-5.2.1, errors 5.1.0 and utils 5.0.2. eve 1.0 no longer installs that set as
-dependencies. It bundles it under `dist/src/compiled/@workflow` and records each
+that eve shipped, but whether the `@workflow/*` set it bundles moved. The pins
+here follow the set eve 1.0.0 bundles: core 5.5.0, world 5.2.0, world-local
+5.3.0, errors 5.1.1 and utils 5.1.0. eve bundles that set under
+`dist/src/compiled/@workflow` rather than installing it, and records each
 version in `dist/src/compiled/.vendor-stamp.json`, which is what
 `src/eve-pin-contract.test.ts` and `scripts/eve-pin-drift.mjs` read.
-`e2e-tests/eve-versions.mts` is the table of record. Exact patches still matter:
-Workflow pins have moved within an eve line before (1.0.0-rc.3 and rc.5 are the
-latest examples), so a line is not a set. A release can also start using a
-capability of the same set: rc.6 bundles exactly rc.5's Workflow runtime, but
-starts every session with an atomic start Hook and refuses a World that does not
-declare `atomicStartHook`.
+`e2e-tests/eve-versions.mts` is the table of record. Exact patches matter:
+Workflow pins can move within an eve line, so a line is not a set.
 
-World 5.1.0 adds only optional members, each behind a capability that fails
-closed when a World leaves it unset:
+World 5.2.0 adds only optional members, each behind a capability or setting
+that fails closed when a World leaves it unset:
 
 - `inBandFence`, which spec 9 (single-orchestrator) runs require: a per-run
   in-band position count, a `snapshot` on `events.list`, and refusal of a stale
@@ -31,17 +26,23 @@ closed when a World leaves it unset:
   parallelism (`runQueueFor` in `src/dispatch-contract.ts`).
 - `atomicStartHook`, `start({ experimental_hook })` admission: the run is
   admitted together with a Hook on the given token, so a duplicate start is
-  refused with `HookConflictError` naming the owner. eve 1.0.0-rc.6 starts every
+  refused with `HookConflictError` naming the owner. eve 1.0 starts every
   session this way, claiming its channel address, and fails to start one on a
   World that does not declare it. Declared since 0.31.0 (`docs/design.md`,
   Atomic start Hook); `src/storage.atomic-start-hook.test.ts` runs upstream's
   own conformance module for it.
 - `hookResumeDedup` and `resolvedHookResume`, deduplicated and cached hook
-  resumes. eve uses them only for signed inbox handles
-  (`EVE_INBOX_HANDLE_SECRET`); without them it resolves the hook by token.
+  resumes. Not declared: they need a `(runId, resumeId)` constraint this World
+  does not have (`docs/design.md`). Without them core keeps the plain
+  single-writer `hook_received` write, and eve resolves a signed inbox handle
+  (`EVE_INBOX_HANDLE_SECRET`) by token instead of using it directly.
+- `queue.queueAuthMode`, how the runtime authenticates flow-route deliveries.
+  Declared `'skip'`, as upstream's world-postgres does: platform dispatch
+  carries the runtime secret instead (`createQueueHandler` in `src/queue.ts`),
+  and the internal Local World only reads a queue auth key, never writes one.
 - `dynamicWorkflowCode`, storing a dynamic run's code. eve does not use it.
 
-Core 5.4 drives a run with one of two runtimes, picked by the run's stamped
+Core 5.5 drives a run with one of two runtimes, picked by the run's stamped
 version: `runtime/spec8` for spec 8 runs, and `runtime/spec9` for
 single-orchestrator runs. Runs keep the version they were stamped with, so spec 8
 runs created before 0.30.0 finish on spec 8. The hook-wake bypass applies to
@@ -82,8 +83,8 @@ and ends at 8 on every line in the matrix.
 The conformance harness moved with it. `@workflow/world-testing` from beta.56
 on asserts every run is stamped at least what its own runtime mints (8), so
 while this World declared 7 the harness was held on beta.55. It now tracks the
-newest stable harness, 5.0.8, which ships its own runtime bundle on core 5.4.0
-/ world 5.1.0 -- the same set eve 1.0.0-rc.6 bundles, by timing rather than by
+newest stable harness, 5.1.0, which ships its own runtime bundle on core 5.5.0
+/ world 5.2.0 -- the same set eve 1.0.0 bundles, by timing rather than by
 constraint; see the exemption in `src/eve-pin-contract.test.ts`. Its
 `resolveData` family (this World's `'skip-step-inputs'` reading) passes, and so
 does its `inBandFence` family since 0.30.0. Run the suite with
@@ -147,8 +148,7 @@ runtime floor stays at slot identity (v6) while `SPEC_VERSION_CURRENT` moves to
 v7, the "sealed log", and the runtime stamps each new run with whatever the
 World declares. This World declares `mintedSpecVersion()` (`src/index.ts`), as
 upstream recommends: v8, which it has returned since beta.38 (this World capped
-it at v7 until it implemented force-claim), or v6 when `WORKFLOW_SEALED_LOG=0`
-opts a deployment out. Declaring v7 changed nothing in storage. Its reader contract is
+it at v7 until it implemented force-claim). Declaring v7 changed nothing in storage. Its reader contract is
 the `noop` filler a backend emits when it pre-assigns event positions, and this
 World allocates each position inside the INSERT that occupies it, so it never
 has a hole to seal and never writes one. What the declaration buys is not being
@@ -159,8 +159,7 @@ Through 0.17.0 this World pinned v6 so a Release built against a v6-only eve
 (0.47.x and older) could never meet a run it cannot read. Every line in the
 window has read v7 since eve 0.49, and an in-flight run is pinned to the
 deployment that created it, so a v7 run stamped by a new Release is never
-replayed by an older one. The env var is the fallback if a v6-only executor
-ever has to be served again; it needs no release.
+replayed by an older one.
 
 See the [test commands](./testing.md) and the
 [upstream compatibility contract](../world-postgres-beta34-compatibility.md).

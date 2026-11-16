@@ -30,8 +30,7 @@ test("the harness is really configured for external mode", () => {
  *
  * This World declares exactly `mintedSpecVersion(env, { inBandFence: true })`
  * (see `src/index.ts`): 9 when `WORKFLOW_SPEC_VERSION=9` asks for
- * single-orchestrator runs, else 8, the hook force-claim version, unless
- * `WORKFLOW_SEALED_LOG=0` opts the process back to slot identity. Assert that
+ * single-orchestrator runs, else 8, the hook force-claim version. Assert that
  * the declaration is exactly that, that it comes with
  * `capabilities.hookForceClaim` and `capabilities.inBandFence`, and that it
  * sits inside the range

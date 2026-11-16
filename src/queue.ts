@@ -156,7 +156,10 @@ function isExactDeploymentId(deploymentId: string | undefined): deploymentId is 
 export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQueue {
   const port = config.port ?? (process.env.PORT ? Number(process.env.PORT) : undefined);
   const tenantId = config.tenantId;
-  const localWorld = createWorld({ dataDir: undefined, port });
+  // Only for its queue handler. `'read'` so this World never writes a queue
+  // auth key file or a Local data directory: it declares `queueAuthMode:
+  // 'skip'` below, so nothing ever checks that key.
+  const localWorld = createWorld({ dataDir: undefined, port, queueAuthKey: "read" });
 
   // JSON transport that preserves Uint8Array values via a tagged
   // envelope ({ __type: 'Uint8Array', data: '<base64>' }).  Required
@@ -912,6 +915,13 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
   }
 
   return {
+    /**
+     * The runtime's own flow-route check (a queue auth key shared through a
+     * Local data directory) does not apply: platform dispatch proves itself
+     * with the runtime secret and the target deployment in
+     * `createQueueHandler`, before eve's handler runs.
+     */
+    queueAuthMode: "skip",
     createQueueHandler,
     getDeploymentId,
     queue,
