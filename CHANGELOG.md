@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.31.1...workflow-world-v1.0.0) (2026-11-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* the migrations are replaced by a single baseline that applies only to an empty workflow schema; a database migrated by an earlier version must be recreated. BootRecoveryRun.queueNamespace is a string ('' for none), and reconciliation no longer writes the error text column.
+* WORKFLOW_SPEC_VERSION must be unset or 9; any other value fails createWorld. isHookWake, mayBypassRunQueue and wakeFlag are no longer exported, and the dispatcher's fairness has a single per-tenant cap.
+* embedded mode is removed (WORKFLOW_WORLD_RUNNER, the runner, port and queueConcurrency options, WORKFLOW_POSTGRES_WORKER_CONCURRENCY and reenqueueTenantRuns), so a deployment needs a running dispatcher, and the flow route refuses requests without the dispatch headers. The EVELAND_PROJECT_ID, EVELAND_DEPLOYMENT_ID, EVELAND_WORKFLOW_RUNNER, EVELAND_WORKFLOW_WORLD_URL, EVELAND_WORKFLOW_WORLD_BOOTSTRAP_URL, EVELAND_SCHEDULER_RUNTIME_SECRET and EVELAND_WORKFLOW_STREAM_COMPACTION aliases are no longer read, and RUNTIME_SECRET_ENV_NAMES is replaced by RUNTIME_SECRET_ENV_NAME. The retention-class backfill exports and the ephemeral retention class are removed.
+* WORKFLOW_SEALED_LOG is no longer read. @workflow/world 5.2.0 stopped reading it, so it can no longer put a deployment back on spec 6.
+
+### Features
+
+* create only spec 9 runs and drop the hook-wake bypass ([#137](https://github.com/evelandhq/workflow-world/issues/137)) ([fe12c23](https://github.com/evelandhq/workflow-world/commit/fe12c23c85c576589d38f61965ebeed042e385b3))
+* follow the Workflow 5.5 runtime that eve 1.0.0 bundles ([#133](https://github.com/evelandhq/workflow-world/issues/133)) ([6d4ea8d](https://github.com/evelandhq/workflow-world/commit/6d4ea8d949d3a8edac0cb3694691104971ab41cb))
+* run every delivery through the dispatcher and read only WORKFLOW_WORLD_* names ([#135](https://github.com/evelandhq/workflow-world/issues/135)) ([2866c10](https://github.com/evelandhq/workflow-world/commit/2866c10651f0a3b99f73ac60f96d63830001bac8))
+* start the schema from a single 1.0 baseline migration ([#138](https://github.com/evelandhq/workflow-world/issues/138)) ([4206310](https://github.com/evelandhq/workflow-world/commit/420631052f4ef8c3957900bc1fd73f1d65383d79))
+
+
+### Documentation
+
+* describe the 1.0 World as it is, without its version history ([#139](https://github.com/evelandhq/workflow-world/issues/139)) ([0de8b12](https://github.com/evelandhq/workflow-world/commit/0de8b126032fe6ab3b22178d83657a5e7a5075c3))
+
 ## [0.31.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.31.0...workflow-world-v0.31.1) (2026-11-06)
 
 
