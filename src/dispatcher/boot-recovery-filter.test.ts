@@ -145,7 +145,7 @@ describe.skipIf(!testUrl)("boot recovery honours the host's run filter", () => {
           runId: "wrun_fabricated",
           workflowName: "greet",
           deploymentId: "dep_live",
-          queueNamespace: null,
+          queueNamespace: "",
         },
       ],
     });

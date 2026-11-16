@@ -17,7 +17,6 @@ import {
   customType,
   index,
   integer,
-  /** @deprecated: use Cbor instead */
   jsonb,
   pgSchema,
   primaryKey,
@@ -31,7 +30,7 @@ import type { RunRetentionClass } from "../run-retention-policy.js";
 
 export const schema = pgSchema("workflow");
 
-/** The index a second claim of one hook token violates (migration 0022). */
+/** The index a second claim of one hook token violates. */
 export const HOOK_TOKEN_CLAIM_UNIQUE = "workflow_hooks_token_claim_unique";
 
 function mustBeMoreThanOne<T>(t: T[]) {
@@ -84,8 +83,6 @@ export const runs = schema.table(
   {
     tenantId: varchar("tenant_id").notNull(),
     runId: varchar("id").notNull(),
-    /** @deprecated */
-    outputJson: jsonb("output").$type<SerializedContent>(),
     output: Cbor<SerializedContent>()("output_cbor"),
     deploymentId: varchar("deployment_id").notNull(),
     status: workflowRunStatus("status").notNull(),
@@ -97,25 +94,20 @@ export const runs = schema.table(
      * boot sweep reads it to rebuild the topic the executor actually registered;
      * it runs on the host, so its own environment is the wrong authority and the
      * run row is the only place the value survives once the original job is gone.
-     *
-     * `''` means the creating deployment had no namespace, which is a different
-     * claim from NULL — NULL is "written by code that did not record it", either
-     * a row predating the column or one from an older deployment still running
-     * mid-upgrade. See `migrations/0004_run_queue_namespace.sql`.
+     * `''` means the creating deployment had no namespace.
      */
-    queueNamespace: varchar("queue_namespace"),
+    queueNamespace: varchar("queue_namespace").notNull().default(""),
     specVersion: integer("spec_version"),
-    /** @deprecated */
-    executionContextJson: jsonb("execution_context").$type<Record<string, unknown>>(),
     executionContext: Cbor<Record<string, unknown>>()("execution_context_cbor"),
     encryptionPublicKey: varchar("encryption_public_key"),
-    /** @deprecated */
-    inputJson: jsonb("input").$type<SerializedContent>(),
     input: Cbor<SerializedContent>()("input_cbor"),
-    /** @deprecated - use error instead (legacy JSON-stringified StructuredError) */
-    errorJson: text("error"),
     error: Cbor<SerializedData>()("error_cbor"),
     errorCode: varchar("error_code"),
+    /**
+     * Why the host settled the run (`reconcileWorkflowRuns`), for an operator
+     * reading the row. NULL for a run the runtime finished itself.
+     */
+    reconciledReason: text("reconciled_reason"),
     attributes: jsonb("attributes").$type<Record<string, string>>().default({}).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
@@ -177,15 +169,11 @@ export const events = schema.table(
     correlationId: varchar("correlation_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     runId: varchar("run_id").notNull(),
-    /** @deprecated */
-    eventDataJson: jsonb("payload"),
     eventData: Cbor<unknown>()("payload_cbor"),
     specVersion: integer("spec_version"),
   },
   (tb) => [
-    // Slot ids are only unique within a run: every new run starts at
-    // `evnt_…0001`. Pre-slot runs keep their globally unique ULIDs, which the
-    // wider key also admits.
+    // Slot ids are only unique within a run: every run starts at `evnt_…0001`.
     primaryKey({ columns: [tb.tenantId, tb.runId, tb.eventId] }),
     index("workflow_events_tenant_correlation_index").on(tb.tenantId, tb.correlationId),
     /**
@@ -205,10 +193,10 @@ export const events = schema.table(
 );
 
 /**
- * Which runs use v6 slot-numbered event ids. This is deliberately a marker,
- * not a counter: the event INSERT itself claims the next position, so a
- * rolled-back or deduplicated write cannot burn a slot and leave a permanent
- * hole. No row means the run predates slots and must keep minting `wevt_` ULIDs.
+ * One row per run, written with it. Deliberately not a position counter: the
+ * event INSERT itself claims the next slot, so a rolled-back or deduplicated
+ * write cannot burn a slot and leave a permanent hole. What it does count is
+ * the in-band writer fence's accepted positions.
  */
 export const eventSlots = schema.table(
   "workflow_event_slots",
@@ -232,14 +220,8 @@ export const steps = schema.table(
     stepId: varchar("step_id").notNull(),
     stepName: varchar("step_name").notNull(),
     status: stepStatus("status").notNull(),
-    /** @deprecated */
-    inputJson: jsonb("input").$type<SerializedContent>(),
     input: Cbor<SerializedContent>()("input_cbor"),
-    /** @deprecated we stream binary data */
-    outputJson: jsonb("output").$type<SerializedContent>(),
     output: Cbor<SerializedContent>()("output_cbor"),
-    /** @deprecated - use error instead (legacy JSON-stringified StructuredError) */
-    errorJson: text("error"),
     error: Cbor<SerializedData>()("error_cbor"),
     attempt: integer("attempt").notNull(),
     startedAt: timestamp("started_at"),
@@ -279,12 +261,9 @@ export const hooks = schema.table(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     /**
      * Keeps the token reserved past the owning run's end. NULL means no
-     * retention, which is what every row had before the column existed and what
-     * the consuming predicates read as "delete with the run".
+     * retention, which the consuming predicates read as "delete with the run".
      */
     tokenRetentionUntil: timestamp("token_retention_until", { withTimezone: true }),
-    /** @deprecated */
-    metadataJson: jsonb("metadata").$type<SerializedContent>(),
     metadata: Cbor<SerializedContent>()("metadata_cbor"),
     specVersion: integer("spec_version"),
     isWebhook: boolean("is_webhook").default(true),
@@ -301,9 +280,7 @@ export const hooks = schema.table(
      * This row's claim on `token` is unique within the tenant: at most one row
      * per token has it (`workflow_hooks_token_claim_unique`), so two start Hook
      * admissions racing for a token, or an admission and another run's
-     * `createHook`, conflict on the insert instead of both winning. Every Hook
-     * written since migration 0022 sets it; rows written before it do not, so
-     * the index cannot fail on existing data.
+     * `createHook`, conflict on the insert instead of both winning.
      */
     claimsToken: boolean("claims_token").notNull().default(false),
   },
@@ -312,10 +289,9 @@ export const hooks = schema.table(
     index("workflow_hooks_tenant_run_index").on(tb.tenantId, tb.runId),
     // Expression index: a plain btree on the token column rejects entries over
     // 2704 bytes, and hook tokens carry model-issued tool-call ids of unbounded
-    // length. Lookups must filter on `md5(token)` to use it (migration 0018).
+    // length. Lookups must filter on `md5(token)` to use it.
     index("workflow_hooks_tenant_token_md5_index").on(tb.tenantId, sql`md5(${tb.token})`),
-    // A digest for the same reason; sha256 because this one decides ownership
-    // (migration 0022).
+    // A digest for the same reason; sha256 because this one decides ownership.
     uniqueIndex(HOOK_TOKEN_CLAIM_UNIQUE)
       .on(tb.tenantId, sql`workflow.hook_token_digest(${tb.token})`)
       .where(sql`${tb.claimsToken}`),
@@ -381,11 +357,11 @@ export const streams = schema.table(
     chunkData: bytea("data").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     eof: boolean("eof").notNull(),
-    /** NULL on legacy one-row-per-chunk rows. */
+    /** NULL on a one-row-per-chunk row; 2 on a packed block. */
     codecVersion: integer("codec_version"),
     /** Number of logical chunks stored in this physical row. */
     chunkCount: integer("chunk_count"),
-    /** Logical id at the end of a packed block; NULL on legacy rows. */
+    /** Logical id at the end of a packed block; NULL on a one-row-per-chunk row. */
     lastChunkId: varchar("last_chunk_id").$type<`chnk_${string}`>(),
   },
   (tb) => [
@@ -394,38 +370,6 @@ export const streams = schema.table(
     index("workflow_stream_chunks_pending_pack_index")
       .on(tb.tenantId, tb.runId, tb.streamId, tb.chunkId)
       .where(sql`${tb.eof} = true and ${tb.codecVersion} is distinct from 2`),
-  ],
-);
-
-/**
- * Accumulator state the removed read-side rehydrator used to persist; kept only
- * so existing rows can still be typed and reclaimed by retention.
- */
-type LegacyStreamRehydrationCheckpoint = {
-  version: 1;
-  accumulators: [key: string, value: string][];
-};
-
-/**
- * Retained but no longer written. Read-side snapshot rehydration left with the
- * last v24 Eve line; retention still reclaims old rows here, and the table is
- * kept until a later migration drops it.
- */
-export const streamCheckpoints = schema.table(
-  "workflow_stream_checkpoints",
-  {
-    tenantId: varchar("tenant_id").notNull(),
-    streamId: varchar("stream_id").notNull(),
-    runId: varchar("run_id"),
-    chunkId: varchar("chunk_id").$type<`chnk_${string}`>().notNull(),
-    /** Logical index immediately after `chunkId`. */
-    nextIndex: integer("next_index").notNull(),
-    state: jsonb("state").$type<LegacyStreamRehydrationCheckpoint>().notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (tb) => [
-    primaryKey({ columns: [tb.tenantId, tb.streamId, tb.chunkId] }),
-    index("workflow_stream_checkpoints_tenant_run_index").on(tb.tenantId, tb.runId),
   ],
 );
 

@@ -1,5 +1,4 @@
 import type { CreateEventRequest, Step, Storage, WorkflowRun } from "@workflow/world";
-import { encode } from "cbor-x";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "./drizzle/index.js";
@@ -9,7 +8,7 @@ import {
   resolveMigrationsDir,
   runMigrations,
 } from "./migrate.js";
-import { createEventsStorage, createRunsStorage, createStepsStorage } from "./storage.js";
+import { createEventsStorage } from "./storage.js";
 
 /**
  * Lifecycle coverage ported from `@workflow/world-postgres`'s
@@ -105,8 +104,6 @@ async function updateStep(
 
 describe.skipIf(!testUrl)("storage lifecycle (Postgres)", () => {
   let pool: Pool;
-  let runs: Storage["runs"];
-  let steps: Storage["steps"];
   let events: Storage["events"];
 
   /**
@@ -136,8 +133,6 @@ describe.skipIf(!testUrl)("storage lifecycle (Postgres)", () => {
     await ensureTenantPartitions(pool, TENANT);
 
     const drizzle = createClient(pool);
-    runs = createRunsStorage(drizzle, TENANT);
-    steps = createStepsStorage(drizzle, TENANT);
     events = createEventsStorage(drizzle, TENANT);
   }, 60_000);
 
@@ -415,8 +410,8 @@ describe.skipIf(!testUrl)("storage lifecycle (Postgres)", () => {
         const runId = "wrun_future";
         // Create a run with a future spec version (higher than current)
         await pool.query(
-          `INSERT INTO workflow.workflow_runs (tenant_id, id, deployment_id, name, spec_version, status, input, created_at, updated_at)
-          VALUES ($1, $2, 'future-deployment', 'future-workflow', 999, 'running', '[]'::jsonb, NOW(), NOW())`,
+          `INSERT INTO workflow.workflow_runs (tenant_id, id, deployment_id, name, spec_version, status, created_at, updated_at)
+          VALUES ($1, $2, 'future-deployment', 'future-workflow', 999, 'running', NOW(), NOW())`,
           [TENANT, runId],
         );
 
@@ -442,46 +437,6 @@ describe.skipIf(!testUrl)("storage lifecycle (Postgres)", () => {
 
         expect(result.run?.status).toBe("running");
         expect(result.event?.eventType).toBe("run_started");
-      });
-    });
-
-    describe("legacy error column handling", () => {
-      // In the current event-sourced model, the `error` field on runs/steps
-      // is SerializedData (Uint8Array) produced by dehydrate*Error, stored in
-      // the `error_cbor` column. Legacy records written pre-serialization-
-      // pipeline (to the `error` text column) cannot be hydrated into the
-      // original thrown value and are surfaced as `undefined` on read.
-      it("should surface legacy errorJson field on runs as undefined", async () => {
-        const runId = "wrun_legacy_error";
-        const inputCbor = encode(new Uint8Array());
-        await pool.query(
-          `INSERT INTO workflow.workflow_runs (tenant_id, id, deployment_id, name, spec_version, status, input_cbor, error, created_at, updated_at, completed_at)
-          VALUES ($1, $2, 'deployment', 'workflow', 2, 'failed', $3, $4, NOW(), NOW(), NOW())`,
-          [TENANT, runId, inputCbor, '{"message":"Legacy error","stack":"at foo()"}'],
-        );
-
-        const run = await runs.get(runId);
-        expect(run.status).toBe("failed");
-        expect(run.error).toBeUndefined();
-      });
-
-      it("should surface legacy errorJson on steps as undefined", async () => {
-        const run = await createRun(events, {
-          deploymentId: "deployment",
-          workflowName: "workflow",
-          input: new Uint8Array(),
-        });
-
-        const inputCbor = encode(new Uint8Array());
-        await pool.query(
-          `INSERT INTO workflow.workflow_steps (tenant_id, run_id, step_id, step_name, status, input_cbor, error, attempt, created_at, updated_at, completed_at)
-          VALUES ($1, $2, 'step_legacy_err', 'test-step', 'failed', $3, $4, 1, NOW(), NOW(), NOW())`,
-          [TENANT, run.runId, inputCbor, '{"message":"Step error","stack":"at bar()"}'],
-        );
-
-        const step = await steps.get(run.runId, "step_legacy_err");
-        expect(step.status).toBe("failed");
-        expect(step.error).toBeUndefined();
       });
     });
   });

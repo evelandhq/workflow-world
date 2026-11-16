@@ -35,7 +35,7 @@ describe.skipIf(!testUrl)("deadline-driven retention", () => {
     await pool?.end().catch(() => {});
   });
 
-  test("scheduled expiry deletes data and checkpoints while preserving EOF", async () => {
+  test("scheduled expiry deletes stream data while preserving EOF", async () => {
     await insertRun("old", "scheduled", "completed", "20 minutes");
     await insertRun("recent", "scheduled", "completed", "5 minutes");
     await insertRun("persistent", "persistent", "completed", "2 days");
@@ -43,7 +43,6 @@ describe.skipIf(!testUrl)("deadline-driven retention", () => {
     for (const runId of ["old", "recent", "persistent", "active"]) {
       await insertChunk(runId, false);
       await insertChunk(runId, true);
-      await insertCheckpoint(runId);
     }
 
     await expect(
@@ -56,10 +55,8 @@ describe.skipIf(!testUrl)("deadline-driven retention", () => {
     });
 
     expect(await chunkKinds("old")).toEqual([true]);
-    expect(await checkpointCount("old")).toBe(0);
     for (const runId of ["recent", "persistent", "active"]) {
       expect(await chunkKinds(runId)).toEqual([false, true]);
-      expect(await checkpointCount(runId)).toBe(1);
     }
   });
 
@@ -76,7 +73,6 @@ describe.skipIf(!testUrl)("deadline-driven retention", () => {
     ).resolves.toMatchObject({ deletedRuns: 0 });
 
     expect(await chunkKinds("active-root")).toEqual([false, true]);
-    expect(await checkpointCount("active-root")).toBe(1);
     expect(await runCount("active-root")).toBe(1);
   });
 
@@ -151,7 +147,6 @@ describe.skipIf(!testUrl)("deadline-driven retention", () => {
     );
 
     for (const table of [
-      "workflow_stream_checkpoints",
       "workflow_events",
       "workflow_event_slots",
       "workflow_steps",
@@ -235,19 +230,9 @@ describe.skipIf(!testUrl)("deadline-driven retention", () => {
     );
   }
 
-  async function insertCheckpoint(runId: string) {
-    await pool.query(
-      `insert into workflow.workflow_stream_checkpoints
-         (tenant_id, stream_id, run_id, chunk_id, next_index, state)
-       values ($1, $2, $3, $4, 1, '{"version":1,"accumulators":[]}'::jsonb)`,
-      [TENANT, `stream_${runId}`, runId, `chnk_${runId}_data`],
-    );
-  }
-
   async function insertGraph(runId: string) {
     await insertChunk(runId, false);
     await insertChunk(runId, true);
-    await insertCheckpoint(runId);
     await Promise.all([
       pool.query("insert into workflow.workflow_event_slots (tenant_id, run_id) values ($1, $2)", [
         TENANT,
@@ -288,10 +273,6 @@ describe.skipIf(!testUrl)("deadline-driven retention", () => {
     return rows.map((row) => row.eof);
   }
 
-  async function checkpointCount(runId: string) {
-    return graphRowCount("workflow_stream_checkpoints", runId);
-  }
-
   async function graphRowCount(table: string, runId: string): Promise<number> {
     const result = await pool.query(
       `select 1 from workflow.${table} where tenant_id = $1 and run_id = $2`,
@@ -310,7 +291,6 @@ describe.skipIf(!testUrl)("deadline-driven retention", () => {
 
   async function clearTenant() {
     for (const table of [
-      "workflow_stream_checkpoints",
       "workflow_stream_chunks",
       "workflow_events",
       "workflow_event_slots",

@@ -27,7 +27,6 @@ describe.skipIf(!testUrl)("run retention deadlines", () => {
 
   afterAll(async () => {
     for (const table of [
-      "workflow_stream_checkpoints",
       "workflow_event_slots",
       "workflow_events",
       "workflow_steps",

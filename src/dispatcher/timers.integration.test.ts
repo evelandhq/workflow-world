@@ -269,7 +269,7 @@ describe.skipIf(!testUrl)("delayed deliveries leave their run queue", () => {
     await admin.query(
       `insert into workflow.workflow_runs
          (tenant_id, id, deployment_id, status, name, spec_version, queue_namespace)
-       values ($1, $2, $3, 'running', 'sleeper', 7, null)`,
+       values ($1, $2, $3, 'running', 'sleeper', 9, '')`,
       [TENANT, runId, DEPLOYMENT],
     );
     await enqueueLikeTheWorld(runId, {

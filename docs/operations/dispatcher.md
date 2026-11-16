@@ -229,14 +229,3 @@ active and is offered again on the next boot.
 `WORKFLOW_QUEUE_NAMESPACE` is eve's, read by eve's own resolver on the deployment
 side only. Do not set it on the host: the dispatcher must take the namespace from
 the run it is recovering, never from its own environment.
-
-## Upgrading from 0.3.0 or earlier
-
-Runs created before this version have no recorded queue namespace, and boot
-recovery can only fall back to the default `__wkf_workflow_` prefix for them. For
-a namespaced deployment that fallback is refused with `400 Unhandled queue`, so
-**drain or cancel active runs before cutting over**. The dispatcher logs every
-run it recovers without a recorded namespace, and a
-`runsWithUnknownQueueNamespace` count alongside the boot-recovery summary, so an
-incomplete drain is visible rather than silent. See
-[Upgrading past 0.3.0](../design.md#upgrading-past-030).

@@ -15,14 +15,6 @@ describe("stream storage v2 schema", () => {
     ).toContain("workflow_stream_chunks_pending_pack_index");
   });
 
-  test("the retired checkpoint table stays declared until a migration drops it", () => {
-    expect(Schema.streamCheckpoints.tenantId.name).toBe("tenant_id");
-    expect(Schema.streamCheckpoints.streamId.name).toBe("stream_id");
-    expect(Schema.streamCheckpoints.chunkId.name).toBe("chunk_id");
-    expect(Schema.streamCheckpoints.nextIndex.name).toBe("next_index");
-    expect(Schema.streamCheckpoints.state.name).toBe("state");
-  });
-
   test("runs carry explicit maintenance deadlines", () => {
     expect(Schema.runs.retentionClass.name).toBe("retention_class");
     expect(Schema.runs.retentionRootRunId.name).toBe("retention_root_run_id");

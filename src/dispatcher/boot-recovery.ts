@@ -63,11 +63,8 @@ export type BootRecoveryRun = {
   runId: string;
   workflowName: string;
   deploymentId: string;
-  /**
-   * As recorded at run creation; `null` for rows written by code that predates
-   * the column. See the namespace commentary in the sweep below.
-   */
-  queueNamespace: string | null;
+  /** As recorded at run creation; `''` when the deployment had no namespace. */
+  queueNamespace: string;
 };
 
 /**
@@ -129,7 +126,7 @@ async function recoverActiveRunsForAllTenants(
     id: string;
     name: string;
     deployment_id: string;
-    queue_namespace: string | null;
+    queue_namespace: string;
     locked_by: string | null;
     has_live_job: boolean;
     has_hook: boolean;
@@ -302,27 +299,12 @@ async function recoverActiveRunsForAllTenants(
   }
 
   let enqueued = 0;
-  let unknownNamespace = 0;
   for (const row of candidates) {
     // The namespace the run's own deployment resolved, recorded when the run was
     // created. It cannot be resolved here: this process runs on the host, so
     // `WORKFLOW_QUEUE_NAMESPACE` would be the host's value rather than the
     // tenant's, and it cannot be derived from the run either — it is eve's, not
     // ours, and reimplementing how eve mints it would fork the algorithm.
-    //
-    // NULL is not "no namespace". It is a row written by code that did not
-    // record one — from before the column, or from an older deployment still
-    // running mid-upgrade. The default prefix is the only available fallback and
-    // it is right for an un-namespaced deployment, but for a namespaced one the
-    // dispatch will be refused, so it is reported rather than assumed.
-    if (row.queue_namespace === null) {
-      unknownNamespace += 1;
-      input.log?.("recovering a run whose queue namespace was never recorded", {
-        runId: row.id,
-        tenantId: row.tenant_id,
-        deploymentId: row.deployment_id,
-      });
-    }
     const messageId = `msg_recover_${row.id}`;
     const message: MessageData = {
       // The BARE sub-queue id, exactly as the World's own enqueue path stores it.
@@ -367,12 +349,7 @@ async function recoverActiveRunsForAllTenants(
   }
 
   if (enqueued > 0) {
-    input.log?.("re-enqueued active runs on boot", {
-      runs: enqueued,
-      // Surfaced as a count too, so an upgrade that stranded namespaced runs is
-      // visible in one line rather than only in the per-run entries above.
-      ...(unknownNamespace > 0 ? { runsWithUnknownQueueNamespace: unknownNamespace } : {}),
-    });
+    input.log?.("re-enqueued active runs on boot", { runs: enqueued });
   }
   return enqueued;
 }

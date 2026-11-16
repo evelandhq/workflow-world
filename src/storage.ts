@@ -119,7 +119,7 @@ import { compact } from "./util.js";
 
 /**
  * Every by-token lookup goes through this predicate so it can use the
- * `(tenant_id, md5(token))` expression index from migration 0018. A plain btree
+ * `(tenant_id, md5(token))` expression index. A plain btree
  * on the token column refused rows whose entry exceeded 2704 bytes, and a hook
  * token embeds a model-issued tool-call id that some providers pad with a
  * multi-kilobyte reasoning signature (eveland#521). The exact comparison stays
@@ -159,10 +159,7 @@ async function forceClaimRefusal(
   eventData: unknown,
 ): Promise<HookForceClaimedError | undefined> {
   const [disposal] = await db
-    .select({
-      eventData: Schema.events.eventData,
-      eventDataJson: Schema.events.eventDataJson,
-    })
+    .select({ eventData: Schema.events.eventData })
     .from(Schema.events)
     .where(
       and(
@@ -173,7 +170,7 @@ async function forceClaimRefusal(
       ),
     )
     .limit(1);
-  const disposalData = (disposal?.eventData ?? disposal?.eventDataJson) as
+  const disposalData = disposal?.eventData as
     | { token?: unknown; forceClaimedBy?: { runId?: unknown; hookId?: unknown } }
     | undefined;
   const claimedBy = disposalData?.forceClaimedBy;
@@ -203,18 +200,6 @@ async function forceClaimRefusal(
 }
 
 /**
- * Read helper for the deprecated `error` text column (legacy: JSON-stringified
- * `StructuredError`). In the current event-sourced model, the `error` field on
- * entities is `SerializedData` (Uint8Array) produced by the new error
- * serialization pipeline; legacy text-column records pre-date that pipeline
- * and cannot be hydrated back into the original thrown value.
- *
- * Returns `null` unconditionally so downstream consumers treat legacy errors
- * as absent rather than receiving a shape that `hydrateStepError` /
- * `hydrateRunError` can't process. Callers that need to inspect the raw
- * legacy payload should read the `errorJson` column directly.
- */
-/**
  * Per-run event ceiling, reported on every `events.create` response that carries
  * a run. The runtime enforces it — `EventResult.maxEvents` is documented as
  * "server-owned max event count for the run (run-lifecycle responses); the
@@ -226,9 +211,6 @@ async function forceClaimRefusal(
  * `getMaxEventsPerRun`, including the 25,000 default, so the two agree.
  */
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** Only used for runs created before v6 slot identity was enabled. */
-const legacyEventUlid = monotonicFactory();
 
 /** Maximum slot collisions one insert retries before surfacing a 503. */
 const SLOT_INSERT_MAX_ATTEMPTS = 40;
@@ -250,7 +232,7 @@ function pgErrorOf(error: unknown): { code?: string; constraint?: string } {
 }
 
 /**
- * Whether `error` is a second claim of a hook token (migration 0022): another
+ * Whether `error` is a second claim of a hook token: another
  * Hook or a start Hook admission committed its claim first.
  */
 function isHookTokenClaimViolation(error: unknown): boolean {
@@ -260,7 +242,6 @@ function isHookTokenClaimViolation(error: unknown): boolean {
 
 type EventInsert = typeof Schema.events.$inferInsert;
 type EventInsertDb = Pick<Drizzle, "insert">;
-type EventAllocateDb = Pick<Drizzle, "insert" | "select">;
 type EventFenceDb = Pick<Drizzle, "update" | "select">;
 
 /**
@@ -280,18 +261,9 @@ function nextSlotId(tenantId: string, runId: string): SQL<string> {
   ), ${noEvents}) + 1)::text, ${width}, '0')`;
 }
 
-/** A slot expression for v6 runs, or a fresh legacy ULID for pre-v6 runs. */
-async function allocateEventId(
-  db: EventAllocateDb,
-  tenantId: string,
-  runId: string,
-): Promise<string | SQL<string>> {
-  const [marker] = await db
-    .select({ runId: Schema.eventSlots.runId })
-    .from(Schema.eventSlots)
-    .where(and(eq(Schema.eventSlots.tenantId, tenantId), eq(Schema.eventSlots.runId, runId)))
-    .limit(1);
-  return marker ? nextSlotId(tenantId, runId) : `wevt_${legacyEventUlid()}`;
+/** The id of the next event written to a run: its next slot. */
+function allocateEventId(tenantId: string, runId: string): SQL<string> {
+  return nextSlotId(tenantId, runId);
 }
 
 /*
@@ -356,8 +328,7 @@ async function advanceFence(db: EventFenceDb, fence: PendingFence): Promise<void
       and(eq(Schema.eventSlots.tenantId, fence.tenantId), eq(Schema.eventSlots.runId, fence.runId)),
     )
     .limit(1);
-  // No slots row: a run that predates slot-numbered ids, which the fence does
-  // not cover (its inserts allocate no slot, so this is not reached for it).
+  // No slots row: no run, so nothing to fence.
   if (!current) return;
   throw new InBandSupersededError(
     supersededMessage(fence.runId, fence.expected, current.seqInBand),
@@ -424,7 +395,7 @@ async function insertEventRow(
   }
 }
 
-/** Marks a new run as slot-numbered and reserves its canonical first id. */
+/** Opens a new run's slots row (its in-band count) and returns its first event id. */
 async function openEventSlots(db: EventInsertDb, tenantId: string, runId: string): Promise<string> {
   await db.insert(Schema.eventSlots).values({ tenantId, runId }).onConflictDoNothing();
   return slotToEventId(FIRST_EVENT_SLOT);
@@ -457,8 +428,6 @@ async function insertRunWithCreatedEvent(
     if (admit && !(await admit(tx))) return undefined;
     const [run] = await tx.insert(Schema.runs).values(runValues).onConflictDoNothing().returning();
     if (!run) return undefined;
-    // The marker pins this run to v6 slot identity. Its absence remains the
-    // durable signal that an older run must keep using ULIDs.
     const eventId = await openEventSlots(tx, run.tenantId, run.runId);
     const [created] = await tx
       .insert(Schema.events)
@@ -501,7 +470,6 @@ async function reportSkippedSlots(
     )
     .orderBy(Schema.events.eventId);
   const skipped = rows.map((row) => {
-    row.eventData ||= row.eventDataJson;
     return stripEventDataRefs(EventSchema.parse(compact(row)), resolveData);
   });
   return {
@@ -536,26 +504,12 @@ function getMaxEventsPerRun(): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_EVENTS_PER_RUN;
 }
 
-function parseErrorJson(_errorJson: string | null): SerializedData | null {
-  return null;
-}
-
-/**
- * Pass-through helper kept for backwards compatibility with the run read path.
- * In the current event-sourced model, `error` is already `SerializedData`
- * (Uint8Array) on the entity, and any legacy `errorStack` / `errorCode`
- * fields are no longer populated by the current write path.
- */
+/** A run row as the runtime's run: `error` is already CBOR-decoded `SerializedData`. */
 function deserializeRunError(run: any): WorkflowRun {
-  // Drop any stale legacy-only fields we might still encounter on read.
-  const { errorStack: _errorStack, ...rest } = run;
-  return rest as WorkflowRun;
+  return run as WorkflowRun;
 }
 
-/**
- * Deserialize step data, mapping DB columns to interface fields.
- * The error field should already be deserialized from CBOR or fallback to errorJson.
- */
+/** A step row as the runtime's step: `error` is already CBOR-decoded `SerializedData`. */
 function deserializeStepError(step: any): Step {
   const { startedAt, ...rest } = step;
 
@@ -620,10 +574,6 @@ export function createRunsStorage(drizzle: Drizzle, tenantId: string): Storage["
       if (!value) {
         throw new WorkflowRunNotFoundError(id);
       }
-      value.output ||= value.outputJson;
-      value.input ||= value.inputJson;
-      value.executionContext ||= value.executionContextJson;
-      value.error ||= parseErrorJson(value.errorJson);
       const deserialized = deserializeRunError(compact(value));
       const parsed = WorkflowRunSchema.parse(deserialized);
       const resolveData = params?.resolveData ?? "all";
@@ -651,10 +601,6 @@ export function createRunsStorage(drizzle: Drizzle, tenantId: string): Storage["
       const resolveData = params?.resolveData ?? "all";
       const runsById = new Map(
         values.map((value) => {
-          value.output ||= value.outputJson;
-          value.input ||= value.inputJson;
-          value.executionContext ||= value.executionContextJson;
-          value.error ||= parseErrorJson(value.errorJson);
           const parsed = WorkflowRunSchema.parse(deserializeRunError(compact(value)));
           return [value.runId, filterRunData(parsed, resolveData)] as const;
         }),
@@ -689,10 +635,6 @@ export function createRunsStorage(drizzle: Drizzle, tenantId: string): Storage["
       const resolveData = params?.resolveData ?? "all";
       return {
         data: values.map((v) => {
-          v.output ||= v.outputJson;
-          v.input ||= v.inputJson;
-          v.executionContext ||= v.executionContextJson;
-          v.error ||= parseErrorJson(v.errorJson);
           const deserialized = deserializeRunError(compact(v));
           const parsed = WorkflowRunSchema.parse(deserialized);
           return filterRunData(parsed, resolveData);
@@ -853,9 +795,8 @@ export function createEventsStorage(
           .where(and(eq(Schema.eventSlots.tenantId, tenantId), eq(Schema.eventSlots.runId, runId)))
           .for("update")
           .limit(1);
-        // No slots row: a run that predates slot-numbered ids (which the fence
-        // does not cover), or a resilient `run_started` whose run this
-        // transaction creates (whose advance checks `expected` itself).
+        // No slots row: a resilient `run_started` whose run this transaction
+        // creates (whose advance checks `expected` itself).
         if (row && row.seqInBand !== expected) {
           throw new InBandSupersededError(supersededMessage(runId, expected, row.seqInBand), {
             seqInBand: row.seqInBand,
@@ -902,8 +843,8 @@ type Unfenced = {
 };
 
 /**
- * The fence snapshot of a slot-numbered run, or `undefined` for one that
- * predates slots (no `workflow_event_slots` row).
+ * The fence snapshot of a run, or `undefined` when it has no
+ * `workflow_event_slots` row (the run does not exist).
  */
 async function readEventLogSnapshot(
   drizzle: Drizzle,
@@ -1097,12 +1038,12 @@ function createUnfencedEventsStorage(
       if (startHook) assertStartHookAdmissible(startHook, hookRetentionLimitMs);
 
       // A slot-numbered id is chosen by the INSERT that commits it, so callers
-      // await this immediately before writing. Legacy runs receive a ULID.
+      // take this immediately before writing.
       let eventId: string | undefined;
       // Set only by run_created, whose event commits together with its run row.
       let runCreatedAt: Date | undefined;
-      const getEventId = async (db: EventAllocateDb = drizzle) =>
-        eventId ?? (await allocateEventId(db, tenantId, effectiveRunId));
+      const getEventId = (): string | SQL<string> =>
+        eventId ?? allocateEventId(tenantId, effectiveRunId);
 
       // For run_created events, use client-provided runId or generate one server-side
       let effectiveRunId: string;
@@ -1332,7 +1273,7 @@ function createUnfencedEventsStorage(
           const value = await insertEventRow(drizzle, {
             tenantId,
             runId: effectiveRunId,
-            eventId: await getEventId(),
+            eventId: getEventId(),
             correlationId: data.correlationId,
             eventType: data.eventType,
             eventData: "eventData" in data ? data.eventData : undefined,
@@ -2024,7 +1965,7 @@ function createUnfencedEventsStorage(
                 await insertEventRow(tx, {
                   tenantId,
                   runId: effectiveRunId,
-                  eventId: await allocateEventId(tx, tenantId, effectiveRunId),
+                  eventId: allocateEventId(tenantId, effectiveRunId),
                   correlationId: data.correlationId,
                   eventType: "step_created",
                   eventData: {
@@ -2154,7 +2095,7 @@ function createUnfencedEventsStorage(
           const eventValue = await insertEventRow(tx, {
             tenantId,
             runId: effectiveRunId,
-            eventId: await allocateEventId(tx, tenantId, effectiveRunId),
+            eventId: allocateEventId(tenantId, effectiveRunId),
             correlationId: data.correlationId,
             eventType: data.eventType,
             eventData: storedEventData,
@@ -2406,7 +2347,7 @@ function createUnfencedEventsStorage(
               const eventValue = await insertEventRow(tx, {
                 tenantId,
                 runId: effectiveRunId,
-                eventId: await getEventId(tx),
+                eventId: getEventId(),
                 correlationId: hookId,
                 eventType: "hook_created",
                 eventData: storedEventData,
@@ -2425,7 +2366,6 @@ function createUnfencedEventsStorage(
           });
           if (!created) return false;
           if (created.hookValue) {
-            created.hookValue.metadata ||= created.hookValue.metadataJson;
             hook = HookSchema.parse(compact(created.hookValue));
           }
           eventId = created.eventValue.eventId;
@@ -2492,7 +2432,6 @@ function createUnfencedEventsStorage(
               .where(and(eq(Schema.hooks.tenantId, tenantId), eq(Schema.hooks.hookId, hookId)))
               .limit(1);
             if (recoveredHookValue) {
-              recoveredHookValue.metadata ||= recoveredHookValue.metadataJson;
               hook = HookSchema.parse(compact(recoveredHookValue));
             }
           } else if (eventData.force !== true) {
@@ -2619,7 +2558,7 @@ function createUnfencedEventsStorage(
                   const disposed = await insertEventRow(tx, {
                     tenantId,
                     runId: victim.runId,
-                    eventId: await allocateEventId(tx, tenantId, victim.runId),
+                    eventId: allocateEventId(tenantId, victim.runId),
                     correlationId: victim.hookId,
                     eventType: "hook_disposed",
                     eventData: {
@@ -2659,7 +2598,7 @@ function createUnfencedEventsStorage(
                 const journaled = await insertEventRow(tx, {
                   tenantId,
                   runId: effectiveRunId,
-                  eventId: await getEventId(tx),
+                  eventId: getEventId(),
                   correlationId: hookId,
                   eventType: "hook_created",
                   eventData: journaledEventData,
@@ -2706,7 +2645,6 @@ function createUnfencedEventsStorage(
                 break;
               case "taken":
                 if (takeover.inserted) {
-                  takeover.inserted.metadata ||= takeover.inserted.metadataJson;
                   hook = HookSchema.parse(compact(takeover.inserted));
                 }
                 storedEventData = takeover.journaledEventData;
@@ -2732,7 +2670,7 @@ function createUnfencedEventsStorage(
           const conflictValue = await insertEventRow(drizzle, {
             tenantId,
             runId: effectiveRunId,
-            eventId: await getEventId(),
+            eventId: getEventId(),
             correlationId: hookId,
             eventType: "hook_conflict",
             eventData: conflictEventData,
@@ -2798,7 +2736,7 @@ function createUnfencedEventsStorage(
           const eventValue = await insertEventRow(tx, {
             tenantId,
             runId: effectiveRunId,
-            eventId: await getEventId(tx),
+            eventId: getEventId(),
             correlationId: disposedHookId,
             eventType: data.eventType,
             eventData: storedEventData,
@@ -2959,7 +2897,7 @@ function createUnfencedEventsStorage(
           const eventValue = await insertEventRow(tx, {
             tenantId,
             runId: effectiveRunId,
-            eventId: await allocateEventId(tx, tenantId, effectiveRunId),
+            eventId: allocateEventId(tenantId, effectiveRunId),
             correlationId: data.correlationId,
             eventType: data.eventType,
             eventData: storedEventData,
@@ -2980,7 +2918,7 @@ function createUnfencedEventsStorage(
           const inserted = await insertEventRow(drizzle, {
             tenantId,
             runId: effectiveRunId,
-            eventId: await getEventId(),
+            eventId: getEventId(),
             correlationId: data.correlationId,
             eventType: data.eventType,
             eventData: storedEventData,
@@ -3074,7 +3012,6 @@ function createUnfencedEventsStorage(
           .where(and(eq(Schema.events.tenantId, tenantId), eq(Schema.events.runId, effectiveRunId)))
           .orderBy(Schema.events.eventId);
         const allEvents = eventRows.map((e) => {
-          e.eventData ||= e.eventDataJson;
           const parsed = EventSchema.parse(compact(e));
           return stripEventDataRefs(parsed, resolveData);
         });
@@ -3101,7 +3038,6 @@ function createUnfencedEventsStorage(
           .limit(limit + 1);
         const page = deltaRows.slice(0, limit);
         const delta = page.map((row) => {
-          row.eventData ||= row.eventDataJson;
           return stripEventDataRefs(EventSchema.parse(compact(row)), resolveData);
         });
         eventPage = {
@@ -3146,7 +3082,6 @@ function createUnfencedEventsStorage(
         throw new WorkflowWorldError(`Event not found: ${eventId}`);
       }
 
-      value.eventData ||= value.eventDataJson;
       const parsed = EventSchema.parse(compact(value));
       const resolveData = params?.resolveData ?? "all";
       return stripEventDataRefs(parsed, resolveData);
@@ -3176,7 +3111,6 @@ function createUnfencedEventsStorage(
       const resolveData = params?.resolveData ?? "all";
       return {
         data: values.map((v) => {
-          v.eventData ||= v.eventDataJson;
           const parsed = EventSchema.parse(compact(v));
           return stripEventDataRefs(parsed, resolveData);
         }),
@@ -3224,7 +3158,6 @@ function createUnfencedEventsStorage(
       const resolveData = params?.resolveData ?? "all";
       return {
         data: values.map((v) => {
-          v.eventData ||= v.eventDataJson;
           const parsed = EventSchema.parse(compact(v));
           return stripEventDataRefs(parsed, resolveData);
         }),
@@ -3283,7 +3216,6 @@ export function createHooksStorage(drizzle: Drizzle, tenantId: string): Storage[
       if (!value) {
         throw new HookNotFoundError(hookId);
       }
-      value.metadata ||= value.metadataJson;
       const parsed = HookSchema.parse(compact(value));
       parsed.isWebhook ??= true;
       const resolveData = params?.resolveData ?? "all";
@@ -3294,7 +3226,6 @@ export function createHooksStorage(drizzle: Drizzle, tenantId: string): Storage[
       if (!value) {
         throw new HookNotFoundError(token);
       }
-      value.metadata ||= value.metadataJson;
       const parsed = HookSchema.parse(compact(value));
       parsed.isWebhook ??= true;
       const resolveData = params?.resolveData ?? "all";
@@ -3325,7 +3256,6 @@ export function createHooksStorage(drizzle: Drizzle, tenantId: string): Storage[
       const resolveData = params?.resolveData ?? "all";
       return {
         data: values.map((v) => {
-          v.metadata ||= v.metadataJson;
           const parsed = HookSchema.parse(compact(v));
           return filterHookData(parsed, resolveData);
         }),
@@ -3355,9 +3285,6 @@ export function createStepsStorage(drizzle: Drizzle, tenantId: string): Storage[
       if (!value) {
         throw new WorkflowWorldError(`Step not found: ${stepId}`);
       }
-      value.output ||= value.outputJson;
-      value.input ||= value.inputJson;
-      value.error ||= parseErrorJson(value.errorJson);
       const deserialized = deserializeStepError(compact(value));
       const parsed = StepSchema.parse(deserialized);
       const resolveData = params?.resolveData ?? "all";
@@ -3385,9 +3312,6 @@ export function createStepsStorage(drizzle: Drizzle, tenantId: string): Storage[
       const resolveData = params?.resolveData ?? "all";
       return {
         data: values.map((v) => {
-          v.output ||= v.outputJson;
-          v.input ||= v.inputJson;
-          v.error ||= parseErrorJson(v.errorJson);
           const deserialized = deserializeStepError(compact(v));
           const parsed = StepSchema.parse(deserialized);
           return filterStepData(parsed, resolveData);
