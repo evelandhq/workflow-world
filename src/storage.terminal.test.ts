@@ -18,7 +18,7 @@
  * Set `WORKFLOW_WORLD_TEST_URL` to a scratch database to run it.
  */
 import type { Hook, HookCreatedEventRequest, Step, WorkflowRun } from "@workflow/world";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createClient } from "./drizzle/index.js";
@@ -710,31 +710,6 @@ describe.skipIf(!testUrl)("Storage terminal states (Postgres integration)", () =
           eventData: { payload: {} },
         }),
       ).rejects.toMatchObject({ name: "HookNotFoundError" });
-    });
-
-    it("accepts hook_received on a live legacy run", async () => {
-      // Legacy runs (specVersion <= 1) are routed to
-      // handleLegacyEventPostgres, which stores the event without touching
-      // entities. Simulated by downgrading a real run's persisted specVersion,
-      // since nothing here can mint a legacy run any more.
-      const run = await createRun(events, {
-        deploymentId: "deployment-123",
-        workflowName: "legacy-workflow",
-        input: new Uint8Array(),
-      });
-      await drizzle
-        .update(DrizzleSchema.runs)
-        .set({ specVersion: 1 })
-        .where(
-          and(eq(DrizzleSchema.runs.tenantId, TENANT), eq(DrizzleSchema.runs.runId, run.runId)),
-        );
-
-      const result = await events.create(run.runId, {
-        eventType: "hook_received",
-        correlationId: "hook_legacy_live",
-        eventData: { payload: {} },
-      });
-      expect(result.event?.eventType).toBe("hook_received");
     });
   });
 });

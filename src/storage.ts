@@ -63,14 +63,13 @@ import {
   isChildEntityCreationEvent,
   isChildEntityCreationEventType,
   isHookEventRequiringExistence,
-  isLegacySpecVersion,
   isStartHookId,
   isTerminalRunEventType,
   isTerminalStepStatus,
   isTerminalWorkflowRunStatus,
-  mintedSpecVersion,
   requiresNewerWorld,
   SPEC_VERSION_LEGACY,
+  SPEC_VERSION_ENV_VAR,
   SPEC_VERSION_MAX_SUPPORTED,
   SPEC_VERSION_SINGLE_ORCHESTRATOR,
   SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM,
@@ -793,145 +792,20 @@ function map<T, R>(obj: T | null | undefined, fn: (v: T) => R): undefined | R {
 }
 
 /**
- * Handle events for legacy runs (pre-event-sourcing, specVersion < 2).
- * Legacy runs use different behavior:
- * - run_cancelled: Skip event storage, directly update run
- * - wait_completed: Store event only (no entity mutation)
- * - hook_received: Store event only (hooks exist via old system, no entity mutation)
- * - Other events: Throw error (not supported for legacy runs)
- */
-async function handleLegacyEventPostgres(
-  drizzle: Drizzle,
-  tenantId: string,
-  runId: string,
-  eventId: string,
-  data: any,
-  currentRun: { status: string; specVersion: number | null },
-  /** The World's declared version; stamped on the event rows a legacy run still records. */
-  specVersion: number,
-  params?: { resolveData?: EventsResolveData },
-): Promise<EventResult> {
-  // Everything here is an entity or the created event, never an event-log
-  // page, so 'skip-step-inputs' reads as 'all'. Mapped inline rather than via
-  // world's `entityResolveData`, which older @workflow/world lines lack.
-  const resolveData: ResolveData = params?.resolveData === "none" ? "none" : "all";
-
-  switch (data.eventType) {
-    case "run_cancelled": {
-      // Legacy: Skip event storage, directly update run to cancelled
-      const now = new Date();
-
-      // Update run status to cancelled
-      await drizzle
-        .update(Schema.runs)
-        .set({
-          status: "cancelled",
-          completedAt: now,
-          updatedAt: now,
-        })
-        .where(and(eq(Schema.runs.tenantId, tenantId), eq(Schema.runs.runId, runId)));
-
-      // Delete all hooks and waits for this run
-      await Promise.all([
-        drizzle
-          .delete(Schema.hooks)
-          .where(and(eq(Schema.hooks.tenantId, tenantId), eq(Schema.hooks.runId, runId))),
-        drizzle
-          .delete(Schema.waits)
-          .where(and(eq(Schema.waits.tenantId, tenantId), eq(Schema.waits.runId, runId))),
-      ]);
-
-      // Fetch updated run for return value
-      const [updatedRun] = await drizzle
-        .select()
-        .from(Schema.runs)
-        .where(and(eq(Schema.runs.tenantId, tenantId), eq(Schema.runs.runId, runId)))
-        .limit(1);
-
-      // Return without event (legacy behavior skips event storage)
-      // Type assertion: EventResult expects WorkflowRun, filterRunData may return WorkflowRunWithoutData
-      return {
-        run: updatedRun
-          ? (filterRunData(deserializeRunError(compact(updatedRun)), resolveData) as WorkflowRun)
-          : undefined,
-      };
-    }
-
-    case "wait_completed":
-    case "hook_received": {
-      // Legacy: Store event only (no entity mutation)
-      // - wait_completed: for replay purposes
-      // - hook_received: hooks exist via old system, just record the event
-      //
-      // `hook_received` additionally guards against a terminal transition that is
-      // either already committed or racing us. It matters more here than it looks:
-      // legacy runs are routed to this handler BEFORE the caller's terminal-run
-      // validation block runs, so without this check a cancelled legacy run
-      // accepts hooks indefinitely. `FOR UPDATE` takes the run row lock, blocking
-      // until any in-flight terminal UPDATE (including the legacy run_cancelled
-      // path above, which locks the same row) commits, then reads the post-commit
-      // status.
-      const insertLegacyEvent = (tx: Pick<Drizzle, "insert">) =>
-        tx
-          .insert(Schema.events)
-          .values({
-            tenantId,
-            runId,
-            eventId,
-            correlationId: data.correlationId,
-            eventType: data.eventType,
-            eventData: "eventData" in data ? data.eventData : undefined,
-            specVersion,
-          })
-          .returning({ createdAt: Schema.events.createdAt });
-
-      const [insertedEvent] =
-        data.eventType === "hook_received"
-          ? await drizzle.transaction(async (tx) => {
-              const [runRow] = await tx
-                .select({ status: Schema.runs.status })
-                .from(Schema.runs)
-                .where(and(eq(Schema.runs.tenantId, tenantId), eq(Schema.runs.runId, runId)))
-                .for("update")
-                .limit(1);
-              if (!runRow) {
-                throw new WorkflowRunNotFoundError(runId);
-              }
-              if (isTerminalWorkflowRunStatus(runRow.status)) {
-                throw new RunExpiredError(
-                  `Workflow run "${runId}" is already in terminal state "${runRow.status}"`,
-                );
-              }
-              return insertLegacyEvent(tx);
-            })
-          : await insertLegacyEvent(drizzle);
-
-      const event = EventSchema.parse({
-        ...data,
-        ...insertedEvent,
-        runId,
-        eventId,
-      });
-      return { event: stripEventDataRefs(event, resolveData) };
-    }
-
-    default:
-      throw new Error(
-        `Event type '${data.eventType}' not supported for legacy runs ` +
-          `(specVersion: ${currentRun.specVersion || "undefined"}). ` +
-          `Please upgrade @workflow packages.`,
-      );
-  }
-}
-
-/**
- * The spec version this World stamps on the runs it creates: upstream's
- * `mintedSpecVersion()`, told that this World implements the in-band writer
- * fence, so `WORKFLOW_SPEC_VERSION=9` (eve 1.0's default) creates spec 9
- * runs. Unset, it is 8; `6` to `8` are honoured as well.
+ * The spec version this World stamps on the runs it creates: always the
+ * single-orchestrator version (9), the one eve 1.0 asks for, which this World
+ * serves with its in-band writer fence. A `WORKFLOW_SPEC_VERSION` asking for
+ * any other version is refused rather than ignored, so a deployment cannot
+ * believe it is creating runs of a version it is not.
  */
 export function worldSpecVersion(env: Record<string, string | undefined> = process.env): number {
-  return mintedSpecVersion(env, { inBandFence: true });
+  const requested = env[SPEC_VERSION_ENV_VAR]?.trim();
+  if (requested && requested !== String(SPEC_VERSION_SINGLE_ORCHESTRATOR)) {
+    throw new Error(
+      `${SPEC_VERSION_ENV_VAR}=${requested} is not supported by @evelandhq/workflow-world, which creates only spec ${String(SPEC_VERSION_SINGLE_ORCHESTRATOR)} runs. Unset it or set it to ${String(SPEC_VERSION_SINGLE_ORCHESTRATOR)}.`,
+    );
+  }
+  return SPEC_VERSION_SINGLE_ORCHESTRATOR;
 }
 
 /**
@@ -945,10 +819,7 @@ export function createEventsStorage(
   /**
    * The version the World declares to the runtime (`src/index.ts`). It is what
    * the runtime sends on `run_created`, so it is also the only honest fallback
-   * when a caller omits `specVersion`, and what a legacy-run event is stamped
-   * with. Taking it as a parameter rather than re-reading the environment
-   * keeps storage and the declaration from disagreeing when
-   * `WORKFLOW_SPEC_VERSION` changes between the two reads.
+   * when a caller omits `specVersion`.
    */
   specVersion: number = worldSpecVersion(),
 ): Storage["events"] {
@@ -1423,20 +1294,6 @@ function createUnfencedEventsStorage(
         // World can READ, which may sit above what it declares and stamps.
         if (requiresNewerWorld(currentRun.specVersion)) {
           throw new RunNotSupportedError(currentRun.specVersion!, SPEC_VERSION_MAX_SUPPORTED);
-        }
-
-        // Route to legacy handler for pre-event-sourcing runs
-        if (isLegacySpecVersion(currentRun.specVersion)) {
-          return handleLegacyEventPostgres(
-            drizzle,
-            tenantId,
-            effectiveRunId,
-            `wevt_${legacyEventUlid()}`,
-            data,
-            currentRun,
-            specVersion,
-            params,
-          );
         }
       }
       if (data.eventType === "attr_set" && !currentRun) {
@@ -2187,9 +2044,9 @@ function createUnfencedEventsStorage(
 
           // A step already running keeps its owner while that delivery is in
           // flight. The runtime's ownership lease lapses after 860 s by default,
-          // and a step message for the step can then be claimed on any replica
-          // once its run's queue is free, which happens while the owner runs
-          // only when the owner is a hook wake that bypassed that queue.
+          // and a step message for the step can then be claimed on any replica:
+          // step messages wait in no run queue (`runQueueFor`), so nothing
+          // holds one back while the orchestrator runs the step inline.
           // Starting it again there would run the body twice, so the restart
           // waits until the owner has ended. The owner's own recovery (a
           // redelivery of the same message) is not a second start.

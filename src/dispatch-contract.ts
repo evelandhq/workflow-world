@@ -3,7 +3,6 @@ import {
   messageRunSpecVersion,
   SPEC_VERSION_SINGLE_ORCHESTRATOR,
   singleOrchestratorRunIdOf,
-  type WorkflowInvokePayload,
 } from "@workflow/world";
 
 /**
@@ -52,8 +51,7 @@ export const FLOW_JOB_NAME = "eveland_wf_flows";
 export const TIMER_JOB_NAME = "eveland_wf_timers";
 
 /**
- * graphile queue name that serializes the deliveries for one run. A hook wake
- * that arrives while the queue is held is the one exception; see `isHookWake`.
+ * graphile queue name that serializes the orchestrator deliveries for one run.
  *
  * graphile executes jobs sharing a `queueName` strictly one at a time. A
  * process-local map could not provide this, because it cannot coordinate N
@@ -83,34 +81,12 @@ export function runQueueName(tenantId: string, runId: string): string {
 }
 
 /**
- * Whether a message wakes its run for new hook input. Such a wake may pass a run
- * queue that a delivery holds, so a cancel reaches a running step; the reasoning
- * is in docs/design.md, "Delivery and failure semantics".
- *
- * `@workflow/core` marks a wake from `resumeHook` with `hookResumeTiming`
- * (`hookInput` from older producers, which core still honours) and keeps both when it re-routes the
- * wake. A step message can carry the resume's timing too, so `stepId` rules it
- * out. A force-claim victim's wake carries neither marker.
- */
-export function isHookWake(
-  payload: Pick<WorkflowInvokePayload, "stepId" | "hookInput" | "hookResumeTiming">,
-): boolean {
-  const { stepId, hookInput, hookResumeTiming } = payload;
-  return stepId === undefined && (hookInput !== undefined || hookResumeTiming !== undefined);
-}
-
-/**
- * graphile job flags the dispatcher's per-tenant caps forbid (`createFairness`).
- * The World stamps one on every flow job, so both ends must spell them the same.
- * A hook wake that bypasses its run's queue carries the wake flag and counts
- * against a cap of its own.
+ * The graphile job flag the dispatcher's per-tenant cap forbids
+ * (`createFairness`). The World stamps it on every flow job, so both ends must
+ * spell it the same.
  */
 export function tenantFlag(tenantId: string): string {
   return `project:${tenantId}`;
-}
-
-export function wakeFlag(tenantId: string): string {
-  return `wake:${tenantId}`;
 }
 
 export const DISPATCH_VERSION_HEADER = "x-eveland-dispatch-version";
@@ -213,9 +189,10 @@ export function secretMatches(expected: string, received: string | null | undefi
  * stays live for a while, and a step queued behind it would wait out that
  * linger before it could even start.
  *
- * Earlier runs (spec 8 and below, or an unstamped message) keep this World's
- * own scheme: every delivery of the run waits in its run queue, and only a hook
- * wake may pass a delivery that holds it.
+ * This World creates only spec 9 runs, and the runtime stamps every message of
+ * one with its version. A message that names a run but carries no stamp (boot
+ * recovery rebuilds one from the run row) still waits in that run's queue, the
+ * conservative reading.
  */
 
 /** The run a queue message belongs to, as its body names it. */
@@ -238,16 +215,6 @@ export function runQueueFor(tenantId: string, body: unknown): string | undefined
   }
   const runId = bodyRunId(body);
   return runId === undefined ? undefined : runQueueName(tenantId, runId);
-}
-
-/** Whether a message may pass a delivery that holds its run queue: an earlier run's hook wake. */
-export function mayBypassRunQueue(
-  payload: Pick<
-    WorkflowInvokePayload,
-    "stepId" | "hookInput" | "hookResumeTiming" | "runSpecVersion"
-  >,
-): boolean {
-  return isHookWake(payload) && !isSingleOrchestratorRunMessage(payload);
 }
 
 /**

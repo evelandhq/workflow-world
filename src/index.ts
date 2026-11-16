@@ -121,6 +121,8 @@ export function createWorld(
   config: EvelandWorldConfig = {} as EvelandWorldConfig,
 ): World & { start(): Promise<void> } {
   const resolved = resolveConfig(config);
+  // Before anything opens a connection; see the note on `specVersion` below.
+  const specVersion = worldSpecVersion();
 
   const maxPoolSize = config.maxPoolSize ?? getDefaultMaxPoolSize();
   const pool =
@@ -133,8 +135,6 @@ export function createWorld(
   let closed = false;
   const drizzle = createClient(pool);
   const queue = createQueue(resolved, pool);
-  // See the note on `specVersion` below.
-  const specVersion = worldSpecVersion();
   const storage = createStorage(drizzle, resolved.tenantId, resolved.queueNamespace, specVersion);
   const streamer = createStreamer(pool, drizzle, resolved.tenantId, {
     compactSnapshots: resolved.compactStreamSnapshots,
@@ -142,47 +142,23 @@ export function createWorld(
 
   return {
     /**
-     * The single-orchestrator version (9) when `WORKFLOW_SPEC_VERSION=9` asks
-     * for it, as eve 1.0 does by default, else the hook force-claim version
-     * (8): exactly `mintedSpecVersion(env, { inBandFence: true })`
-     * (`worldSpecVersion`), as upstream tells a World with the fence to
-     * declare. The runtime
-     * stamps every run it creates with whatever is declared here (`run_created`
-     * carries `world.specVersion`) and admits any value in
-     * `[SPEC_VERSION_SUPPORTS_SLOT_IDENTITY, SPEC_VERSION_MAX_SUPPORTED]`.
+     * Always the single-orchestrator version (9), the one eve 1.0 asks for
+     * (`WORKFLOW_SPEC_VERSION=9`); any other requested version is refused at
+     * construction (`worldSpecVersion`). The runtime stamps every run it
+     * creates with what is declared here (`run_created` carries
+     * `world.specVersion`).
      *
-     * 8 is a READER contract, and this World now keeps both halves of it. A
-     * run stamped 8 understands the `hook_disposed{forceClaimedBy}` row another
-     * run's `createHook({ experimental_force: true })` writes into its log, and
-     * the version is what the takeover reads to decide whether it may write
-     * one: a token is only taken from a running victim stamped at or above
-     * `SPEC_VERSION_SUPPORTS_HOOK_FORCE_CLAIM` (storage.ts, hook_created).
-     * Declaring 8 is therefore what makes runs eligible to BE claimed from;
-     * claiming itself is gated by `capabilities.hookForceClaim` below.
+     * 9 needs the in-band writer fence (`capabilities.inBandFence` below) and
+     * a queue that delivers a run's orchestrator messages one at a time
+     * (`capabilities.maxConcurrency`). It includes every reader contract
+     * below it: the hook force-claim disposal (8) that lets another run take
+     * a token over, and the sealed log (7), whose only obligation is the
+     * `noop` filler a backend emits when it pre-assigns event positions. This
+     * World allocates each position inside the INSERT that occupies it
+     * (`insertEventRow`), so it never has a hole to seal.
      *
-     * Through 0.26 this World capped the declaration at 7, because it never
-     * took a token over and 8 would have shut out runtimes before core
-     * beta.56 (eve 0.66.2 and older), which refuse a World above their
-     * ceiling at startup. eve needs the takeover for its session handoffs,
-     * so the cap came off.
-     *
-     * 9 (single orchestrator) needs the in-band writer fence, which this World
-     * implements (`capabilities.inBandFence` below), and a queue that delivers
-     * a spec 9 run's orchestrator messages one at a time (`queue.ts`). The
-     * runtime drives runs of every version it admits, each by the version
-     * stamped on it, so spec 8 runs created before the switch finish on spec
-     * 8. Any other `WORKFLOW_SPEC_VERSION` from 6 to 8 is honoured.
-     *
-     * 7 is implied: its only reader obligation is the `noop` filler a backend
-     * emits when it pre-assigns event positions and a writer dies before
-     * committing. This World allocates each position inside the INSERT that
-     * occupies it (`insertEventRow`), so there is never a hole to seal and it
-     * never writes one.
-     *
-     * Read once per `createWorld()`, and the same value is handed to storage so
-     * its run-creation fallback and legacy event stamps agree with what the
-     * runtime was told. Pre-upgrade v5 runs stay on ULIDs through the per-run
-     * scheme marker. The conformance suite asserts the installed runtime agrees.
+     * Read once per `createWorld()`, and the same value is handed to storage
+     * so its run-creation fallback agrees with what the runtime was told.
      */
     specVersion,
     capabilities: {
