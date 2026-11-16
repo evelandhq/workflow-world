@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.27.0...workflow-world-v0.27.1) (2026-11-16)
+
+
+### Fixes
+
+* keep a stream reader from holding its whole stream in memory ([#140](https://github.com/evelandhq/workflow-world/issues/140)) ([ceb4b24](https://github.com/evelandhq/workflow-world/commit/ceb4b2454174d71c8acc10a9ac932e62c96b3e24))
+
 ## [0.27.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v0.26.1...workflow-world-v0.27.0) (2026-10-21)
 
 
