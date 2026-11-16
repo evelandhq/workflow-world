@@ -18,7 +18,9 @@ name: Release
 # accumulates into the next release PR.
 on:
   push:
-    branches: [main]
+    # The 0.27 maintenance line. It is released from its own branch, so this
+    # copy of the workflow watches that branch instead of main.
+    branches: [release/0.27.x]
   # So a release can be re-attempted if the publish job fails after the tag was
   # already cut. release-please is idempotent: it will not re-release a version
   # whose tag already exists.
@@ -49,6 +51,7 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          target-branch: ${{ github.ref_name }}
 
   publish:
     name: Publish to npm
@@ -87,8 +90,10 @@ jobs:
 
       # `prepack` runs the build, so `dist/` is produced from this exact tag.
       # No --provenance flag: trusted publishing attaches it on its own.
+      # `latest` belongs to the current line. A maintenance release goes out
+      # under its own dist-tag, so it cannot move `latest` back.
       - name: Publish
-        run: npm publish
+        run: npm publish --tag release-0.27
 
       - name: Summary
         run: |
