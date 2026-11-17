@@ -10,7 +10,7 @@
  * A dispatcher that acquired and forgot would have the idle reaper stop the
  * executor out from under a step that was still running.
  */
-import { DISPATCH_VERSION } from "../dispatch-contract.js";
+import { DISPATCH_VERSION, MIN_DISPATCH_VERSION } from "../dispatch-contract.js";
 
 /**
  * Where the activated executor can be reached. `endpointPort` is loopback, for
@@ -134,7 +134,8 @@ export function createActivationClient(input: {
       if (
         value.workflow !== undefined &&
         (typeof value.workflow.selectedProtocol !== "number" ||
-          value.workflow.selectedProtocol > DISPATCH_VERSION)
+          value.workflow.selectedProtocol > DISPATCH_VERSION ||
+          value.workflow.selectedProtocol < MIN_DISPATCH_VERSION)
       ) {
         await fetch(
           `${apiUrl}/internal/runtime/activations/${encodeURIComponent(value.lease.id)}`,
@@ -143,7 +144,7 @@ export function createActivationClient(input: {
         return {
           type: "not-activatable",
           status: 409,
-          message: `Control API selected dispatch protocol ${String(value.workflow.selectedProtocol)}, outside this dispatcher's window (<= ${String(DISPATCH_VERSION)}).`,
+          message: `Control API selected dispatch protocol ${String(value.workflow.selectedProtocol)}, outside this dispatcher's window (${String(MIN_DISPATCH_VERSION)}..${String(DISPATCH_VERSION)}).`,
         };
       }
       return {

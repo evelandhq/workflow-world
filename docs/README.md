@@ -8,6 +8,9 @@ Start with the [project README](../README.md) for user and developer quick start
   provisioning, deployment configuration, and running the dispatcher.
 - [Configuration reference](./reference/configuration.md): environment variables
   and defaults for deployments and the dispatcher.
+- [Upgrading to 2.0](./guides/upgrading-to-2.0.md): moving the dispatcher and
+  every deployment to dispatch version 2 together, and what happens to jobs 1.x
+  left behind.
 - [Upgrading to 1.0](./guides/upgrading-to-1.0.md): recreating a database set
   up by 0.x, renamed configuration, and the maintenance lines.
 

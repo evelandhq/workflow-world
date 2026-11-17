@@ -24,7 +24,7 @@ import {
   FLOW_JOB_NAME,
   jobKeyModeFor,
   LIVE_FEED_HEADER,
-  runQueueFor,
+  messageRunId,
   readRuntimeSecretFromEnv,
   RUNTIME_SECRET_HEADER,
   secretMatches,
@@ -152,19 +152,25 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
   let startPromise: Promise<void> | null = null;
 
   /**
-   * Where a sent message waits: its run's queue (`runQueueFor`), under its
-   * producer's key or its own message id.
+   * The job key a sent message is stored under (its producer's key or its own
+   * message id), and the run it belongs to, which rides on the payload
+   * (`MessageData.runId`) so boot recovery can find the run's jobs in SQL.
+   * Whether it is an orchestrator delivery, and so takes its run's gate in the
+   * dispatcher, is read from the body there (`orchestratorDeliveryRunId`).
    */
   function placeMessage(
     message: unknown,
     messageId: MessageId,
     idempotencyKey: string | undefined,
-  ): { jobKey: string; runQueue?: string; jobKeyMode?: "unsafe_dedupe" } {
-    const runQueue = runQueueFor(tenantId, message);
+  ): { jobKey: string; runId?: string; jobKeyMode?: "unsafe_dedupe" } {
+    // A health check may name the run it prepares, but it drives nothing.
+    const healthCheck =
+      (message as { __healthCheck?: unknown } | null | undefined)?.__healthCheck === true;
+    const runId = healthCheck ? undefined : messageRunId(message);
     const jobKeyMode = jobKeyModeFor(message, idempotencyKey);
     return {
       jobKey: idempotencyKey ?? messageId,
-      ...(runQueue ? { runQueue } : {}),
+      ...(runId ? { runId } : {}),
       ...(jobKeyMode ? { jobKeyMode } : {}),
     };
   }
@@ -178,7 +184,7 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     delaySeconds,
     jobKey,
     jobKeyMode,
-    runQueue,
+    runId,
     deploymentId,
   }: {
     queueId: string;
@@ -190,8 +196,8 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
     jobKey: string;
     /** Graphile's job-key mode; its default when absent (see `jobKeyModeFor`). */
     jobKeyMode?: "unsafe_dedupe";
-    /** The run queue this job waits in (`runQueueFor`); absent when it waits in none. */
-    runQueue?: string;
+    /** The run the message belongs to; absent when it names none. */
+    runId?: string;
     /** The deployment this message is addressed to; this one when omitted. */
     deploymentId?: string;
   }) {
@@ -217,15 +223,17 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
       // Recorded so the delivery side can rebuild the exact prefix; the
       // dispatcher must not re-resolve it from its own environment.
       ...(queueNamespace !== undefined ? { queueNamespace } : {}),
+      ...(runId !== undefined ? { runId } : {}),
     });
 
     await utils.addJob(FLOW_JOB_NAME, encoded, {
       jobKey,
       ...(jobKeyMode ? { jobKeyMode } : {}),
       ...(runAt ? { runAt } : {}),
-      // Serializes concurrent deliveries for one run. Without it two claimed
-      // jobs replay the same run's event log at the same time.
-      ...(runQueue ? { queueName: runQueue } : {}),
+      // No queue name. A run's orchestrator deliveries are serialized by the
+      // dispatcher's run gate (`dispatcher/run-gate.ts`): a graphile named
+      // queue per run cost every claim one row lock per run that had any job,
+      // due or not, and graphile never deletes queue rows.
       maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
       // Read by the dispatcher's `forbiddenFlags` callback to throttle a
       // tenant that is already at its in-flight cap, without starving others.

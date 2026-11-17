@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { Pool, PoolClient } from "pg";
-import { runQueueName } from "./dispatch-contract.js";
+import { getQueueTopicPrefix } from "@workflow/world";
 import { MessageData } from "./message.js";
 import { requestsZeroRetention, writeRunUserDataPurge } from "./run-data-purge.js";
 import { assertValidTenantId } from "./tenant.js";
@@ -276,6 +276,7 @@ async function quarantineRuns(
       // Absent, not empty, when there is no namespace — the wire shape the live
       // enqueue path produces. See `dispatcher/boot-recovery.ts`.
       ...(row.queue_namespace ? { queueNamespace: row.queue_namespace } : {}),
+      runId: row.id,
     };
     await client.query(
       `insert into workflow.dispatch_dead_letters
@@ -287,7 +288,8 @@ async function quarantineRuns(
         row.id,
         messageId,
         "host_reconciliation",
-        runQueueName(options.tenantId, row.id),
+        // The vqs queue name a delivery would carry, as the dispatcher records it.
+        `${getQueueTopicPrefix("workflow", row.queue_namespace || undefined)}${row.name}`,
         0,
         options.reason,
         JSON.stringify(MessageData.encode(message)),

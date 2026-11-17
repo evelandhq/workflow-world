@@ -1,4 +1,4 @@
-import { MessageData, readBody } from "../message.js";
+import { MessageData, readBody, withRunId } from "../message.js";
 import { getQueueTopicPrefix } from "@workflow/world";
 import { makeWorkerUtils, run, type Runner, type WorkerUtils } from "graphile-worker";
 import type { Pool } from "pg";
@@ -17,31 +17,34 @@ import {
   type LiveFeedGrants,
   type MessageDedup,
 } from "./dispatcher.js";
+import {
+  createRunGate,
+  MAX_COALESCED_RERUNS,
+  MAX_RERUN_HOLD_MS,
+  rerunBody,
+  runGateKey,
+  setAsideDelaySeconds,
+  type PendingWake,
+  type RunGate,
+} from "./run-gate.js";
 
 /** Job names must match what the World enqueues (`FLOW_JOB_NAME`). */
 import {
   deliveryAccounting,
   FLOW_JOB_NAME,
+  isCoalescibleWake,
   orchestratorDeliveryRunId,
-  TIMER_JOB_NAME,
+  setAsideCopyOf,
+  tenantFlag,
 } from "../dispatch-contract.js";
-import {
-  addDelayedDelivery,
-  createTimerHandler,
-  DEFAULT_TIMER_SWEEP_INTERVAL_MS,
-  moveDelayedJobsToTimers,
-  registerTimerTask,
-} from "../timers.js";
+import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
 
-export { FLOW_JOB_NAME, TIMER_JOB_NAME };
+export { FLOW_JOB_NAME };
 
 export type DispatcherConfig = {
   concurrency: number;
   pollIntervalMs: number;
   maxInFlightPerTenant: number;
-  queueGcIntervalMs: number;
-  /** How often delayed deliveries are moved off their run queues; see timers.ts. */
-  timerSweepIntervalMs?: number;
   /** Consecutive executor 5xx on one run before it is dead-lettered. */
   executorFailureLimit?: number;
   /** The streak must also span at least this long; see the tracker. */
@@ -54,6 +57,8 @@ export type DispatcherRuntime = {
   fairness: Fairness;
   /** Deliveries granted a live event feed; see `createLiveFeedGrants`. */
   liveFeedGrants: LiveFeedGrants;
+  /** The per-run gate over orchestrator deliveries; see `run-gate.ts`. */
+  runGate: RunGate;
   dedup: MessageDedup;
   executorFailures: ExecutorFailureTracker;
   stop(): Promise<void>;
@@ -73,18 +78,28 @@ export async function startDispatcher(input: {
     concurrency: config.concurrency,
     maxInFlightPerTenant: config.maxInFlightPerTenant,
   });
+  const runGate = createRunGate();
   const dedup = createMessageDedup();
   const log = input.deps.log ?? (() => {});
+  // Set when the runtime stops: a delivery then starts no further re-run, and
+  // the wake it leaves goes back to the queue for the next dispatcher.
+  let stopping = false;
 
-  const addJob: typeof workerUtils.addJob = (identifier, payload, spec) =>
-    workerUtils.addJob(identifier, payload, spec);
-
-  const reenqueue: DispatcherDeps["reenqueue"] = async ({ jobName, message, delaySeconds }) => {
-    await addDelayedDelivery(addJob, {
-      jobName,
-      message,
-      delaySeconds,
+  // Every job the dispatcher writes goes through here: a reschedule or
+  // handoff, a message the run gate set aside, a wake it re-adds. No queue
+  // name (see `run-gate.ts`), and the run id on the payload, which a job a 1.x
+  // World wrote does not carry yet.
+  const reenqueue: DispatcherDeps["reenqueue"] = async ({
+    jobName,
+    message,
+    delaySeconds,
+    maxAttempts,
+  }) => {
+    await workerUtils.addJob(jobName, MessageData.encode(withRunId(message)), {
       jobKey: message.idempotencyKey ?? message.messageId,
+      runAt: new Date(Date.now() + delaySeconds * 1000),
+      maxAttempts: maxAttempts ?? MAX_GRAPHILE_JOB_ATTEMPTS,
+      flags: [tenantFlag(message.tenantId)],
     });
   };
 
@@ -151,12 +166,131 @@ export async function startDispatcher(input: {
     // registered `__<ns>_wkf_workflow_*` is an unhandled queue every time.
     const queueName = `${getQueueTopicPrefix("workflow", message.queueNamespace)}${message.id}`;
 
-    // Only an orchestrator delivery can linger on a live feed; a step message
-    // returns when its step does, so a grant on it would be one wasted.
-    const orchestrator = orchestratorDeliveryRunId(readBody(message)) !== undefined;
+    // The run this is an orchestrator delivery for, read off the body; a step
+    // message, a wait's timer hop and a health check have none. Only an
+    // orchestrator delivery takes its run's gate, and only one can linger on a
+    // live feed: a step message returns when its step does, so a grant on it
+    // would be one wasted.
+    const body = readBody(message);
+    const gateRunId = orchestratorDeliveryRunId(body);
+
+    /**
+     * This orchestrator message found its run's gate held. A wake is coalesced
+     * into the holder's delivery, and its job completes undelivered. Anything
+     * else carries data a later delivery does not cover, and a wake that finds
+     * the gate closing would have nobody left to serve it in memory: either
+     * goes back to the queue under its own key, a little later, with its counts
+     * as they were. It is durable throughout and delivered once the gate is free.
+     */
+    const setAside = async (key: string, runId: string): Promise<void> => {
+      // Only a wake on its first delivery is coalesced. One that was delivered
+      // before (a continuation after a reschedule or a handoff, a retry) carries
+      // an attempt and a delivery count the runtime caps a run by
+      // (`MAX_DELIVERIES_EXCEEDED`); a re-run reports the holder's counts, so
+      // absorbing it would let a run that is refused on every pass loop without
+      // ever reaching the cap. It is set aside instead and keeps its counts.
+      if (isCoalescibleWake(body) && attempt === 1 && deliveryCount === 1) {
+        const offer = runGate.offerWake(key, {
+          message,
+          attempt,
+          deliveryCount,
+          maxAttempts: readRemainingAttempts(helpers),
+          hookResume:
+            (body as { hookResumeTiming?: unknown } | undefined)?.hookResumeTiming !== undefined,
+        });
+        if (offer !== "closing") {
+          log("coalesced a wake into its run's delivery", {
+            tenantId: message.tenantId,
+            runId,
+            messageId: message.messageId,
+            offer,
+          });
+          return;
+        }
+      }
+      const setAsideCount = message.setAside ?? 0;
+      const delaySeconds = setAsideDelaySeconds(setAsideCount);
+      await deps.reenqueue({
+        jobName,
+        message: {
+          ...setAsideCopyOf(message, { attempt, deliveryCount }),
+          setAside: setAsideCount + 1,
+        },
+        delaySeconds,
+        maxAttempts: readRemainingAttempts(helpers),
+      });
+      log("set a message aside while its run's delivery runs", {
+        tenantId: message.tenantId,
+        runId,
+        messageId: message.messageId,
+        delaySeconds,
+      });
+    };
+
+    /** A wake the holder did not serve, back to the queue as a job of its own. */
+    const readdWake = async (wake: PendingWake): Promise<void> => {
+      await deps.reenqueue({
+        jobName,
+        message: setAsideCopyOf(wake.message, {
+          attempt: wake.attempt,
+          deliveryCount: wake.deliveryCount,
+        }),
+        delaySeconds: 0,
+        maxAttempts: wake.maxAttempts,
+      });
+      log("re-added a coalesced wake its run's delivery did not serve", {
+        tenantId: message.tenantId,
+        runId: gateRunId ?? "",
+        messageId: wake.message.messageId,
+      });
+    };
+
     let liveFeed = false;
+    let gateKey: string | undefined;
     fairness.acquire(message.tenantId);
     try {
+      // A message the dedup would swallow (completed already, or in flight)
+      // goes straight to it, as it did before there was a gate: coalescing it
+      // would only buy its run a re-run it does not need.
+      if (gateRunId !== undefined && !dedup.has(message.idempotencyKey)) {
+        const key = runGateKey(message.tenantId, gateRunId);
+        if (!runGate.tryEnter(key)) {
+          await setAside(key, gateRunId);
+          return;
+        }
+        gateKey = key;
+      }
+
+      // The holder's re-run for a wake that arrived while it ran: the same job,
+      // grant and lease, the next delivery count, the same attempt.
+      const heldKey = gateKey;
+      const heldSince = Date.now();
+      let reruns = 0;
+      const takeRerun = (): Buffer | undefined => {
+        if (heldKey === undefined) return undefined;
+        if (
+          stopping ||
+          reruns >= MAX_COALESCED_RERUNS ||
+          Date.now() - heldSince >= MAX_RERUN_HOLD_MS
+        ) {
+          // The holder will not run again in place: no further wake is kept
+          // in memory, and the one pending goes back to the queue on the way out.
+          runGate.markClosing(heldKey);
+          return undefined;
+        }
+        const wake = runGate.takeWake(heldKey);
+        if (!wake) return undefined;
+        reruns += 1;
+        log("re-running a delivery for a coalesced wake", {
+          tenantId: message.tenantId,
+          runId: gateRunId ?? "",
+          messageId: message.messageId,
+          wakeMessageId: wake.message.messageId,
+          rerun: reruns,
+        });
+        return rerunBody(message, wake);
+      };
+
       let outcome: DispatchOutcome;
       try {
         // `undefined` means the dedup swallowed it: already completed, or a
@@ -165,9 +299,25 @@ export async function startDispatcher(input: {
         const deduped = await dedup.run(message.idempotencyKey, () => {
           // Taken only by a delivery that is actually sent, and held until it
           // returns, however it returns (released below with its fairness slot).
-          liveFeed = orchestrator && liveFeedGrants.tryAcquire(message.tenantId);
+          liveFeed = gateRunId !== undefined && liveFeedGrants.tryAcquire(message.tenantId);
           return dispatchMessage(
-            { message, jobName, queueName, attempt, deliveryCount, liveFeed },
+            {
+              message,
+              jobName,
+              queueName,
+              attempt,
+              deliveryCount,
+              liveFeed,
+              ...(heldKey === undefined
+                ? {}
+                : {
+                    rerun: takeRerun,
+                    // Before a reschedule or handoff writes the continuation:
+                    // the pending wake's job is written first, while this job
+                    // still owns its key, and no later wake is kept in memory.
+                    beforeContinuation: () => runGate.close(heldKey, readdWake),
+                  }),
+            },
             deps,
           );
         });
@@ -184,6 +334,12 @@ export async function startDispatcher(input: {
       }
 
       if (outcome.type === "completed" || outcome.type === "rescheduled") return;
+
+      // A retry or a dead letter: the holder will not run again in place. The
+      // gate closes and its pending wake goes back to the queue before either
+      // is recorded; if that add fails, this throws and graphile redelivers the
+      // holder's job, which still owns its key.
+      if (gateKey !== undefined) await runGate.close(gateKey, readdWake);
 
       if (outcome.type === "dead-letter") {
         await deps.onDeadLetter({ message, reason: outcome.reason, jobName, queueName });
@@ -203,8 +359,18 @@ export async function startDispatcher(input: {
       }
       throw new Error(outcome.reason);
     } finally {
-      if (liveFeed) liveFeedGrants.release(message.tenantId);
-      fairness.release(message.tenantId);
+      try {
+        // A reschedule, a handoff, a retry and a dead letter closed the gate
+        // already. On a `completed` exit (no wake left to re-run for, the
+        // re-run cap, the hold limit, shutdown, a dropped message) this closes
+        // it: a wake still pending goes back to the queue before the gate
+        // opens. If that add fails this throws, and graphile redelivers the
+        // holder's job: a delivery that starts after the wake, so it covers it.
+        if (gateKey !== undefined) await runGate.leave(gateKey, readdWake);
+      } finally {
+        if (liveFeed) liveFeedGrants.release(message.tenantId);
+        fairness.release(message.tenantId);
+      }
     }
   };
 
@@ -223,68 +389,19 @@ export async function startDispatcher(input: {
     forbiddenFlags: () => fairness.forbiddenFlags(),
     taskList: {
       [FLOW_JOB_NAME]: makeHandler(FLOW_JOB_NAME),
-      [TIMER_JOB_NAME]: createTimerHandler({ addJob }),
     },
   });
-
-  // Per-run serialization gives every run its own graphile queue, and graphile
-  // does not reclaim the queue row when the last job in it finishes (measured —
-  // see run-serialization.integration.test.ts). Left alone that is one permanent
-  // `_private_job_queues` row per workflow run, so the sweep is not optional.
-  //
-  // Cheap and idempotent, so a fixed interval beats trying to be clever about
-  // when it is needed. `unref` so it never holds the process open.
-  const collectQueues = () =>
-    workerUtils.cleanup({ tasks: ["GC_JOB_QUEUES"] }).catch((error: unknown) => {
-      log("job queue cleanup failed", { error: String(error) });
-    });
-  const queueGcTimer = setInterval(() => void collectQueues(), config.queueGcIntervalMs);
-  queueGcTimer.unref();
-
-  // Every claim locks every queue that still has a job, due or not (see
-  // timers.ts), so a sleeping run must not keep its queue. Deployments enqueue
-  // their delayed continuations straight onto the run's queue; this moves them
-  // off it and collects the queues they leave empty right away rather than at
-  // the next GC. Runs once at start too, so a backlog left while no
-  // dispatcher ran is cleared before it costs anything further.
-  let sweeping = false;
-  let timerTaskRegistered = false;
-  const sweepTimers = async () => {
-    if (sweeping) return;
-    sweeping = true;
-    try {
-      if (!timerTaskRegistered) {
-        await registerTimerTask(pool);
-        timerTaskRegistered = true;
-      }
-      const moved = await moveDelayedJobsToTimers(pool);
-      if (moved > 0) {
-        log("moved delayed deliveries off their run queues", { jobs: moved });
-        await collectQueues();
-      }
-    } catch (error) {
-      log("delayed delivery sweep failed", { error: String(error) });
-    } finally {
-      sweeping = false;
-    }
-  };
-  void sweepTimers();
-  const timerSweepTimer = setInterval(
-    () => void sweepTimers(),
-    config.timerSweepIntervalMs ?? DEFAULT_TIMER_SWEEP_INTERVAL_MS,
-  );
-  timerSweepTimer.unref();
 
   return {
     runner,
     workerUtils,
     fairness,
     liveFeedGrants,
+    runGate,
     dedup,
     executorFailures,
     async stop() {
-      clearInterval(queueGcTimer);
-      clearInterval(timerSweepTimer);
+      stopping = true;
       try {
         await runner.stop();
       } finally {
@@ -306,4 +423,13 @@ function readIsFinalAttempt(helpers: unknown): boolean {
     typeof job.max_attempts === "number" &&
     job.attempts >= job.max_attempts
   );
+}
+
+/** The attempts a job that replaces this one keeps: this one's, this attempt included. */
+function readRemainingAttempts(helpers: unknown): number {
+  const job = (helpers as { job?: { attempts?: unknown; max_attempts?: unknown } } | null)?.job;
+  if (typeof job?.attempts !== "number" || typeof job.max_attempts !== "number") {
+    return MAX_GRAPHILE_JOB_ATTEMPTS;
+  }
+  return Math.max(1, job.max_attempts - job.attempts + 1);
 }

@@ -237,11 +237,13 @@ export function createWorld(
       inBandFence: true,
       /**
        * The queue half of a spec 9 run's single writer: its orchestrator
-       * messages wait in the run's graphile queue, one delivery at a time,
-       * and none bypasses it, while its step messages and a long wait's timer
-       * hops keep full parallelism (`runQueueFor` in `dispatch-contract.ts`).
-       * The fence above is what makes an overlap the queue still lets through
-       * (a delivery that outlived its dispatch timeout) safe.
+       * deliveries take the run's gate in the dispatcher, one delivery at a
+       * time, and none bypasses it, while its step messages and a long wait's
+       * timer hops keep full parallelism (`orchestratorDeliveryRunId` in
+       * `dispatch-contract.ts`, `dispatcher/run-gate.ts`). The fence above is
+       * what makes an overlap the gate still lets through (a delivery that
+       * outlived its dispatch timeout, a dispatcher that lost its ownership
+       * lock) safe.
        */
       maxConcurrency: true,
       /**

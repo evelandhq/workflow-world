@@ -4,29 +4,36 @@ import {
   continuationOf,
   deliveryAccounting,
   DISPATCH_VERSION,
+  isCoalescibleWake,
   jobKeyModeFor,
   LIVE_FEED_HEADER,
+  MIN_DISPATCH_VERSION,
   orchestratorDeliveryRunId,
-  runQueueFor,
-  runQueueName,
   secretMatches,
+  setAsideCopyOf,
 } from "./dispatch-contract.js";
 
 describe("dispatch contract", () => {
-  test("accepts the current version", () => {
-    expect(checkDispatchVersion(String(DISPATCH_VERSION))).toBeUndefined();
+  test("is version 2, and a 2.x World accepts only version 2", () => {
+    expect(DISPATCH_VERSION).toBe(2);
+    expect(MIN_DISPATCH_VERSION).toBe(2);
+    expect(checkDispatchVersion("2")).toBeUndefined();
   });
 
-  test("accepts an older dispatcher", () => {
-    // Deployments outlive dispatcher releases; a newer bundle must keep serving
-    // an older dispatcher for the whole run-out.
-    expect(checkDispatchVersion("1", 2)).toBeUndefined();
+  test("refuses a version 1 dispatcher, which does not gate a run's deliveries", () => {
+    // A 1.x dispatcher relies on a per-run graphile queue that a 2.x World no
+    // longer writes, so its deliveries would run unserialized.
+    const rejection = checkDispatchVersion("1");
+    expect(rejection?.status).toBe(400);
+    expect(rejection?.error).toContain("Upgrade the dispatcher");
   });
 
   test("rejects a newer dispatcher with an actionable error", () => {
-    const rejection = checkDispatchVersion("2", 1);
+    // What a 1.x World (which knows only version 1) answers this dispatcher.
+    const rejection = checkDispatchVersion("2", 1, 1);
     expect(rejection?.status).toBe(400);
     expect(rejection?.error).toContain("Rebuild the deployment");
+    expect(checkDispatchVersion("3")?.error).toContain("Rebuild the deployment");
   });
 
   test("refuses a request with no version header", () => {
@@ -42,13 +49,12 @@ describe("dispatch contract", () => {
     }
   });
 
-  test("the live feed grant is an optional header within version 1", () => {
-    // A World built before the grant accepts a dispatch that carries it (an
-    // unknown header changes nothing it checks), and a dispatcher built before
-    // it sends version 1 without it, which the World reads as "no feed".
-    expect(DISPATCH_VERSION).toBe(1);
+  test("the live feed grant is an optional header", () => {
+    // A World that predates the grant accepts a dispatch that carries it (an
+    // unknown header changes nothing it checks), and a dispatcher that does
+    // not send it gets a World that reads its absence as "no feed".
     expect(LIVE_FEED_HEADER).toBe("x-eveland-live-feed");
-    expect(checkDispatchVersion("1")).toBeUndefined();
+    expect(checkDispatchVersion(String(DISPATCH_VERSION))).toBeUndefined();
   });
 
   test("secret comparison rejects mismatches and missing values", () => {
@@ -62,7 +68,6 @@ describe("dispatch contract", () => {
 });
 
 describe("single-orchestrator (spec 9) delivery", () => {
-  const TENANT = "prj_spec9";
   const orchestrator = { runId: "wrun_A", runSpecVersion: 9 };
   const step = { runId: "wrun_A", stepId: "step_1", runSpecVersion: 9 };
   const hop = {
@@ -72,23 +77,27 @@ describe("single-orchestrator (spec 9) delivery", () => {
   };
   const unstamped = { runId: "wrun_C" };
 
-  test("only a spec 9 run's orchestrator messages wait in its run queue", () => {
-    expect(runQueueFor(TENANT, orchestrator)).toBe(runQueueName(TENANT, "wrun_A"));
-    // Step messages and a long wait's intermediate hops keep full parallelism.
-    expect(runQueueFor(TENANT, step)).toBeUndefined();
-    expect(runQueueFor(TENANT, hop)).toBeUndefined();
-    // A message naming a run without a stamp (boot recovery's) still waits
-    // in that run's queue.
-    expect(runQueueFor(TENANT, unstamped)).toBe(runQueueName(TENANT, "wrun_C"));
-    expect(runQueueFor(TENANT, { __healthCheck: true })).toBeUndefined();
-  });
-
-  test("the orchestrator deliveries the dispatcher may grant a live feed are those", () => {
+  test("only a spec 9 run's orchestrator messages take its gate", () => {
     expect(orchestratorDeliveryRunId(orchestrator)).toBe("wrun_A");
+    // A message naming a run without a stamp (boot recovery's) still takes
+    // that run's gate.
     expect(orchestratorDeliveryRunId(unstamped)).toBe("wrun_C");
+    // Step messages and a long wait's intermediate hops keep full parallelism.
     expect(orchestratorDeliveryRunId(step)).toBeUndefined();
     expect(orchestratorDeliveryRunId(hop)).toBeUndefined();
+    expect(orchestratorDeliveryRunId({ __healthCheck: true, runSpecVersion: 9 })).toBeUndefined();
     expect(orchestratorDeliveryRunId(undefined)).toBeUndefined();
+  });
+
+  test("a wake is coalescible; a message that carries data is not", () => {
+    expect(isCoalescibleWake(orchestrator)).toBe(true);
+    expect(isCoalescibleWake(unstamped)).toBe(true);
+    expect(
+      isCoalescibleWake({ ...orchestrator, hookResumeTiming: { resumeRequestedAtMs: 1 } }),
+    ).toBe(true);
+    expect(isCoalescibleWake({ ...orchestrator, runInput: { specVersion: 9 } })).toBe(false);
+    expect(isCoalescibleWake({ ...orchestrator, hookInput: { token: "t" } })).toBe(false);
+    expect(isCoalescibleWake({ ...orchestrator, invoke: {} })).toBe(false);
   });
 
   test("a spec 9 keyed send is deduplicated while its job lives", () => {
@@ -110,5 +119,20 @@ describe("single-orchestrator (spec 9) delivery", () => {
     // `{ timeoutSeconds: 0 }` on a spec 9 run is a handoff: same attempt, next delivery.
     const handedOff = continuationOf(first, { attempt: 2, deliveryCount: 2 }, 0, orchestrator);
     expect(deliveryAccounting(handedOff, 1)).toEqual({ attempt: 2, deliveryCount: 3 });
+  });
+
+  test("a message set aside is not a delivery: its next job reports the same counts", () => {
+    // Found its run's gate held on its first delivery.
+    const first = setAsideCopyOf({ attempt: 1 }, { attempt: 1, deliveryCount: 1 });
+    expect(first).toEqual({ attempt: 1 });
+    expect(deliveryAccounting(first, 1)).toEqual({ attempt: 1, deliveryCount: 1 });
+
+    // The third attempt of a handed-off message, its fourth delivery.
+    const handedOff = continuationOf({ attempt: 1 }, { attempt: 2, deliveryCount: 2 }, 0, {
+      ...orchestrator,
+    });
+    const counts = deliveryAccounting(handedOff, 2);
+    expect(counts).toEqual({ attempt: 3, deliveryCount: 4 });
+    expect(deliveryAccounting(setAsideCopyOf(handedOff, counts), 1)).toEqual(counts);
   });
 });

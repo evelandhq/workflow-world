@@ -75,40 +75,29 @@ An embedding host reads the grants in flight from
 executor without waiting out lingers, call `stopLiveEventFeeds()` (root export)
 in it; see [executors that are always running](#executors-that-are-always-running).
 
-## Delayed deliveries and claim cost
+## Per-run serialization and claim cost
 
-graphile-worker 0.16 claims a job by first locking every available named queue
-(`for update skip locked` over `_private_job_queues`) and only then picking a
-due job; 0.17 and 0.18 still do this by default. Each lock is a WAL record and
-each claim a commit, so a claim costs one row lock **per queue that holds any
-job, due or not**. Per-run serialization gives every run its own
-`wfrun:<tenant>:<run>` queue, and a sleeping run's delayed continuation would
-keep that queue alive for the whole sleep — eve's session timeout re-arms every
-23 hours for as long as the session lives. A few hundred live sessions would
-mean a few hundred row locks on every claim, and with a high
-`WORKFLOW_DISPATCHER_CONCURRENCY` and a short poll interval a steady stream of
-WAL and fsyncs (evelandhq/workflow-world#115).
+A run's orchestrator deliveries go out one at a time: the dispatcher holds a
+gate per run in memory, taken by the claimed job and held until its delivery
+returns. A wake that arrives meanwhile is coalesced into it — the delivery runs
+again in place, under the same job and lease, up to 32 times — and a message
+that carries data (a start message) is put back as a job due 1 to 30 s later.
+Step messages and long-wait timer hops never wait on the gate. The design is in
+[delivery and failure semantics](../design.md#delivery-and-failure-semantics).
 
-The dispatcher therefore holds any delivery due more than a minute out as an
-`eveland_wf_timers` job with no queue. Every
-`WORKFLOW_DISPATCHER_TIMER_SWEEP_INTERVAL_MS`, and once at startup, it moves such
-jobs off their run queues and reclaims the queues they leave empty; its own
-`{ timeoutSeconds }` reschedules skip the queue from the start. When a timer
-comes due the dispatcher re-adds it to the run's queue as an ordinary flow job,
-under the same job key, so the delivery itself is still serialized. Deployments
-enqueue ordinary flow jobs, so no deployment ever writes a job that only a newer
-dispatcher could claim. Jobs that have been attempted keep their place, since
-moving one would reset its retry count.
-
-The number of `_private_job_queues` rows tracks runs with work due, not
-runs that are alive:
+Jobs carry no graphile queue name, so a claim locks no queue rows and its cost
+does not grow with the number of runs, sleeping or not. A delayed delivery
+(a sleep, a session timeout, a paced recovery wave) is an ordinary flow job
+with a later `run_at`. `_private_job_queues` stays empty once the jobs a 1.x
+World wrote are gone; boot recovery deletes the empty rows they leave:
 
 ```sql
 select count(*) from graphile_worker._private_job_queues;
-select count(*) from graphile_worker._private_jobs jobs
-  join graphile_worker._private_tasks tasks on tasks.id = jobs.task_id
- where tasks.identifier = 'eveland_wf_timers';
 ```
+
+An embedding host reads the gates in use from
+`service.runtime.runGate.snapshot()` (`{ held, pendingWakes }`), beside
+`fairness.snapshot()` and `liveFeedGrants.snapshot()`.
 
 ## Executors that are always running
 
@@ -148,13 +137,14 @@ and by the conformance harness.
 
 The current dispatcher is deliberately single-instance. On startup it holds a
 PostgreSQL advisory lock for its whole lifetime, reclaims the old Graphile
-worker ids found on active runs' exact `wfrun:<tenant>:<run>` queues and on jobs
-in no queue (step messages, wait hops, held timers), re-enqueues
-the active runs that have no job left on their queue, and only then starts its
-worker pool and reports ready. A run whose job is still queued — a pending
-delivery, a sleep's timer (on its queue or held as an `eveland_wf_timers` job),
-or the delivery the dead dispatcher was holding — is
-left to that job, and a run that holds a hook is left to that hook's
+worker ids holding flow jobs (and the `wfrun:` queues of jobs a 1.x World
+wrote), re-enqueues the active runs that have no job left, collects empty
+`wfrun:` queue rows, and only then starts its worker pool and reports ready. A
+run's jobs are found by the run id on their payload, or by a 1.x job's
+`wfrun:<tenant>:<run>` queue. A run whose job is still queued — a pending
+delivery, a step message, a sleep's delayed continuation, or the delivery the
+dead dispatcher was holding — is left to that job, and a run that holds a hook
+is left to that hook's
 resolution; re-enqueueing beside either only bought a cold start per run. The
 runs it does re-enqueue are released a few deployments at a time
 (`WORKFLOW_DISPATCHER_BOOT_RECOVERY_DEPLOYMENTS_PER_WAVE` every

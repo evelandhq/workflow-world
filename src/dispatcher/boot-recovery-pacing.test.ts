@@ -78,10 +78,8 @@ describe.skipIf(!testUrl)("boot recovery skips live jobs and paces by deployment
       `delete from graphile_worker._private_jobs
         where payload->>'tenantId' = $1
           and payload->>'messageId' not like 'msg_recover_%'
-          and job_queue_id = (
-            select id from graphile_worker._private_job_queues where queue_name = $2
-          )`,
-      [TENANT, `wfrun:${TENANT}:${runId}`],
+          and payload->>'runId' = $2`,
+      [TENANT, runId],
     );
   }
 
@@ -98,10 +96,8 @@ describe.skipIf(!testUrl)("boot recovery skips live jobs and paces by deployment
     const sleeping = await createActiveRun("dep_pace_live");
     await admin.query(
       `update graphile_worker._private_jobs set run_at = now() + interval '1 hour'
-        where job_queue_id = (
-          select id from graphile_worker._private_job_queues where queue_name = $1
-        )`,
-      [`wfrun:${TENANT}:${sleeping}`],
+        where payload->>'tenantId' = $1 and payload->>'runId' = $2`,
+      [TENANT, sleeping],
     );
     const orphaned = await createActiveRun("dep_pace_live");
     await dropOwnJob(orphaned);
@@ -156,15 +152,46 @@ describe.skipIf(!testUrl)("boot recovery skips live jobs and paces by deployment
     const exhausted = await createActiveRun("dep_pace_exhausted");
     await admin.query(
       `update graphile_worker._private_jobs set attempts = max_attempts, last_error = 'gave up'
-        where job_queue_id = (
-          select id from graphile_worker._private_job_queues where queue_name = $1
-        )`,
-      [`wfrun:${TENANT}:${exhausted}`],
+        where payload->>'tenantId' = $1 and payload->>'runId' = $2`,
+      [TENANT, exhausted],
     );
 
     await reenqueueActiveRunsForAllTenants({ pool: admin, workerUtils });
 
     expect(await recoveryJob(exhausted)).toBeDefined();
+  }, 60_000);
+
+  test("a run whose only job is a 1.x dispatcher's held timer is recovered", async () => {
+    // Nothing claims `eveland_wf_timers` any more, so that job wakes nothing;
+    // the recovery replay re-arms the run's sleep from the wait's deadline.
+    const sleeper = await createActiveRun("dep_pace_timer");
+    await dropOwnJob(sleeper);
+    await workerUtils.addJob(
+      "eveland_wf_timers",
+      { tenantId: TENANT, runQueue: `wfrun:${TENANT}:${sleeper}` },
+      { runAt: new Date(Date.now() + 3_600_000) },
+    );
+    // A step message, by contrast, is a job of the run: it drives it on.
+    const stepping = await createActiveRun("dep_pace_timer");
+    await dropOwnJob(stepping);
+    await worlds
+      .get("dep_pace_timer")!
+      .queue(
+        `${getQueueTopicPrefix("workflow")}greet` as ValidQueueName,
+        { runId: stepping, stepId: "step_1", runSpecVersion: 9 },
+        { idempotencyKey: `step_${stepping}` },
+      );
+
+    await reenqueueActiveRunsForAllTenants({ pool: admin, workerUtils });
+
+    expect(await recoveryJob(sleeper)).toBeDefined();
+    expect(await recoveryJob(stepping)).toBeUndefined();
+    await admin.query(
+      `delete from graphile_worker._private_jobs
+        where task_id = (select id from graphile_worker._private_tasks where identifier = 'eveland_wf_timers')
+          and payload->>'tenantId' = $1`,
+      [TENANT],
+    );
   }, 60_000);
 
   test("recovered runs are released one deployment wave at a time", async () => {

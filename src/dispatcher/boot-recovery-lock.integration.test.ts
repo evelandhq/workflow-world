@@ -8,16 +8,17 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createWorld, ensureTenantPartitions, runMigrations } from "../index.js";
 import { dropTenantPartitions } from "../migrate.js";
-import { runQueueName } from "../dispatch-contract.js";
+import { MessageData } from "../message.js";
 import type { ActivationClient } from "./activation-client.js";
 import { startDispatcherService, type DispatcherService } from "./service.js";
 import { FLOW_JOB_NAME } from "./runner.js";
 
 /**
- * The restart failure this suite guards is a queue lock, not merely a missing
- * job. A separate process claims a real per-run Graphile job and is SIGKILLed
- * while its handler is blocked, leaving both job and queue locked by its random
- * worker id. The replacement service must recover before starting its workers.
+ * The restart failure this suite guards is a stranded lock, not merely a
+ * missing job. A separate process claims a real flow job and is SIGKILLed while
+ * its handler is blocked, leaving the job locked by its random worker id (and,
+ * for a job a 1.x World wrote in a `wfrun:` queue, the queue too). The
+ * replacement service must recover before starting its workers.
  *
  * Recovery here is the unlock alone. The stranded job is still the run's own
  * wake-up, so once its worker id is released graphile delivers it under its
@@ -49,6 +50,8 @@ describe.skipIf(!testUrl)("boot recovery of a stranded Graphile queue lock", () 
   let staleWorker: ChildProcessWithoutNullStreams | undefined;
   let liveWorker: ChildProcessWithoutNullStreams | undefined;
   let targetRunId: string | undefined;
+  /** A run whose only job a 1.x World wrote, in its `wfrun:` queue. */
+  let legacyRunId: string | undefined;
   let inFlight = 0;
   let peakInFlight = 0;
   const delivered: string[] = [];
@@ -74,7 +77,12 @@ describe.skipIf(!testUrl)("boot recovery of a stranded Graphile queue lock", () 
     const handler = world.createQueueHandler(
       getQueueTopicPrefix("workflow", NAMESPACE),
       async (message, meta) => {
-        if ((message as { runId?: string }).runId !== targetRunId) return;
+        const runId = (message as { runId?: string }).runId;
+        if (runId !== undefined && runId === legacyRunId) {
+          delivered.push(meta.messageId);
+          return;
+        }
+        if (runId !== targetRunId) return;
         inFlight += 1;
         peakInFlight = Math.max(peakInFlight, inFlight);
         try {
@@ -150,29 +158,60 @@ describe.skipIf(!testUrl)("boot recovery of a stranded Graphile queue lock", () 
       specVersion: 5,
     });
     targetRunId = created.run!.runId;
-    const queueName = runQueueName(TENANT, targetRunId);
     const { messageId: originalMessageId } = await world.queue(
       `${getQueueTopicPrefix("workflow", NAMESPACE)}greet` as ValidQueueName,
       { runId: targetRunId },
     );
     if (!originalMessageId) throw new Error("the World's enqueue returned no message id");
-    await admin.query(
-      `update graphile_worker._private_jobs as jobs
-          set priority = -32768
-         from graphile_worker._private_job_queues as queues
-        where queues.id = jobs.job_queue_id
-          and queues.queue_name = $1`,
-      [queueName],
-    );
+    await prioritize("jobs.payload->>'messageId' = $1", originalMessageId);
     staleWorker = await startBlockingWorker(FLOW_JOB_NAME);
-
-    const staleLock = await waitForQueueLock(queueName, 10_000);
-    workerIdsToClean.add(staleLock.queue_locked_by);
+    const staleLock = await waitForJobLock(originalMessageId, 10_000);
+    // A 2.x World's job waits in no graphile queue.
+    expect(staleLock.job_queue_id).toBeNull();
+    workerIdsToClean.add(staleLock.locked_by);
     await killWorker(staleWorker);
     staleWorker = undefined;
 
-    const stranded = await readQueueLock(queueName);
-    expect(stranded?.queue_locked_by).toBe(staleLock.queue_locked_by);
+    // A job a 1.x World wrote before the upgrade: in its run's `wfrun:` queue,
+    // no run id on its payload. Claimed by a second dead worker, so its queue
+    // is locked too.
+    const legacy = await world.events.create(null, {
+      eventType: "run_created",
+      eventData: { deploymentId: DEPLOYMENT, workflowName: "greet", input: [] },
+      specVersion: 5,
+    });
+    legacyRunId = legacy.run!.runId;
+    const legacyQueue = `wfrun:${TENANT}:${legacyRunId}`;
+    const legacyMessageId = `msg_legacy_${suffix}`;
+    await workerUtils.addJob(
+      FLOW_JOB_NAME,
+      MessageData.encode({
+        id: "greet",
+        data: Buffer.from(JSON.stringify({ runId: legacyRunId })),
+        attempt: 1,
+        messageId: legacyMessageId as MessageData["messageId"],
+        tenantId: TENANT,
+        deploymentId: DEPLOYMENT,
+        queueNamespace: NAMESPACE,
+      }),
+      { jobKey: legacyMessageId, queueName: legacyQueue, flags: [`project:${TENANT}`] },
+    );
+    await prioritize("jobs.payload->>'messageId' = $1", legacyMessageId);
+    staleWorker = await startBlockingWorker(FLOW_JOB_NAME);
+    const legacyLock = await waitForQueueLock(legacyQueue, 10_000);
+    workerIdsToClean.add(legacyLock.queue_locked_by);
+    await killWorker(staleWorker);
+    staleWorker = undefined;
+
+    // A queue row a 1.x World left with no job in it: boot collects it.
+    const spentQueue = `wfrun:${TENANT}:wrun_spent_${suffix}`;
+    const spent = await workerUtils.addJob(
+      `wfw_spent_probe_${suffix}`,
+      {},
+      { queueName: spentQueue },
+    );
+    await workerUtils.completeJobs([spent.id]);
+    expect(await queueRowExists(spentQueue)).toBe(true);
 
     await workerUtils.addJob(LIVE_TASK, { probe: suffix }, { queueName: LIVE_QUEUE });
     liveWorker = await startBlockingWorker(LIVE_TASK);
@@ -208,16 +247,21 @@ describe.skipIf(!testUrl)("boot recovery of a stranded Graphile queue lock", () 
     });
 
     await waitFor(() => delivered.includes(originalMessageId), 30_000, "stranded job delivery");
+    await waitFor(() => delivered.includes(legacyMessageId), 30_000, "legacy job delivery");
     expect(Date.now() - startedAt).toBeLessThan(30_000);
     expect(peakInFlight).toBe(1);
     // The unlock was the recovery. No second job was written for a run whose
-    // own delivery was merely stuck behind a dead worker's lock.
-    expect(delivered).not.toContain(`msg_recover_${targetRunId}`);
-    const recoveryJobs = await admin.query(
-      "select 1 from graphile_worker._private_jobs where payload->>'messageId' = $1",
-      [`msg_recover_${targetRunId}`],
-    );
-    expect(recoveryJobs.rows).toHaveLength(0);
+    // own delivery was merely stuck behind a dead worker's lock, whether the
+    // run was found by the payload's run id or by a 1.x World's queue name.
+    for (const runId of [targetRunId, legacyRunId]) {
+      expect(delivered).not.toContain(`msg_recover_${runId}`);
+      const recoveryJobs = await admin.query(
+        "select 1 from graphile_worker._private_jobs where payload->>'messageId' = $1",
+        [`msg_recover_${runId}`],
+      );
+      expect(recoveryJobs.rows).toHaveLength(0);
+    }
+    expect(await queueRowExists(spentQueue)).toBe(false);
 
     const stillLive = await readQueueLock(LIVE_QUEUE);
     expect(stillLive?.queue_locked_by).toBe(liveLock.queue_locked_by);
@@ -307,6 +351,37 @@ describe.skipIf(!testUrl)("boot recovery of a stranded Graphile queue lock", () 
           and ${where}`,
       [value],
     );
+  }
+
+  async function waitForJobLock(
+    messageId: string,
+    timeoutMs: number,
+  ): Promise<{ locked_by: string; job_queue_id: string | null }> {
+    let lock: { locked_by: string | null; job_queue_id: string | null } | undefined;
+    await waitFor(
+      async () => {
+        const { rows } = await admin.query<{
+          locked_by: string | null;
+          job_queue_id: string | null;
+        }>(
+          "select locked_by, job_queue_id from graphile_worker._private_jobs where payload->>'messageId' = $1",
+          [messageId],
+        );
+        lock = rows[0];
+        return lock?.locked_by != null;
+      },
+      timeoutMs,
+      `job lock ${messageId}`,
+    );
+    return lock as { locked_by: string; job_queue_id: string | null };
+  }
+
+  async function queueRowExists(queueName: string): Promise<boolean> {
+    const { rows } = await admin.query(
+      "select 1 from graphile_worker._private_job_queues where queue_name = $1",
+      [queueName],
+    );
+    return rows.length > 0;
   }
 
   async function readQueueLock(queueName: string): Promise<QueueLock | undefined> {

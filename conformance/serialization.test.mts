@@ -13,9 +13,11 @@ import { DEPLOYMENT_ID, PACKAGE_NAME, resolveConformanceDatabaseUrl, TENANT_ID }
  * conformance suite structurally cannot see, because every test in it is a single
  * sequential invoke.
  *
- * A process-local map could not serve N dispatchers, so the guarantee is a
- * per-run graphile queue (`runQueueName`), applied by all three enqueue paths:
- * the World's own send, the dispatcher's reschedule, and boot recovery.
+ * The guarantee is the dispatcher's per-run gate (`src/dispatcher/run-gate.ts`):
+ * one dispatcher process owns the queue, and every orchestrator delivery of a
+ * run takes the run's gate, whichever path enqueued it (the World's own send,
+ * the dispatcher's reschedule, boot recovery). A wake that finds the gate held
+ * is coalesced into the holder's delivery, which re-runs in place for it.
  *
  * `workflows/noop.ts`'s `brokenWf` is the detector. `noop` is a `'use step'`
  * function returning a module-level counter, so the output is one number per
@@ -96,11 +98,11 @@ test(
  * World's own `queue()`, the production path a resolved hook takes to wake a
  * run, and it lands as a genuine second job for the run — its jobKey is a fresh
  * ULID per send, so nothing collapses it — while the first is in flight. The
- * per-run queue name is the only thing keeping the two from running at once.
+ * run gate is the only thing keeping the two from running at once.
  *
  * The dispatcher's own boot sweep cannot be the injector here: a run in flight
- * always has a live job on its queue (the delivery
- * being held, or the continuation the runtime enqueues before acking), and the
+ * always has a live job (the delivery being held, or the continuation the
+ * runtime enqueues before acking), found by the run id on its payload, and the
  * sweep skips exactly those runs. So it is asserted the other way round — the
  * sweep, run repeatedly during flight, never so much as offers this run to the
  * host filter.

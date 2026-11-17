@@ -45,13 +45,10 @@ export type {
   OwnershipLivenessSettings,
 } from "./ownership.js";
 export type { DispatcherEvent, DispatcherTelemetry } from "./observability.js";
-export { FLOW_JOB_NAME, startDispatcher, TIMER_JOB_NAME } from "./runner.js";
-export {
-  DEFAULT_TIMER_SWEEP_INTERVAL_MS,
-  moveDelayedJobsToTimers,
-  TIMER_HORIZON_SECONDS,
-} from "../timers.js";
+export { FLOW_JOB_NAME, startDispatcher } from "./runner.js";
 export type { DispatcherConfig, DispatcherRuntime } from "./runner.js";
+export { createRunGate, MAX_COALESCED_RERUNS } from "./run-gate.js";
+export type { PendingWake, RunGate } from "./run-gate.js";
 export { resolveDispatchRuntimeSecret } from "./secrets.js";
 export { startDispatcherService } from "./service.js";
 export type {

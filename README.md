@@ -22,6 +22,10 @@ the database and tenants, configure deployments, and run the dispatcher. See
 the [documentation index](./docs/README.md) for configuration, operations, and
 architecture.
 
+**Coming from 1.x?** The dispatcher and every deployment move to 2.0 together;
+the database stays. Read [upgrading to 2.0](./docs/guides/upgrading-to-2.0.md)
+first.
+
 **Coming from 0.x?** 1.0 cannot migrate a 0.x database: it has to be recreated.
 Read [upgrading to 1.0](./docs/guides/upgrading-to-1.0.md) first.
 
