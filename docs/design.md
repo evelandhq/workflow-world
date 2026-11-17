@@ -663,12 +663,12 @@ definition (`runQueueFor` in `src/dispatch-contract.ts`).
 **Only a run's orchestrator deliveries wait in its run queue, and nothing
 bypasses it.** Every run is a spec 9 (single-orchestrator) run. Its step
 messages and a long wait's intermediate timer hops take no queue name: an
-orchestrator that waits on a background step stays live for a while (eve's
-linger), and a step queued behind it would wait that out before it could
-start. Its hook wakes wait in the queue too: the running orchestrator tails
-the run's log, so a resume or a cancel reaches it without a second delivery,
-and a second orchestrator would run an inline step the first is still running
-again. What the queue still lets through (a delivery that outlives its dispatch
+orchestrator delivery can run an inline step for a long time, and a step
+queued behind it would wait that out before it could start. Its hook wakes
+wait in the queue too: a running orchestrator picks up new events by polling
+the run's log tail, so a resume or a cancel reaches it without a second
+delivery, and a second orchestrator would run an inline step the first is
+still running again. What the queue still lets through (a delivery that outlives its dispatch
 timeout) the in-band writer fence refuses. A message that names a run but
 carries no spec stamp (boot recovery rebuilds one from the run row) also waits
 in that run's queue.

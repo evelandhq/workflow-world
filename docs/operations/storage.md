@@ -7,7 +7,7 @@
 Logical chunks stay intact at the public boundary, while the database uses two
 internal optimizations:
 
-- `messageSoFar` and `reasoningSoFar` are stripped before persistence. Every
+- **Deprecated, removed in 2.0.** `messageSoFar` and `reasoningSoFar` are stripped before persistence. Every
   supported Eve line writes delta-only appends (message stream v25), so this is
   a no-op guard against a v24-shaped write rather than a transform in daily
   use. Unknown framing and event shapes pass through unchanged; the
@@ -16,7 +16,8 @@ internal optimizations:
 - `writeMulti` packs up to 64 logical chunks into a physical v2 block, capped at
   256 KiB. Readers expand single-chunk rows and v2 blocks into the same logical stream.
   `packTerminalStreamBlocks` is the bounded, advisory-locked fallback for streams
-  written one row at a time before EOF.
+  written one row at a time before EOF. **Deprecated, removed in 2.0**; write-time
+  packing stays.
 
 Logical chunk IDs remain inside each block and continue to drive cursor and
 `startIndex` behavior. Repacking physical rows therefore does not invalidate an

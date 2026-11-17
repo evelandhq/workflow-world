@@ -24,7 +24,12 @@ export type EvelandWorldConfig = PgConnectionConfig & {
    * Default is 10ms. Set to 0 for immediate flushing.
    */
   streamFlushIntervalMs?: number;
-  /** Strip Eve's accumulated stream snapshots before persistence (default true). */
+  /**
+   * Strip Eve's accumulated stream snapshots before persistence (default true).
+   *
+   * @deprecated Will be removed in 2.0. eve 1.0 only writes delta appends, so the
+   * stripping it switches is a no-op guard.
+   */
   compactStreamSnapshots?: boolean;
 };
 
@@ -39,10 +44,19 @@ export type ResolvedWorldConfig = {
   /** Resolved once at construction; `undefined` means the default prefix. */
   queueNamespace?: string;
   streamFlushIntervalMs?: number;
+  /**
+   * @deprecated Will be removed in 2.0. eve 1.0 only writes delta appends, so
+   * write-side snapshot stripping is a no-op guard.
+   */
   compactStreamSnapshots: boolean;
 };
 
-/** Resolve the emergency switch for write-side stream snapshot compaction. */
+/**
+ * Resolve the emergency switch for write-side stream snapshot compaction.
+ *
+ * @deprecated Will be removed in 2.0 with write-side snapshot stripping, which
+ * is a no-op now that eve 1.0 only writes delta appends.
+ */
 export function resolveStreamCompaction(value: string | undefined): boolean {
   if (value === undefined || value === "" || value === "on" || value === "true" || value === "1") {
     return true;

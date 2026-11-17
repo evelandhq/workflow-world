@@ -9,15 +9,27 @@ import { compactStreamChunk } from "./stream-compaction.js";
 
 const STREAM_BLOCK_PACK_LOCK_KEY = 0x65_76_62_70; // "evbp"
 
+/**
+ * @deprecated Will be removed in 2.0 with `packTerminalStreamBlocks`; streams
+ * are packed into v2 blocks at write time by `writeMulti`.
+ */
 export type PackTerminalStreamBlocksOptions = {
   /** Maximum completed streams rewritten by one invocation. */
   maxStreams: number;
   maxChunksPerBlock?: number;
   maxBlockBytes?: number;
-  /** Strip cumulative Eve snapshots while rewriting (default true). */
+  /**
+   * Strip cumulative Eve snapshots while rewriting (default true).
+   *
+   * @deprecated Will be removed in 2.0 with write-side snapshot stripping.
+   */
   compactSnapshots?: boolean;
 };
 
+/**
+ * @deprecated Will be removed in 2.0 with `packTerminalStreamBlocks`; streams
+ * are packed into v2 blocks at write time by `writeMulti`.
+ */
 export type PackTerminalStreamBlocksResult = {
   streamsCompacted: number;
   logicalChunks: number;
@@ -36,6 +48,9 @@ type Candidate = {
 /**
  * Rewrite closed streams of terminal runs into v2 blocks. Logical chunk ids
  * stay in the block payload, so public cursors survive the physical rewrite.
+ *
+ * @deprecated Will be removed in 2.0. Streams are packed into v2 blocks at
+ * write time by `writeMulti`, which leaves this fallback little to rewrite.
  */
 export async function packTerminalStreamBlocks(
   pool: Pool,
