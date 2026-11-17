@@ -156,6 +156,8 @@ announced through `capabilities.hookRetention`, because a World that stays silen
 is treated as not supporting it. Hook force-claim is announced through
 `capabilities.hookForceClaim` (see [Hook force-claim](#hook-force-claim)), and
 eve moves a session to a fresh run only when both of those are declared.
+Deduplicated hook resumes are announced through `capabilities.hookResumeDedup`
+(see [Hook resume deduplication](#hook-resume-deduplication)).
 Deployment affinity is announced through `capabilities.deploymentAffinity` (see
 below). And `events.create` reports `maxEvents` on every
 response that carries a run, because the runtime enforces the ceiling and a World
@@ -179,8 +181,8 @@ dropped. On each announcement a subscription reads the log from the slot after
 the last one it delivered (the unfenced `events.list`) and delivers what
 continues the sequence, each slot once; a hole stops it until a later
 announcement fills it, and a lost announcement is caught up by the next. It ends
-through `onError` on a `hook_received` carrying a `resumeId` (as upstream; none
-does here, see `hookResumeDedup` below), a failed read, a lost `LISTEN`
+through `onError` on a `hook_received` carrying a `resumeId` (as upstream; see
+[Hook resume deduplication](#hook-resume-deduplication)), a failed read, a lost `LISTEN`
 connection, the end of the delivery that opened it, `world.close()` and
 `stopLiveEventFeeds()`. The feed is a channel on the World's one `LISTEN`
 connection, which stream readers share; a dropped connection is replaced with
@@ -201,17 +203,16 @@ and the reasons differ enough to be worth recording:
   report — a deployment serves exactly one project, and the tenant predicate is
   the boundary — so returning anything here would manufacture a distinction that
   does not exist. Upstream expects Postgres-backed Worlds to omit it.
-- **`capabilities.hookResumeDedup`** is the backend half of `resumeHook()`'s
-  parallel fast path: the producer's direct write and the queue consumer's
-  re-ensure both carry one `resumeId`, and the backend must collapse them onto a
-  single `hook_received`. There is no `(runId, resumeId)` constraint here — the
-  events table's uniqueness is on `(tenant, run, correlation, type)` for entity
-  creation, which is a different key — so the capability stays unset and the
-  runtime keeps the sequential single-writer path. Declaring it without the
-  constraint would duplicate a `hook_received` on replay. Adding the constraint
-  is a real option later; it is a migration, not a flag. `resolvedHookResume`,
-  the cached-hook delivery eve uses for signed inbox handles, requires the same
-  deduplication, so it stays unset too and eve resolves those handles by token.
+- **`capabilities.resolvedHookResume`** lets core deliver to a cached Hook
+  handle (eve's signed inbox handles) without a by-token lookup, sending
+  `requireHookResumeDedup` with the write. Upstream's world-postgres 5.2.1 does
+  not declare it and neither does this World, which ignores
+  `requireHookResumeDedup` as upstream does: the contract requires refusing such
+  a write before it writes whenever it cannot be deduplicated (for example one
+  without a `resumeId`), and nothing in this World or in `@workflow/world`'s
+  conformance modules checks that path. eve resolves those handles by token,
+  and the write that follows is deduplicated through `hookResumeDedup`
+  ([Hook resume deduplication](#hook-resume-deduplication)).
 - **`CreateEventParams.computeInstanceId`** is ambient per-event identity, read
   back through the analytics surface. It is dropped for the same reason
   `requestId` already is: this World does not implement `analytics`, so there is
@@ -325,6 +326,36 @@ Two orderings make this safe, and both rest on row locks held to commit:
 The World cannot publish the victim's wake -- the claimer's runtime does that
 from `claimedFrom`, through the ordinary queue, with an idempotency key per
 claimer hook.
+
+### Hook resume deduplication
+
+`capabilities.hookResumeDedup`. Because the World declares it, `resumeHook()` sends a `resumeId`
+(one per logical resume, kept across force-claim redirects) and the hex
+SHA-256 of the payload bytes with its `hook_received`. `createHookResume` in
+`storage.ts`, ported from upstream world-postgres 5.2.1, writes it in one
+transaction that locks the run and then the hook `FOR UPDATE`, the order of the
+plain `hook_received` and of a force-claim:
+
+1. A digest that does not match the payload: 422, before the transaction.
+2. Run locked. Its data gone or going (`expired_at` set, or terminal and
+   started with `$retention: 0`): 410 `INVOCATION_DATA_EXPIRED`, as upstream.
+3. A `hook_received` already in the run with this `resumeId`: returned when its
+   hook, digest and token match, even after the hook was disposed or the run
+   finished; otherwise 422 (`Hook resume identity reused with different
+contents`).
+4. Otherwise as the plain write: a terminal run is `RunExpiredError`; the hook
+   is locked, and one that is gone, belongs to another run or holds another
+   token is `HookNotFoundError` (`HookForceClaimedError` after a takeover).
+   The event is inserted with `resume_id` and `resume_payload_digest`.
+
+The run lock serializes every resume of a run, so a second writer of one id
+finds the first one's row. The partial unique index
+`workflow_events_hook_resume_unique (tenant_id, run_id, resume_id) WHERE type =
+'hook_received' AND resume_id IS NOT NULL` (migration 0002) is the backstop: its
+violation retries once, then answers `EntityConflictError`. Events read back
+carry `resumeId`; the digest is never returned. A write without a `resumeId`
+takes the plain path, unchanged. A `$retention: 0` purge clears the digest with
+the payload and keeps `resume_id`.
 
 ### In-band writer fence
 
@@ -462,8 +493,12 @@ These bite hard enough to be worth stating outright.
 - **A partition's child index name is not derivable by convention.** Postgres
   generates it from the partition name plus columns and truncates to 63 bytes, so
   it is neither the parent's name nor a stable suffix of it. Provisioning renames
-  the child to a derived, predictable name so that translating a unique-violation
-  into a domain error can compare exactly rather than by pattern.
+  the children of both partial unique indexes on `workflow_events` (correlated
+  events, `dedupIndexName`; hook resumes, `resumeDedupIndexName`), each found
+  through `pg_inherits` from its parent, to derived, predictable names so that
+  translating a unique-violation into a domain error can compare exactly rather
+  than by pattern. Migration 0002 renamed the hook-resume children of the
+  partitions that existed before it, deriving the same name in SQL.
 
 ### Indexes beyond the ported ones
 
@@ -538,7 +573,8 @@ without losing its chunk ids, and EOF stays. The purge writes no column the
 deadline trigger or the expiry predicates read, so the retention class still
 removes the rows later. `hook_disposed` payloads stay: they are the token and
 force-claim routing that `forceClaimRefusal` reads, and an eve handoff victim
-finishes right after it is taken over.
+finishes right after it is taken over. A resume's payload digest goes with its
+payload; its `resume_id` stays, and a retry of the resume is answered 410.
 
 ### `queue_namespace` is provenance, not tenancy
 

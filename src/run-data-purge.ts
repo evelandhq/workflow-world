@@ -72,11 +72,17 @@ export async function writeRunUserDataPurge(
   // reads it to redirect a delivery that resolved a force-claimed hook. eve's
   // session handoff victims finish right after the takeover, and clearing it
   // would turn that redirect into a plain not-found.
+  //
+  // A resume's payload digest goes with its payload, as upstream's purge does.
+  // Its `resume_id` stays, so the run still holds one `hook_received` per id; a
+  // retry of a resume is answered 410 on a purged run before any digest is
+  // compared (`createHookResume` in storage.ts).
   await db.execute(sql`
     update workflow.workflow_events
-       set payload_cbor = null
+       set payload_cbor = null,
+           resume_payload_digest = null
      where tenant_id = ${tenantId} and run_id = ${runId}
-       and payload_cbor is not null
+       and (payload_cbor is not null or resume_payload_digest is not null)
        and type <> 'hook_disposed'`);
   // A hook with a retained token outlives its run, and a hook read is not gated
   // on the run's `expired_at`, so its metadata is cleared in place.

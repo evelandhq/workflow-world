@@ -17,6 +17,7 @@ behavior since.
 | Logical stream bytes, indices, cursors, EOF and mixed legacy/v2 reads                     | `src/streamer.storage-v2.integration.test.ts` and stream unit suites |
 | Graphile delivery budget is 49, for the World's sends and the dispatcher's reschedules    | `src/queue.test.ts` and `src/dispatcher/runner.test.ts`              |
 | `$retention: 0` deletes a run's user data at its terminal transition, marking it expired  | `src/run-data-purge.integration.test.ts`                             |
+| `hookResumeDedup`: one `hook_received` per `(run, resumeId)`, retries answered with it    | `src/storage.hook-resume-dedup.test.ts`                              |
 | Public World conformance and supported Eve integration                                    | `conformance/` and `e2e-tests/`                                      |
 
 These behaviors are release blockers. An upstream version bump must re-run this

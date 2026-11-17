@@ -255,6 +255,16 @@ export function createWorld(
        * (a delivery that outlived its dispatch timeout) safe.
        */
       maxConcurrency: true,
+      /**
+       * A `hook_received` carrying `resumeHook()`'s `resumeId` is written once
+       * per `(run, resumeId)`, and a retry with the same payload is answered
+       * with the committed event, even after its hook was disposed or its run
+       * finished (`createHookResume` in storage.ts, migration 0002), as
+       * upstream's world-postgres does. Events read back carry their
+       * `resumeId`. `resolvedHookResume` stays unset, as upstream's does: see
+       * docs/design.md.
+       */
+      hookResumeDedup: true,
     },
     ...storage,
     ...streamer,

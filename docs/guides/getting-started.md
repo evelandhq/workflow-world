@@ -19,9 +19,9 @@ npm install @evelandhq/workflow-world
 ## Provision the database and tenants
 
 Run `workflow-world-setup` with `WORKFLOW_WORLD_URL` in its environment. It
-creates the `workflow` schema from its baseline migration (on a database that
-does not hold one yet) and initializes Graphile; **it does not create tenant
-partitions**. Call `ensureTenantPartitions(pool, tenantId)` once per
+applies the package's migrations (`migrations/*.sql`) that the database has not
+had yet, starting from the baseline on an empty `workflow` schema, and
+initializes Graphile; **it does not create tenant partitions**. Call `ensureTenantPartitions(pool, tenantId)` once per
 tenant afterwards:
 
 ```ts
@@ -38,6 +38,18 @@ on its first write.
 
 A database set up by a 0.x version cannot be upgraded in place: see
 [upgrading to 1.0](./upgrading-to-1.0.md).
+
+### Upgrading within 1.x
+
+A release can add a migration. Run `workflow-world-setup` again (the
+dispatcher also applies pending migrations when it starts) before any
+deployment or tenant provisioning runs the new version: its code reads and
+writes the new columns. `0002_hook_resume_dedup.sql` adds the hook resume
+columns and unique index to `workflow_events` and renames that index on every
+existing tenant partition; it holds a lock that blocks event writes while it
+scans each partition. Provision tenants with the new version only, since
+older provisioning code can misname the new index (provisioning again with
+the new version repairs it).
 
 ## Configure deployments
 

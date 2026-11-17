@@ -59,6 +59,24 @@ describe.skipIf(!testUrl)("the migrated schema matches the drizzle schema", () =
     }
   });
 
+  test("every declared index exists on its table, unique where declared unique", async () => {
+    const { rows } = await pool.query<{ table: string; index: string; unique: boolean }>(
+      `select ct.relname as table, ci.relname as index, i.indisunique as unique
+         from pg_index i
+         join pg_class ci on ci.oid = i.indexrelid
+         join pg_class ct on ct.oid = i.indrelid
+         join pg_namespace n on n.oid = ct.relnamespace
+        where n.nspname = 'workflow' and not ct.relispartition`,
+    );
+    const actual = new Set(rows.map((row) => `${row.table}.${row.index} ${String(row.unique)}`));
+    for (const table of declaredTables) {
+      for (const index of table.indexes) {
+        const name = `${table.name}.${String(index.config.name)} ${String(index.config.unique)}`;
+        expect(actual.has(name), name).toBe(true);
+      }
+    }
+  });
+
   test("the migrations create no table the drizzle schema does not declare", async () => {
     const { rows } = await pool.query<{ tablename: string }>(
       `select c.relname as tablename
