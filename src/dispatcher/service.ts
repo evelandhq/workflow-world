@@ -225,8 +225,6 @@ export async function startDispatcherService(
           concurrency: config.concurrency,
           pollIntervalMs: config.pollIntervalMs,
           maxInFlightPerTenant: config.maxInFlightPerTenant,
-          queueGcIntervalMs: config.queueGcIntervalMs,
-          timerSweepIntervalMs: config.timerSweepIntervalMs,
           executorFailureLimit: config.executorFailureLimit,
           executorFailureMinSpanMs: config.executorFailureMinSpanMs,
         },

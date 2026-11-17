@@ -27,9 +27,11 @@ Its capabilities, each of which fails closed when a World leaves it unset:
   `snapshot` on `events.list`, and refusal of a stale in-band write with
   `InBandSupersededError` (`docs/design.md`, In-band writer fence).
   `src/storage.in-band-fence.test.ts` runs upstream's own conformance module.
-- `maxConcurrency`: a run's orchestrator messages wait in its run queue and are
-  delivered one at a time, while its step messages keep full parallelism
-  (`runQueueFor` in `src/dispatch-contract.ts`).
+- `maxConcurrency`: a run's orchestrator deliveries take the run's gate in the
+  dispatcher and are delivered one at a time, wakes coalescing into the
+  delivery in flight, while its step messages keep full parallelism
+  (`orchestratorDeliveryRunId` in `src/dispatch-contract.ts`,
+  `src/dispatcher/run-gate.ts`).
 - `atomicStartHook`: `start({ experimental_hook })` admits the run together with
   a Hook on the given token, so a duplicate start is refused with
   `HookConflictError` naming the owner. eve 1.0 starts every session this way

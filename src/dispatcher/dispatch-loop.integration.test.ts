@@ -126,9 +126,6 @@ describe.skipIf(!testUrl)("dispatch loop", () => {
         // One, so the delivery a hook wake interrupts fills the tenant's delivery
         // cap and the wake gets through only because it counts against its own.
         maxInFlightPerTenant: 1,
-        // Long enough that the sweep never fires during the test; its own
-        // behaviour is covered by run-serialization.integration.test.ts.
-        queueGcIntervalMs: 3_600_000,
       },
       deps: {
         activation,
@@ -187,7 +184,7 @@ describe.skipIf(!testUrl)("dispatch loop", () => {
           "x-vqs-queue-name": "__wkf_workflow_greet",
           "x-vqs-message-id": "msg_replayed",
           "x-vqs-message-attempt": "1",
-          "x-eveland-dispatch-version": "1",
+          "x-eveland-dispatch-version": "2",
           "x-eveland-runtime-secret": RUNTIME_SECRET,
           "x-eveland-deployment-id": "dep_somebody_else",
         },
@@ -195,6 +192,31 @@ describe.skipIf(!testUrl)("dispatch loop", () => {
       },
     );
     expect(response.status).toBe(401);
+  });
+
+  test("a version 1 dispatcher is refused, however well it is signed", async () => {
+    // A 1.x dispatcher has no run gate, and this World enqueues without the
+    // per-run graphile queue that dispatcher relied on: running its deliveries
+    // would run a run's orchestrator deliveries side by side.
+    const response = await fetch(
+      `http://127.0.0.1:${String(agentPort)}/.well-known/workflow/v1/flow`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-vqs-queue-name": "__wkf_workflow_greet",
+          "x-vqs-message-id": "msg_old_dispatcher",
+          "x-vqs-message-attempt": "1",
+          "x-eveland-dispatch-version": "1",
+          "x-eveland-runtime-secret": RUNTIME_SECRET,
+          "x-eveland-deployment-id": DEPLOYMENT,
+        },
+        body: JSON.stringify({ runId: "wrun_old_dispatcher" }),
+      },
+    );
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("Upgrade the dispatcher");
+    expect(delivered.some((d) => d.messageId === "msg_old_dispatcher")).toBe(false);
   });
 
   test("a dispatch without the runtime secret is refused", async () => {
@@ -207,7 +229,7 @@ describe.skipIf(!testUrl)("dispatch loop", () => {
           "x-vqs-queue-name": "__wkf_workflow_greet",
           "x-vqs-message-id": "msg_forged",
           "x-vqs-message-attempt": "1",
-          "x-eveland-dispatch-version": "1",
+          "x-eveland-dispatch-version": "2",
         },
         body: JSON.stringify({ runId: "wrun_forged" }),
       },

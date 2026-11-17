@@ -2269,7 +2269,7 @@ function createUnfencedEventsStorage(
           // A step already running keeps its owner while that delivery is in
           // flight. The runtime's ownership lease lapses after 860 s by default,
           // and a step message for the step can then be claimed on any replica:
-          // step messages wait in no run queue (`runQueueFor`), so nothing
+          // step messages never take the run's gate (`run-gate.ts`), so nothing
           // holds one back while the orchestrator runs the step inline.
           // Starting it again there would run the body twice, so the restart
           // waits until the owner has ended. The owner's own recovery (a

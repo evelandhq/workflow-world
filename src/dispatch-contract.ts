@@ -13,13 +13,22 @@ import {
  * dispatcher change could silently misbehave against an older bundled world
  * instead of failing with a clear error.
  *
- * Compatibility rule: a deployment accepts any version up to the newest it
- * knows. Within a major version the dispatcher may only *add* optional headers,
- * so old bundles keep working against a newer dispatcher — which is the
- * situation for the entire run-out, since a deployment's world is baked at
- * build time and never upgraded in place.
+ * Compatibility rule: a deployment accepts the versions from
+ * {@link MIN_DISPATCH_VERSION} to the newest it knows. Within a version the
+ * dispatcher may only *add* optional headers, so an older bundle keeps working
+ * against a newer dispatcher of the same version. A new version is a break both
+ * ways, and every deployment's world is baked at build time.
+ *
+ * Version 2 moved the serialization of a run's orchestrator deliveries from a
+ * graphile queue per run into the dispatcher (`dispatcher/run-gate.ts`). A
+ * version 1 dispatcher has no gate, and a version 2 World enqueues without a
+ * queue name, so a pairing of the two would deliver a run's orchestrator
+ * messages unserialized. The World refuses it instead.
  */
-export const DISPATCH_VERSION = 1;
+export const DISPATCH_VERSION = 2;
+
+/** The oldest dispatch version this World accepts; see {@link DISPATCH_VERSION}. */
+export const MIN_DISPATCH_VERSION = 2;
 
 /**
  * The graphile task name the World enqueues to and the dispatcher claims from.
@@ -32,53 +41,11 @@ export const DISPATCH_VERSION = 1;
 export const FLOW_JOB_NAME = "eveland_wf_flows";
 
 /**
- * The graphile task name for a delivery that is not due yet, held outside its
- * run's queue until it is.
- *
- * graphile 0.16's `get_job` locks every available named queue on every claim
- * (`for update skip locked` over `_private_job_queues`), so its cost grows with
- * the number of queues, not the number of due jobs. A sleeping run's delayed
- * continuation kept its `wfrun:` queue alive for the whole sleep — eve's session
- * timeout re-arms every 23 hours for a week — and with a few hundred sessions
- * every claim locked a few hundred rows (evelandhq/workflow-world#115).
- *
- * Far-future flow jobs move here (see `timers.ts`), and when one comes due it is
- * re-added as a flow job on the run's queue, so per-run serialization still
- * covers the delivery itself. Only the dispatcher writes this name: deployments
- * enqueue flow jobs, because their world is baked at build time and an older
- * dispatcher would never claim a timer.
+ * The graphile queue-name prefix a 1.x World gave every orchestrator delivery
+ * (`wfrun:<tenant>:<run>`). Nothing writes it any more; boot recovery reads it
+ * only to recognise the jobs a 1.x World left behind.
  */
-export const TIMER_JOB_NAME = "eveland_wf_timers";
-
-/**
- * graphile queue name that serializes the orchestrator deliveries for one run.
- *
- * graphile executes jobs sharing a `queueName` strictly one at a time. A
- * process-local map could not provide this, because it cannot coordinate N
- * dispatchers.
- *
- * Duplicate deliveries for one run are ordinary, not exotic: the World's own
- * enqueue uses a fresh ULID per send, so two sends for one run are two
- * independently claimable jobs, and boot recovery's `msg_recover_<runId>` key
- * collapses only against another sweep.
- *
- * Every enqueue path must derive the name the same way or the serialization is
- * silently partial, so it has exactly one definition. Tenant-scoped because run
- * ids come from the runtime and two tenants could in principle mint the same one.
- *
- * One caveat, measured rather than assumed: graphile does NOT reclaim the queue
- * row when the last job in it completes. `_private_job_queues` keeps one row per
- * distinct run for ever, so the dispatcher runs graphile's own `GC_JOB_QUEUES`
- * cleanup periodically. Without that sweep this design is a slow table leak.
- *
- * A second caveat: a queue costs every claim one row lock for as long as it has
- * any job, due or not. A delayed job therefore does not wait in this queue — the
- * dispatcher holds it as a {@link TIMER_JOB_NAME} job and puts it back here only
- * once it is due.
- */
-export function runQueueName(tenantId: string, runId: string): string {
-  return `wfrun:${tenantId}:${runId}`;
-}
+export const LEGACY_RUN_QUEUE_PREFIX = "wfrun:";
 
 /**
  * The graphile job flag the dispatcher's per-tenant cap forbids
@@ -119,11 +86,14 @@ export type DispatchRejection = { status: number; error: string };
 /**
  * Checked on the deployment side for every inbound dispatch. Every delivery
  * comes from the dispatcher, so a request without the header is refused like
- * any other unauthenticated one.
+ * any other unauthenticated one. A version below `minimum` is refused too: an
+ * older dispatcher does not serialize a run's orchestrator deliveries for this
+ * World, so its deliveries are refused rather than run beside each other.
  */
 export function checkDispatchVersion(
   headerValue: string | null | undefined,
   supported: number = DISPATCH_VERSION,
+  minimum: number = MIN_DISPATCH_VERSION,
 ): DispatchRejection | undefined {
   if (headerValue === null || headerValue === undefined || headerValue === "") {
     return { status: 401, error: `Missing ${DISPATCH_VERSION_HEADER}.` };
@@ -138,6 +108,14 @@ export function checkDispatchVersion(
       error:
         `This deployment's workflow world speaks dispatch version ${String(supported)}, ` +
         `but the dispatcher sent version ${String(version)}. Rebuild the deployment.`,
+    };
+  }
+  if (version < minimum) {
+    return {
+      status: 400,
+      error:
+        `This deployment's workflow world needs dispatch version ${String(minimum)} or newer, ` +
+        `but the dispatcher sent version ${String(version)}. Upgrade the dispatcher.`,
     };
   }
   return undefined;
@@ -176,29 +154,32 @@ export function secretMatches(expected: string, received: string | null | undefi
  *
  * A spec 9 run is driven by one orchestrator invocation at a time, and the
  * in-band fence (storage.ts) refuses the writes of a second one that overlaps
- * it. The queue is the half that keeps overlaps rare
- * (`capabilities.maxConcurrency`): a spec 9 run's orchestrator messages wait
- * in its run queue, one delivery at a time, and nothing bypasses it. A hook
- * wake has no reason to: the running orchestrator tails the run's log, so a
- * resume or a cancel reaches it without a second delivery, and a second
- * orchestrator would run an inline step the first is still running again.
+ * it. The dispatcher's run gate is the half that keeps overlaps rare
+ * (`capabilities.maxConcurrency`, `dispatcher/run-gate.ts`): a spec 9 run's
+ * orchestrator deliveries take the run's gate, one delivery at a time, and
+ * nothing bypasses it. A hook wake has no reason to: the running orchestrator
+ * tails the run's log, so a resume or a cancel reaches it without a second
+ * delivery, and a second orchestrator would run an inline step the first is
+ * still running again.
  *
  * A spec 9 run's step messages and a long wait's intermediate timer hops are
- * not orchestrator deliveries and wait in no run queue (upstream's
+ * not orchestrator deliveries and never take the gate (upstream's
  * `singleOrchestratorRunIdOf`): an orchestrator runs inline steps for as long
  * as they take, and one the dispatcher granted a live event feed
  * (`LIVE_FEED_HEADER`) stays live up to 30 s more while it waits on a
- * background step (eve's linger), so a step queued behind it would wait all
- * of that out before it could even start.
+ * background step (eve's linger), so a step held behind it would wait all of
+ * that out before it could even start. A hop must never be coalesced either:
+ * its delivery sends the next hop, and a re-run that finds the wait not yet
+ * due would not.
  *
  * This World creates only spec 9 runs, and the runtime stamps every message of
  * one with its version. A message that names a run but carries no stamp (boot
- * recovery rebuilds one from the run row) still waits in that run's queue, the
+ * recovery rebuilds one from the run row) still takes that run's gate, the
  * conservative reading.
  */
 
 /** The run a queue message belongs to, as its body names it. */
-function bodyRunId(body: unknown): string | undefined {
+export function messageRunId(body: unknown): string | undefined {
   if (!body || typeof body !== "object") return undefined;
   const { runId, workflowRunId } = body as { runId?: unknown; workflowRunId?: unknown };
   if (typeof runId === "string") return runId;
@@ -215,13 +196,27 @@ function isSingleOrchestratorRunMessage(body: unknown): boolean {
  * run. A message that names a run but carries no spec stamp counts as one.
  */
 export function orchestratorDeliveryRunId(body: unknown): string | undefined {
-  return isSingleOrchestratorRunMessage(body) ? singleOrchestratorRunIdOf(body) : bodyRunId(body);
+  return isSingleOrchestratorRunMessage(body)
+    ? singleOrchestratorRunIdOf(body)
+    : messageRunId(body);
 }
 
-/** The run queue a message waits in, or `undefined` when it waits in none. */
-export function runQueueFor(tenantId: string, body: unknown): string | undefined {
-  const runId = orchestratorDeliveryRunId(body);
-  return runId === undefined ? undefined : runQueueName(tenantId, runId);
+/**
+ * Whether a later delivery of the run covers this orchestrator message, so the
+ * dispatcher may coalesce it into one while the run's gate is held (upstream
+ * world-postgres's `isCoveredWake`, as world-vercel coalesces): its producer
+ * committed what it is for (a step outcome, a `hook_received`, a cancellation,
+ * a due wait) before sending it, and every delivery reads the run's log. A
+ * start message (`runInput`) carries the run's input for a start that may not
+ * have committed `run_created` yet, and a legacy hook's input (`hookInput`) or
+ * an invocation (`invoke`) carries data of its own: those are never dropped.
+ */
+export function isCoalescibleWake(body: unknown): boolean {
+  return !(
+    typeof body === "object" &&
+    body !== null &&
+    ("runInput" in body || "invoke" in body || "hookInput" in body)
+  );
 }
 
 /**
@@ -234,9 +229,9 @@ export function runQueueFor(tenantId: string, body: unknown): string | undefined
  * bounded share of them (`createLiveFeedGrants`) and only to orchestrator
  * deliveries.
  *
- * An optional addition within version 1: an older dispatcher never sends it,
- * so the World refuses every feed and no delivery lingers, as before; an
- * older World ignores it.
+ * An optional header: a dispatcher that does not send it gets a World that
+ * refuses every feed, so no delivery lingers; a World that does not read it
+ * ignores it.
  */
 export const LIVE_FEED_HEADER = "x-eveland-live-feed";
 
@@ -313,5 +308,26 @@ export function continuationOf<T extends DeliveryOffsets>(
     attempt: handoff ? delivery.attempt : delivery.attempt + 1,
     ...(attemptOffset ? { attemptOffset } : {}),
     deliveryOffset: delivery.deliveryCount,
+  } as T;
+}
+
+/**
+ * The stored message that puts one back without delivering it: a message the
+ * dispatcher set aside (a data-bearing message that found its run's gate held,
+ * or a wake left pending when the gate's holder ended). Not a delivery, so the
+ * new job's first claim reports this one's `attempt` and `deliveryCount` again
+ * (upstream world-postgres re-adds a message it left on a run lease the same
+ * way).
+ */
+export function setAsideCopyOf<T extends DeliveryOffsets>(
+  message: T,
+  delivery: { attempt: number; deliveryCount: number },
+): T {
+  const { attemptOffset: _attempts, deliveryOffset: _deliveries, ...rest } = message;
+  return {
+    ...rest,
+    attempt: delivery.attempt,
+    ...(delivery.attempt > 1 ? { attemptOffset: delivery.attempt - 1 } : {}),
+    ...(delivery.deliveryCount > 1 ? { deliveryOffset: delivery.deliveryCount - 1 } : {}),
   } as T;
 }

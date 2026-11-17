@@ -123,7 +123,6 @@ describe.skipIf(!testUrl)("namespaced boot recovery against eve's real handler",
         concurrency: 4,
         pollIntervalMs: 100,
         maxInFlightPerTenant: 4,
-        queueGcIntervalMs: 3_600_000,
       },
       deps: {
         activation,

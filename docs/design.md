@@ -56,7 +56,7 @@ sequenceDiagram
     participant A as agent deployment<br/>(eve executor + this World)
     participant PG as shared Postgres<br/>(control tables + partitions + graphile)
     participant D as workflow dispatcher
-    A->>PG: world.queue → add_job(flags=[project:X], queueName=wfrun:…, run_at)
+    A->>PG: world.queue → add_job(flags=[project:X], payload.runId, run_at)
     D->>PG: graphile claim (LISTEN/NOTIFY + poll, forbiddenFlags skips capped tenants)
     D->>D: affinity: run.deploymentId → activation lease → executor endpoint
     D->>A: held POST /.well-known/workflow/v1/flow (for the step's whole duration)
@@ -108,7 +108,8 @@ Ranked by how expensive they are to violate.
    wakes every agent in the fleet on every chunk of every run.
 6. **The dispatch contract is versioned and checked.** A deployment's world is
    baked at build time and never upgraded in place, so old bundles must keep
-   working against a newer dispatcher.
+   working against a newer dispatcher of the same version, and a version
+   change is refused loudly by whichever side does not speak it.
 7. **Big tables keep hard isolation.** Events and stream chunks are
    LIST-partitioned by tenant so reclaim is `DROP PARTITION` rather than a mass
    delete.
@@ -143,7 +144,7 @@ matching version line, because eve checks the manifest's major and prerelease
 tag before it ever loads the world.
 
 **`resolveLatestDeploymentId` is implemented but incomplete.** See
-[Known limitation](#known-limitation) below.
+[Known limitations](#known-limitations) below.
 
 **`hooks.getByToken` is scoped by tenant _and_ token.** A token is its only
 argument, which invites reading the tenant out of the row it finds. That is not
@@ -624,14 +625,14 @@ against an address that will not change.
 | `x-vqs-message-id`                                    | eve protocol | stable across redeliveries — see below                        |
 | `x-vqs-message-attempt`                               | eve protocol | graphile's attempt number                                     |
 | `x-eveland-runtime-secret`                            | this package | what distinguishes platform dispatch from any other caller    |
-| `x-eveland-dispatch-version`                          | this package | currently `1`; the receiving side rejects what it cannot read |
+| `x-eveland-dispatch-version`                          | this package | currently `2`; the receiving side rejects what it cannot read |
 | `x-eveland-project-id` / `-deployment-id` / `-run-id` | this package | binds the request to one target                               |
 | `x-eveland-live-feed`                                 | this package | `1` when the dispatcher granted this delivery a live feed     |
 
-The live feed grant is optional within version 1. A dispatcher that does not
+The live feed grant is an optional header. A dispatcher that does not
 send it gets a World that refuses every feed, so no delivery lingers; a World
 that does not read it ignores it. The dispatcher grants it only to orchestrator
-deliveries (those `runQueueFor` places in a run queue), and only while granted
+deliveries (those that take a run's gate), and only while granted
 deliveries in flight stay at or below half its concurrency (rounded down, so a
 concurrency of 1 grants none) and at or below half the tenant's in-flight
 ceiling (rounded down, at least 1). It strips the header from a message's
@@ -654,6 +655,14 @@ Because this package supplies `createQueueHandler`, the contract is enforced on
 the receiving side and not merely sent: a dispatch claiming a version the bundle
 does not understand is rejected, as is one carrying the wrong secret or addressed
 to a different deployment.
+
+The version is `2` since the run gate moved a run's serialization from the
+World's enqueue (a graphile queue per run) into the dispatcher. A 2.x World
+accepts only `2`: a 1.x dispatcher has no gate, so its deliveries are refused
+(400, dead-lettered) rather than run unserialized. A 1.x World refuses a 2.x
+dispatcher's `2` the same way. The dispatcher and every deployment's build move
+to 2.0 together; see [upgrading to 2.0](guides/upgrading-to-2.0.md). Within a
+version the dispatcher may only add optional headers.
 
 ### Responses
 
@@ -729,37 +738,89 @@ running steps only.
 Delivery is **at-least-once**. The runtime is replay-based and idempotent per
 message; this package's job is to not break the assumptions that make that true.
 
-**Ordering is guaranteed per run, and only per run.** Every enqueue gives a
-message the graphile queue name `wfrun:<tenantId>:<runId>`, and graphile runs
-jobs sharing a queue name strictly one at a time. Without it, two claimed jobs
-replay one run's event log concurrently. All three enqueue paths — the World's
-own send, the dispatcher's reschedule, and boot recovery — must derive the name
-identically or the serialization is silently partial, so it has exactly one
-definition (`runQueueFor` in `src/dispatch-contract.ts`).
+**Ordering is guaranteed per run, and only per run.** The dispatcher holds a
+gate per run (`src/dispatcher/run-gate.ts`): one in-memory entry per
+`(tenantId, runId)` whose orchestrator delivery is in flight. A claimed
+orchestrator job whose run's gate is free takes it and is delivered; its
+graphile job stays locked until that delivery, re-runs included, is over.
+Without the gate, two claimed jobs replay one run's event log concurrently. The
+gate covers every orchestrator delivery whichever path enqueued it (the World's
+own send, the dispatcher's reschedule, boot recovery), because it is taken at
+claim time, by the run the message's body names.
 
-**Only a run's orchestrator deliveries wait in its run queue, and nothing
-bypasses it.** Every run is a spec 9 (single-orchestrator) run. Its step
-messages and a long wait's intermediate timer hops take no queue name: an
-orchestrator runs its inline steps for as long as they take, and one the
-dispatcher granted a live feed stays live up to 30 s more while it waits on a
-background step (eve's linger; 5 s while only a hook is open), so a step queued
-behind it would wait all of that out before it could start. A delivery that was
-not granted a feed does not linger. Its hook wakes wait in the queue too: the
-running orchestrator tails the run's log, so a resume or a cancel reaches it
-without a second delivery, and a second orchestrator would run an inline step
-the first is still running again. What the queue still lets through (a delivery that outlives its dispatch
-timeout) the in-band writer fence refuses. A message that names a run but
-carries no spec stamp (boot recovery rebuilds one from the run row) also waits
-in that run's queue.
+The gate is in-process because one dispatcher process owns the queue (the
+lifecycle advisory lock). Jobs carry no graphile queue name. A named queue per
+run, which 1.x used, cost every claim one row lock per run that had any job,
+due or not (graphile 0.16 locks every available queue row before it picks a
+job), and graphile never deletes queue rows, so it needed a timer hop for
+delayed deliveries and a periodic cleanup to stay cheap. A delayed delivery is
+now an ordinary flow job with a `run_at`.
 
-The wake a force-claim sends its victim queues on the victim's run like any
+**Only a run's orchestrator deliveries take its gate, and nothing bypasses
+it.** Every run is a spec 9 (single-orchestrator) run. Its step messages and a
+long wait's intermediate timer hops never take it (`orchestratorDeliveryRunId`
+in `src/dispatch-contract.ts`): an orchestrator runs its inline steps for as
+long as they take, and one the dispatcher granted a live feed stays live up to
+30 s more while it waits on a background step (eve's linger; 5 s while only a
+hook is open), so a step held behind it would wait all of that out before it
+could start. A delivery that was not granted a feed does not linger. Its hook
+wakes take the gate too: the running orchestrator tails the run's log, so a
+resume or a cancel reaches it without a second delivery, and a second
+orchestrator would run an inline step the first is still running again. What
+the gate still lets through (a delivery that outlives its dispatch timeout, a
+dispatcher that lost its ownership lock while its POSTs were in flight) the
+in-band writer fence refuses. A message that names a run but carries no spec
+stamp (boot recovery rebuilds one from the run row) also takes that run's gate.
+
+**A message that finds its run's gate held is coalesced or set aside, never
+lost.** Upstream world-postgres's rules, ported to the in-memory gate:
+
+- A _wake_ is an orchestrator message with none of `runInput`, `invoke` or
+  `hookInput` (`isCoalescibleWake`), on its first delivery. Its producer committed what it is for (a
+  step outcome, a `hook_received`, a cancellation, a due wait) before sending
+  it, so any later delivery of the run covers it. It becomes the run's single
+  pending wake (one carrying `hookResumeTiming` replaces one without; any other
+  is covered by the one kept) and its job completes undelivered.
+- A message delivered before (a continuation after a reschedule or a handoff,
+  a retry) is never coalesced, even without data: its attempt and delivery
+  counts are what the runtime caps a run by, and a re-run reports the holder's.
+- Any other message carries data a later delivery does not cover. Both go back
+  to the queue under their own key, due 1 s later, doubling each time they are
+  set aside, at most 30 s, with their attempt and delivery counts as they were:
+  a job throughout, and delivered once the gate is free.
+
+When the holder's POST returns `completed` and a wake is pending, the
+dispatcher clears it and POSTs again in place: the same job, live feed grant
+and activation lease, the holder's own message carrying the wake's
+`hookResumeTiming` and trace, the next delivery count, the same attempt. At
+most 32 re-runs, and none starts once the job has been held an hour (graphile
+hands out a lock older than four hours again).
+
+Once the holder will not run again in place, its gate _closes_: before a
+reschedule or handoff writes its continuation, on a retry or a dead letter
+before either is recorded, and at the re-run cap, the hold limit or shutdown.
+Closing re-adds the pending wake as an ordinary job first, while the holder's
+job is still locked and still owns its key; if that add fails, nothing more is
+written and the holder's job fails, so graphile redelivers it. A wake claimed
+while the gate is closing is not kept in memory but put back as a short-delayed
+job, like a data-bearing message. So once a continuation exists, no wake of the
+run lives only in memory. A pending wake is discarded only when a delivery of
+the same run started after it was recorded.
+
+A coalesced wake held its tenant's fairness slot only while it was handled,
+and never a live feed grant. A message the dedup filter would swallow
+(completed already, or in flight) goes straight to it and does not take the
+gate.
+
+The wake a force-claim sends its victim takes the victim's gate like any
 other delivery. The claimer's runtime publishes it from `Hook.claimedFrom` with
 an idempotency key of `hook-force-claim-<claimer hookId>`. Nothing is lost by
-waiting: the `hook_disposed{forceClaimedBy}` it announces committed before it
-was sent, and whichever replay of the victim runs next reads it.
+waiting or coalescing: the `hook_disposed{forceClaimedBy}` it announces
+committed before it was sent, and whichever replay of the victim runs next
+reads it.
 
-A step can be started by two deliveries at once. Its step message waits in no
-run queue, so past the owner's ownership lease (860 s by default) a step
+A step can be started by two deliveries at once. Its step message never takes
+the run's gate, so past the owner's ownership lease (860 s by default) a step
 message can be claimed while the orchestrator still runs the step inline, on
 any replica. So storage keeps the delivery that started a step on the step
 (`owner_message_id`), and refuses another delivery's `step_started` with a
@@ -774,20 +835,6 @@ failed read lets the start through.
 The fence ends when the owner's delivery does. A delivery past the dispatch
 timeout is aborted and its job unlocked while the step body may still run on
 its executor, and the owner's own redelivery may then run it again.
-
-Boot recovery releases a dead worker's lock on a flow job in no queue by the job
-itself, since there is no queue to find it by.
-
-This costs a sweep. graphile does not reclaim a queue row when its last job
-completes, so one row per run would accumulate for ever; the dispatcher runs
-graphile's own queue cleanup on an interval.
-
-It also costs every claim. graphile 0.16 locks every queue that holds any job,
-due or not, before it picks one, so a queue must not outlive the work that is
-due on it. A delivery due more than a minute out therefore waits as a timer job
-with no queue and returns to the run's queue when it is due; serialization
-covers the delivery, never the wait. See
-[delayed deliveries](operations/dispatcher.md#delayed-deliveries-and-claim-cost).
 
 **Deduplication is a bounded in-process filter, not a durable record.** Only
 messages carrying an idempotency key participate, and only a _completed_ dispatch
@@ -804,28 +851,42 @@ ordering later without re-checking that assumption.
 | failure                         | what happens                             | recovered by                                |
 | ------------------------------- | ---------------------------------------- | ------------------------------------------- |
 | agent crashes mid-step          | held POST fails → job fails              | graphile retry, then re-activation          |
-| dispatcher crashes mid-POST     | job and per-run queue stay locked        | ownership-gated unlock; graphile redelivers |
+| dispatcher crashes mid-POST     | job stays locked; in-memory gate is gone | ownership-gated unlock; graphile redelivers |
 | deployment archived or failed   | activation is not-activatable → terminal | should be unreachable; alarms               |
 | deployment unavailable or cold  | activation unavailable → retry           | graphile retry                              |
 | lease lapses during a long step | executor reaped mid-step                 | **prevented** by renewal, not recovered     |
 | `maxAttempts` exhausted         | graphile stops retrying                  | dead-letter quarantine + operator action    |
 | run fails at execution forever  | 5xx streak → dead-letter, redelivery off | quarantine + operator action                |
 | duplicate enqueue               | job key dedupes at enqueue               | by construction, keyed paths only           |
+| wake arrives mid-delivery       | coalesced into the holder                | in-place re-run, or re-added as a job       |
+
+A dispatcher that dies loses its gates and the pending wakes in them. The
+wakes' jobs had completed, but the holder's job was still locked and still
+owned its key (a pending wake is re-added before the holder writes anything
+else), so the unlock below hands it back to graphile, and its redelivery starts
+after every wake the dead process held.
 
 Boot recovery runs before the worker pool starts and only while the service holds
-a lifecycle PostgreSQL advisory lock. It joins active runs to their exact
-`wfrun:<tenant>:<run>` queue rows, collects the old random `locked_by` values,
-passes those ids to Graphile's `forceUnlockWorkers`, and then performs the
-run-keyed re-enqueue for the runs that have no job left. A job key alone cannot
-recover the run: it deduplicates or replaces a job but does not clear
-`_private_job_queues.locked_by`, whose stale threshold is four hours.
+a lifecycle PostgreSQL advisory lock. It collects the `locked_by` of every
+locked flow job (and of every locked `wfrun:` queue row a 1.x World's job left),
+which all belong to the dead generation, passes those ids to graphile's
+`forceUnlockWorkers`, and then performs the run-keyed re-enqueue for the runs
+that have no job left. A job key alone cannot recover the run: it deduplicates
+or replaces a job but does not clear `locked_by`, whose stale threshold is four
+hours. Last, it runs graphile's `GC_JOB_QUEUES` cleanup once, which deletes the
+`wfrun:` queue rows a 1.x World left that no longer hold a job.
 
-The re-enqueue is the narrow half. A run whose queue still holds a job graphile
-will deliver — due now, due later for a sleep, or locked by the worker id just
-released — needs nothing more: that job is its wake-up. Re-enqueueing beside it
+The re-enqueue is the narrow half. A run that still has a job graphile will
+deliver — due now, due later for a sleep, a step message, or locked by the
+worker id just released — needs nothing more: that job is its wake-up. The sweep
+finds a run's jobs by the run id the World copies onto every job's payload
+(`MessageData.runId`), and a 1.x World's job by its `wfrun:<tenant>:<run>`
+queue. A 1.x dispatcher's held timer (`eveland_wf_timers`) is not such a job:
+nothing claims that task any more, so its run is a candidate, and its replay
+re-arms the sleep from the wait's own deadline. Re-enqueueing beside a live job
 was correct (the handler replays) and expensive (one activation per run), and
 with a few hundred active runs on a few dozen deployments every restart became
-a cold-start storm. The sweep now skips those runs.
+a cold-start storm. The sweep skips those runs.
 
 It also skips runs that hold a hook. A hook is the run's other wake-up: whoever
 resolves it enqueues the run's next delivery through the World's own `queue()`,
@@ -963,7 +1024,24 @@ both ends of the system read the same names, because a name
 honoured by only one end produces a dispatcher that starts cleanly and then polls
 a database nothing writes to.
 
-## Known limitation
+## Known limitations
+
+**The run gate is per dispatcher process.** It serializes a run's orchestrator
+deliveries only because exactly one dispatcher process claims (the lifecycle
+advisory lock). A second process claiming the same jobs would have gates of its
+own and could deliver the same run beside the first; and a dispatcher that loses
+its lock keeps its in-flight POSTs running while its successor's boot recovery
+unlocks and redelivers them. Both overlaps are what the in-band writer fence is
+for. The executor process also serializes a run's orchestrator deliveries
+within itself (`@workflow/world-local`'s run gate inside `createQueueHandler`);
+the dispatcher's gate is what covers several executor processes behind one
+deployment. Pending wakes live in the gate too, so a dispatcher that dies loses
+them; each is covered by its holder's redelivery (see boot recovery).
+
+**Setting a message aside costs claims.** A message that carries data and
+finds its run's gate held is claimed again 1, 2, 4, … at most 30 s later until
+the gate is free, rather than released the moment it frees. Such messages are
+rare (a start message, a legacy hook's input), so the gate keeps no list of them.
 
 `resolveLatestDeploymentId` returns the deployment the process _is_, not the
 project's currently promoted one. eve calls it when a run starts with
@@ -990,9 +1068,10 @@ Named because each is a plausible next step and each has a reason to wait.
   tenant boundary and the full payoff of a single pool. It replaces WHERE-clause
   discipline with a boundary that cannot be forgotten.
 - **Multi-machine dispatcher replicas.** The current lifecycle advisory lock is
-  intentionally single-owner. Replicas require durable generation heartbeats,
-  worker-id-to-generation registration, expiry-aware unlock, and a per-run fence
-  before this guard can be relaxed; no in-memory claim state may become authoritative.
+  intentionally single-owner, and the run gate is in-memory because of it.
+  Replicas require durable generation heartbeats, worker-id-to-generation
+  registration, expiry-aware unlock, and a durable per-run gate (upstream
+  world-postgres's run lease table) before this guard can be relaxed.
 - **Row-level security and `SET ROLE`.** Hardening on top of the tenant
   predicate, not a replacement for it.
 - **At-rest payload encryption**, through `getEncryptionKeyForRun`.
@@ -1009,9 +1088,11 @@ Properties of these choices worth watching, as distinct from defects.
 - **`@workflow/*` is a moving beta target.** The `specVersion` range the
   runtime accepts is compiled into eve per release, so every eve bump has to
   re-verify the contract rather than assume it.
-- **A single dispatcher is a restart-pause single point of failure.** Keeping it
-  stateless — all claim state in Postgres — is what makes a restart a brief pause
-  plus boot recovery rather than data loss.
+- **A single dispatcher is a restart-pause single point of failure.** Keeping
+  every claim durable in Postgres is what makes a restart a brief pause plus boot
+  recovery rather than data loss. The run gate and its pending wakes are the one
+  in-memory exception, and a lost wake is covered by its holder's job, which
+  stays locked, and so redelivered, until the gate is released.
 - **graphile's jobs table is hot on a shared database**, with delete-on-complete
   churn. Autovacuum behaviour there is worth a metric.
 - **Payloads are unencrypted at rest** on a database every tenant shares.

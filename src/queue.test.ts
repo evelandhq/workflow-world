@@ -4,8 +4,8 @@
  * `createQueueHandler` receives what the dispatcher POSTs back.
  *
  * What is added on top of the port is the fork's own contract: the shared
- * job name, the per-run graphile `queueName`, the tenant flags, and the
- * dispatch-contract wrapper around eve's queue handler.
+ * job name, the run id on the payload, no graphile `queueName`, the tenant
+ * flags, and the dispatch-contract wrapper around eve's queue handler.
  */
 import { getQueueTopicPrefix } from "@workflow/world";
 import { createWorld } from "@workflow/world-local";
@@ -18,7 +18,6 @@ import {
   DISPATCH_VERSION_HEADER,
   FLOW_JOB_NAME,
   RUNTIME_SECRET_HEADER,
-  runQueueName,
 } from "./dispatch-contract.js";
 import { inflightDeliveries } from "./inflight.js";
 import { createQueue } from "./queue.js";
@@ -114,23 +113,26 @@ describe("postgres queue", () => {
           // a message that omits them is undeliverable.
           tenantId: TENANT,
           deploymentId: DEPLOYMENT,
+          // Read by boot recovery, which cannot decode the body in SQL.
+          runId: "run_01ABC",
         }),
         expect.objectContaining({
           jobKey: "step_01ABC",
           maxAttempts: 49,
           runAt: new Date("2024-01-01T00:00:05.000Z"),
-          // Fork additions: per-run serialization, and the fairness flag the
-          // dispatcher's `forbiddenFlags` callback throttles on.
-          queueName: runQueueName(TENANT, "run_01ABC"),
+          // Fork addition: the fairness flag the dispatcher's
+          // `forbiddenFlags` callback throttles on.
           flags: [`project:${TENANT}`],
         }),
       );
+      const options = vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2];
+      expect(options).not.toHaveProperty("queueName");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("keeps a spec 9 run's step messages out of its run queue and deduplicates them by key", async () => {
+  it("deduplicates a spec 9 run's step messages by key", async () => {
     const queue = buildQueue(buildConfig(), pool);
     await queue.start();
 
@@ -147,7 +149,9 @@ describe("postgres queue", () => {
     );
   });
 
-  it("serializes a spec 9 run's orchestrator messages, a hook wake included, in its run queue", async () => {
+  it("writes a run's orchestrator messages with no graphile queue, the run id on the payload", async () => {
+    // Serializing them is the dispatcher's run gate's job; a named queue per
+    // run cost every claim a row lock per run and was never deleted.
     const queue = buildQueue(buildConfig(), pool);
     await queue.start();
 
@@ -157,13 +161,20 @@ describe("postgres queue", () => {
       hookResumeTiming: { resumeRequestedAtMs: 1, queuePublishRequestedAtMs: 2 },
     });
 
-    const options = vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[2];
-    expect(options).toEqual(
-      expect.objectContaining({
-        queueName: runQueueName(TENANT, "wrun_SPEC9"),
-        flags: [`project:${TENANT}`],
-      }),
-    );
+    const [, payload, options] = vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)!;
+    expect(payload).toEqual(expect.objectContaining({ runId: "wrun_SPEC9" }));
+    expect(options).toEqual(expect.objectContaining({ flags: [`project:${TENANT}`] }));
+    expect(options).not.toHaveProperty("queueName");
+  });
+
+  it("puts no run id on a health check's payload", async () => {
+    const queue = buildQueue(buildConfig(), pool);
+    await queue.start();
+
+    await queue.queue("__wkf_workflow_greet", { __healthCheck: true, runId: "wrun_PROBE" });
+
+    const payload = vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)?.[1];
+    expect(payload).not.toHaveProperty("runId");
   });
 
   it("addresses a cross-deployment start to the target, not to the deployment that enqueued it", async () => {
@@ -203,10 +214,9 @@ describe("postgres queue", () => {
     }
   });
 
-  it("never writes a timer from a deployment", async () => {
-    // Only the dispatcher creates timers: a deployment's world is baked
-    // at build time, and a job only a newer dispatcher could claim would wait
-    // on that upgrade.
+  it("writes a delayed delivery as an ordinary flow job due later", async () => {
+    // No timer hop: a job that is not due costs a claim nothing now that it
+    // waits in no named queue.
     const queue = buildQueue(buildConfig(), pool);
     await queue.start();
 
@@ -216,11 +226,10 @@ describe("postgres queue", () => {
       { delaySeconds: 82_800 },
     );
 
-    expect(workerUtilsMock.addJob).toHaveBeenCalledWith(
-      FLOW_JOB_NAME,
-      expect.anything(),
-      expect.objectContaining({ queueName: runQueueName(TENANT, "wrun_01SLEEP") }),
-    );
+    const [jobName, , options] = vi.mocked(workerUtilsMock.addJob).mock.calls.at(-1)!;
+    expect(jobName).toBe(FLOW_JOB_NAME);
+    expect(options).toEqual(expect.objectContaining({ runAt: expect.any(Date) }));
+    expect(options).not.toHaveProperty("queueName");
   });
 
   it("leaves the flow route to the dispatch check and never writes a queue auth key", async () => {
@@ -245,6 +254,17 @@ describe("postgres queue", () => {
       dispatchRequest({ [DISPATCH_VERSION_HEADER]: String(DISPATCH_VERSION + 1) }),
     );
     expect(newerDispatcher.status).toBe(400);
+
+    // A 1.x dispatcher has no run gate, and this World enqueues without the
+    // per-run queue it relied on: its deliveries are refused, loudly, rather
+    // than run unserialized. Refused before the secret is even checked.
+    process.env.WORKFLOW_WORLD_RUNTIME_SECRET = SECRET;
+    const olderDispatcher = await handler(signedRequest({ [DISPATCH_VERSION_HEADER]: "1" }));
+    expect(olderDispatcher.status).toBe(400);
+    expect(await olderDispatcher.json()).toEqual({
+      error: expect.stringContaining("Upgrade the dispatcher"),
+    });
+    delete process.env.WORKFLOW_WORLD_RUNTIME_SECRET;
 
     // Declares dispatch but the deployment holds no secret to check it against.
     const unsigned = await handler(signedRequest({ [RUNTIME_SECRET_HEADER]: "" }));

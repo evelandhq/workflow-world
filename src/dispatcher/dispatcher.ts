@@ -44,10 +44,16 @@ export type DispatcherDeps = {
   leaseRenewIntervalMs: number;
   /** The TTL the control plane issues; sets how many missed renewals fit. */
   activationLeaseTtlMs: number;
+  /**
+   * Adds the message as a job due in `delaySeconds`, under its own key. For a
+   * reschedule, and for a message the run gate set aside; `maxAttempts` is the
+   * attempts the new job gets, graphile's full budget when absent.
+   */
   reenqueue: (input: {
     jobName: string;
     message: MessageData;
     delaySeconds: number;
+    maxAttempts?: number;
   }) => Promise<void>;
   /**
    * `jobName`/`queueName` are optional only because a caller may not have them;
@@ -121,6 +127,20 @@ export async function dispatchMessage(
     deliveryCount?: number;
     /** Granted a live event feed (`createLiveFeedGrants`); sent as `LIVE_FEED_HEADER`. */
     liveFeed?: boolean;
+    /**
+     * Asked after each POST the executor answers as completed: a body returned
+     * is POSTed again in place, under the same activation lease, as a coalesced
+     * re-run (`run-gate.ts`). A re-run reports the next delivery count and the
+     * same attempt, so the runtime reads the log as on a redelivery.
+     */
+    rerun?: () => Buffer | undefined;
+    /**
+     * Awaited after the executor answers `{ timeoutSeconds }` and before the
+     * continuation is written: the run gate closes and puts its pending wake
+     * back on the queue first (`run-gate.ts`). If it throws, no continuation is
+     * written, so the holder's job keeps its key and graphile redelivers it.
+     */
+    beforeContinuation?: () => Promise<void>;
   },
   deps: DispatcherDeps,
 ): Promise<DispatchOutcome> {
@@ -166,6 +186,13 @@ export async function dispatchMessage(
     };
   }
 
+  const failureKey =
+    affinity.runId === undefined ? undefined : `${message.tenantId}:${affinity.runId}`;
+  const firstDeliveryCount = input.deliveryCount ?? input.attempt;
+  // What the last POST carried: the message's own body, or a coalesced
+  // re-run's (`input.rerun`), which a reschedule passes on.
+  let body = message.data;
+  let reruns = 0;
   const result: VqsResult = await withRenewedLease(
     {
       client: deps.activation,
@@ -179,32 +206,39 @@ export async function dispatchMessage(
           consecutiveFailures,
         }),
     },
-    (signal) =>
-      postVqsMessage({
-        ...(activation.activation.endpointPort === undefined
-          ? {}
-          : { endpointPort: activation.activation.endpointPort }),
-        ...(activation.activation.endpointUrl === undefined
-          ? {}
-          : { endpointUrl: activation.activation.endpointUrl }),
-        queueName: input.queueName,
-        messageId: message.messageId,
-        attempt: input.attempt,
-        deliveryCount: input.deliveryCount ?? input.attempt,
-        body: message.data,
-        ...(message.headers ? { headers: message.headers } : {}),
-        tenantId: message.tenantId,
-        deploymentId: affinity.deploymentId,
-        ...(affinity.runId ? { runId: affinity.runId } : {}),
-        runtimeSecret: deps.runtimeSecret,
-        timeoutMs: deps.dispatchTimeoutMs,
-        signal,
-        ...(input.liveFeed ? { liveFeed: true } : {}),
-      }),
+    async (signal) => {
+      for (;;) {
+        const posted = await postVqsMessage({
+          ...(activation.activation.endpointPort === undefined
+            ? {}
+            : { endpointPort: activation.activation.endpointPort }),
+          ...(activation.activation.endpointUrl === undefined
+            ? {}
+            : { endpointUrl: activation.activation.endpointUrl }),
+          queueName: input.queueName,
+          messageId: message.messageId,
+          attempt: input.attempt,
+          deliveryCount: firstDeliveryCount + reruns,
+          body,
+          ...(message.headers ? { headers: message.headers } : {}),
+          tenantId: message.tenantId,
+          deploymentId: affinity.deploymentId,
+          ...(affinity.runId ? { runId: affinity.runId } : {}),
+          runtimeSecret: deps.runtimeSecret,
+          timeoutMs: deps.dispatchTimeoutMs,
+          signal,
+          ...(input.liveFeed ? { liveFeed: true } : {}),
+        });
+        if (posted.type !== "completed" || signal.aborted) return posted;
+        if (failureKey !== undefined) deps.executorFailures?.reset(failureKey);
+        const next = input.rerun?.();
+        if (next === undefined) return posted;
+        body = next;
+        reruns += 1;
+      }
+    },
   );
 
-  const failureKey =
-    affinity.runId === undefined ? undefined : `${message.tenantId}:${affinity.runId}`;
   if (result.type === "completed") {
     if (failureKey !== undefined) deps.executorFailures?.reset(failureKey);
     return { type: "completed" };
@@ -216,12 +250,16 @@ export async function dispatchMessage(
     // lose the wake-up. The message id is preserved deliberately: the runtime
     // uses it as the step-ownership lease, and on a spec 9 run as the creator of
     // the steps and waits a delivery writes. On a spec 9 run
-    // `{ timeoutSeconds: 0 }` is a handoff (`continuationOf`).
+    // `{ timeoutSeconds: 0 }` is a handoff (`continuationOf`). After coalesced
+    // re-runs the continuation carries the body last delivered and counts every
+    // re-run as a delivery, as upstream does.
+    const { setAside: _setAside, ...delivered } = message;
+    await input.beforeContinuation?.();
     await deps.reenqueue({
       jobName: input.jobName,
       message: continuationOf(
-        message,
-        { attempt: input.attempt, deliveryCount: input.deliveryCount ?? input.attempt },
+        { ...delivered, data: body },
+        { attempt: input.attempt, deliveryCount: firstDeliveryCount + reruns },
         result.timeoutSeconds,
         readBody(message),
       ),
@@ -428,7 +466,7 @@ export type LiveFeedGrants = ReturnType<typeof createLiveFeedGrants>;
  *
  * Only messages carrying an `idempotencyKey` participate, which is upstream's rule
  * too: without one there is nothing stable to key on, and ordering for those is
- * the per-run graphile queue's job instead.
+ * the run gate's job instead (`run-gate.ts`).
  *
  * Deliberately in-process and bounded. A durable table would cost a write per
  * message on the hottest table in a database every tenant shares, and it would
@@ -488,6 +526,13 @@ export function createMessageDedup(input: { limit?: number } = {}) {
       inflight.set(idempotencyKey, execution);
       await execution;
       return outcome;
+    },
+    /** Whether `run` would swallow this key: completed already, or in flight. */
+    has(idempotencyKey: string | undefined): boolean {
+      return (
+        idempotencyKey !== undefined &&
+        (completed.has(idempotencyKey) || inflight.has(idempotencyKey))
+      );
     },
     stats(): { completed: number; inflight: number } {
       return { completed: completed.size, inflight: inflight.size };

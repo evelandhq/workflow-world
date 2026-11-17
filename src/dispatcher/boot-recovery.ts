@@ -2,22 +2,28 @@ import { MessageData } from "../message.js";
 import type { WorkerUtils } from "graphile-worker";
 import type { Pool } from "pg";
 import { FLOW_JOB_NAME } from "./runner.js";
-import { runQueueName, tenantFlag, TIMER_JOB_NAME } from "../dispatch-contract.js";
+import { LEGACY_RUN_QUEUE_PREFIX, tenantFlag } from "../dispatch-contract.js";
 import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
 
 /**
  * Recovery after a dispatcher that died mid-dispatch.
  *
- * A job key only deduplicates jobs. It does not clear the per-run queue's
- * `locked_by`, so re-enqueueing alone leaves a replacement job unavailable until
- * Graphile's four-hour stale-lock threshold. The service therefore calls the
- * lock-reclaiming entry point only after taking lifecycle ownership and before
- * starting its worker pool. At that point every worker id found on an active run's
- * exact queue, or on a flow job in no queue, belongs to the dead generation and
- * can be passed to Graphile's `forceUnlockWorkers` safely.
+ * A job a dead dispatcher was delivering stays locked by that dispatcher's
+ * random worker id until graphile's four-hour stale-lock threshold, and a job
+ * key does not clear the lock. The service therefore calls the lock-reclaiming
+ * entry point only after taking lifecycle ownership and before starting its
+ * worker pool. At that point every worker id holding a flow job belongs to the
+ * dead generation and can be passed to graphile's `forceUnlockWorkers` safely.
  *
  * Standalone callers deliberately default to re-enqueue only. Unlocking while a
- * pool is already running could clear a live worker's queue lock.
+ * pool is already running could clear a live worker's lock.
+ *
+ * Jobs a 1.x World wrote wait in a graphile named queue per run
+ * (`wfrun:<tenant>:<run>`) and carry no run id on their payload. They are
+ * still ordinary flow jobs this dispatcher claims, so they count as their run's
+ * job (found through the queue's name), a dead worker's lock on their queue is
+ * released with the job's, and once they are gone graphile's `GC_JOB_QUEUES`
+ * cleanup, run once per boot here, deletes the queue rows they leave behind.
  */
 
 /**
@@ -27,15 +33,17 @@ import { MAX_GRAPHILE_JOB_ATTEMPTS } from "../queue-policy.js";
  * It is safe to run repeatedly: `jobKey` collapses duplicates, and the workflow
  * handler replays the event log rather than re-executing completed work.
  *
- * A run whose per-run queue still holds a retryable job is not a candidate.
- * That job is the run's own wake-up — a delayed continuation for a sleep, a
- * pending first delivery, or a delivery the dead dispatcher was holding, which
- * the lock reclaim above makes claimable again. A continuation the dispatcher
- * holds as a timer outside the queue (`timers.ts`) counts the same way: it is
- * still the run's job, just not on the queue yet. Re-enqueueing beside it added
- * nothing the run needed and cost one cold-start activation per run: with a
- * few hundred active runs across a few dozen deployments, every dispatcher
- * restart became a cold-start storm.
+ * A run that still has a job graphile will deliver is not a candidate, found by
+ * the run id on the job's payload (`MessageData.runId`). That job is the run's
+ * own wake-up: a delayed continuation for a sleep, a pending first delivery, a
+ * step message, or a delivery the dead dispatcher was holding, which the lock
+ * reclaim above makes claimable again. Re-enqueueing beside it added nothing
+ * the run needed and cost one cold-start activation per run: with a few
+ * hundred active runs across a few dozen deployments, every dispatcher restart
+ * became a cold-start storm. A 1.x dispatcher's held timer
+ * (`eveland_wf_timers`) is not such a job: nothing claims that task any more,
+ * so a run whose only job it is gets a recovery replay, which re-arms its
+ * sleep from the wait's own deadline.
  *
  * A run that holds a hook is not a candidate either, unless it is also parked
  * on a timer. A hook is the run's other wake-up: the party that resolves it
@@ -89,15 +97,15 @@ type BootRecoveryInput = {
   pacing?: BootRecoveryPacing;
   /**
    * The host's say over what gets replayed. Called once with every candidate
-   * (an active run with no live job on its queue; runs that still have one are
-   * never offered, because nothing would be enqueued for them anyway) —
-   * one call rather than a per-run predicate, because the question the host
-   * answers ("is this run's Deployment still activatable?") is a control-plane
-   * lookup it will want to batch. Only the runs returned are re-enqueued;
-   * entries not in the candidate list are ignored. Skipped runs stay exactly
-   * as they were — still active, still candidates for the next sweep — so a
-   * host that wants them gone for good must settle them through
-   * `reconcileWorkflowRuns` instead of filtering them forever.
+   * (an active run with no live job; runs that still have one are never
+   * offered, because nothing would be enqueued for them anyway) — one call
+   * rather than a per-run predicate, because the question the host answers
+   * ("is this run's Deployment still activatable?") is a control-plane lookup
+   * it will want to batch. Only the runs returned are re-enqueued; entries not
+   * in the candidate list are ignored. Skipped runs stay exactly as they were
+   * — still active, still candidates for the next sweep — so a host that wants
+   * them gone for good must settle them through `reconcileWorkflowRuns`
+   * instead of filtering them forever.
    *
    * Throwing aborts the sweep with nothing partially enqueued beyond what the
    * loop had already reached — which is nothing, since the filter runs first.
@@ -127,39 +135,39 @@ async function recoverActiveRunsForAllTenants(
     name: string;
     deployment_id: string;
     queue_namespace: string;
-    locked_by: string | null;
     has_live_job: boolean;
     has_hook: boolean;
     has_timer: boolean;
   }>(
-    `with timers as (
-       -- Deliveries held outside their run's queue until they are due
-       -- (timers.ts). Each records the queue it goes back to. Tested with IN
-       -- below, which Postgres runs as one hashed subplan: a join here was
-       -- planned as a nested loop over every run and every timer.
-       select distinct jobs.payload ->> 'runQueue' as run_queue
+    `with live_jobs as (
+       -- Every flow job graphile will still deliver, by the run its payload
+       -- names: due now, due later, or locked by a worker the reclaim below is
+       -- about to release. One that has spent its attempts is left behind by
+       -- graphile and delivers nothing, so it does not count. Built once and
+       -- tested with IN below, which Postgres runs as one hashed subplan: the
+       -- payload has no index, and a correlated lookup per run would read the
+       -- jobs table once per active run.
+       select distinct jobs.payload ->> 'tenantId' as tenant_id,
+                       jobs.payload ->> 'runId' as run_id
          from graphile_worker._private_jobs as jobs
          join graphile_worker._private_tasks as tasks on tasks.id = jobs.task_id
         where tasks.identifier = $1
           and jobs.attempts < jobs.max_attempts
+          and jobs.payload ->> 'runId' is not null
+     ), legacy_jobs as (
+       -- The same for a job a 1.x World wrote: no run id on its payload, the
+       -- run named by its per-run queue instead.
+       select distinct queues.queue_name
+         from graphile_worker._private_jobs as jobs
+         join graphile_worker._private_job_queues as queues on queues.id = jobs.job_queue_id
+        where queues.queue_name like $2
+          and jobs.attempts < jobs.max_attempts
      )
      select runs.tenant_id, runs.id, runs.name, runs.deployment_id, runs.queue_namespace,
-            queues.locked_by,
-            -- A job graphile will still deliver: due now, due later, or locked
-            -- by a worker the reclaim below is about to release. One that has
-            -- spent its attempts is left behind by graphile and delivers
-            -- nothing, so it does not count. A held timer is the same job
-            -- waiting outside the queue, so it counts too. A hook wake in no
-            -- queue is not seen here, so a run left with one may also get a
-            -- recovery replay: one replay too many, never one too few.
-            (exists (
-              select 1
-                from graphile_worker._private_jobs as jobs
-               where jobs.job_queue_id = queues.id
-                 and jobs.attempts < jobs.max_attempts
-            ) or concat('wfrun:', runs.tenant_id, ':', runs.id) in (
-              select timers.run_queue from timers
-            )) as has_live_job,
+            ((runs.tenant_id, runs.id) in (select tenant_id, run_id from live_jobs)
+              or concat($3::text, runs.tenant_id, ':', runs.id) in (
+                select queue_name from legacy_jobs
+              )) as has_live_job,
             -- A hook the run still holds: its resolution enqueues the run's
             -- next delivery on its own, so boot needs to write nothing.
             exists (
@@ -181,8 +189,6 @@ async function recoverActiveRunsForAllTenants(
                  and waits.resume_at is not null
             ) as has_timer
        from workflow.workflow_runs as runs
-       left join graphile_worker._private_job_queues as queues
-         on queues.queue_name = concat('wfrun:', runs.tenant_id, ':', runs.id)
       where runs.status in ('pending', 'running')
         -- A dead letter is terminal for dispatch, not a workflow-authored
         -- run_failed event. Keep it operator-replayable without recreating the
@@ -195,36 +201,36 @@ async function recoverActiveRunsForAllTenants(
              and dead.resolved_at is null
         )
       order by runs.tenant_id, runs.created_at`,
-    [TIMER_JOB_NAME],
+    [FLOW_JOB_NAME, `${LEGACY_RUN_QUEUE_PREFIX}%`, LEGACY_RUN_QUEUE_PREFIX],
   );
 
-  // Lock reclaim covers ALL candidates, filtered or not. Every worker id found
-  // here belongs to the dead generation, and a filtered-out run's queue must
-  // not stay locked: the host may settle or re-admit it later, and a stale lock
-  // would hold its next legitimate delivery for graphile's four-hour threshold.
-  const oldWorkerIds = new Set(rows.flatMap((row) => (row.locked_by ? [row.locked_by] : [])));
   if (reclaimOldWorkerLocks) {
-    // A job in no queue shows a dead worker's lock on the job alone: a step
-    // message or a wait's timer hop, which wait in no run queue
-    // (`runQueueFor`), or a held timer the dead generation was promoting
-    // (`timers.ts`). Left locked, the step or wait would stall for graphile's
-    // four-hour threshold, and a timer would count as the run's live job above
-    // for as long. No graphile index covers locked jobs, so this reads the
-    // whole job table, once per boot.
-    const { rows: unqueued } = await input.pool.query<{ locked_by: string }>(
-      `select distinct jobs.locked_by
+    // Every worker id holding a flow job belongs to the dead generation: this
+    // process holds ownership and its own pool has not started. That covers
+    // every run's jobs, filtered or not (the host may settle or re-admit a
+    // filtered run later, and a stale lock would hold its next delivery for
+    // graphile's four-hour threshold), step messages and wait hops included.
+    // A 1.x World's job also locked its run queue, which is released with it.
+    // No graphile index covers locked jobs, so this reads the whole job table,
+    // once per boot.
+    const { rows: locks } = await input.pool.query<{ locked_by: string }>(
+      `select jobs.locked_by
          from graphile_worker._private_jobs as jobs
          join graphile_worker._private_tasks as tasks on tasks.id = jobs.task_id
-        where tasks.identifier = any($1)
-          and jobs.job_queue_id is null
-          and jobs.locked_by is not null`,
-      [[FLOW_JOB_NAME, TIMER_JOB_NAME]],
+        where tasks.identifier = $1
+          and jobs.locked_by is not null
+       union
+       select queues.locked_by
+         from graphile_worker._private_job_queues as queues
+        where queues.queue_name like $2
+          and queues.locked_by is not null`,
+      [FLOW_JOB_NAME, `${LEGACY_RUN_QUEUE_PREFIX}%`],
     );
-    for (const { locked_by } of unqueued) oldWorkerIds.add(locked_by);
-    if (oldWorkerIds.size > 0) {
-      await input.workerUtils.forceUnlockWorkers([...oldWorkerIds]);
+    const oldWorkerIds = [...new Set(locks.map((row) => row.locked_by))];
+    if (oldWorkerIds.length > 0) {
+      await input.workerUtils.forceUnlockWorkers(oldWorkerIds);
       input.log?.("unlocked old dispatcher workers during boot recovery", {
-        workers: oldWorkerIds.size,
+        workers: oldWorkerIds.length,
       });
     }
   }
@@ -313,6 +319,8 @@ async function recoverActiveRunsForAllTenants(
       // `__wkf_workflow___wkf_workflow_<name>`, which eve rejects with a 400 —
       // and a 400 is non-retryable, so every recovered run dead-lettered.
       id: row.name,
+      // Unstamped, so the dispatcher treats it as an orchestrator delivery of
+      // the run and it takes the run's gate like the run's other deliveries.
       data: Buffer.from(JSON.stringify({ runId: row.id })),
       attempt: 1,
       messageId: messageId as MessageData["messageId"],
@@ -322,6 +330,7 @@ async function recoverActiveRunsForAllTenants(
       // the live enqueue path produces, and `getQueueTopicPrefix` rejects `''`
       // rather than treating it as the default.
       ...(row.queue_namespace ? { queueNamespace: row.queue_namespace } : {}),
+      runId: row.id,
     };
     // Wave 0 is pinned to the sweep's start rather than left to graphile's
     // `now()`, so every job in a wave carries the same due time.
@@ -330,10 +339,9 @@ async function recoverActiveRunsForAllTenants(
       await input.workerUtils.addJob(FLOW_JOB_NAME, MessageData.encode(message), {
         // Stable per run, so a recovery sweep that overlaps a still-queued job
         // collapses instead of doubling it. It does NOT collapse against the
-        // World's own job for that run (whose key is a fresh ULID) — the queue
-        // name below is what keeps those two from running concurrently.
+        // World's own job for that run (whose key is a fresh ULID); the
+        // dispatcher's run gate is what keeps those two from running at once.
         jobKey: messageId,
-        queueName: runQueueName(row.tenant_id, row.id),
         maxAttempts: MAX_GRAPHILE_JOB_ATTEMPTS,
         flags: [tenantFlag(row.tenant_id)],
         ...(pacing ? { runAt: new Date(sweepStartedAt + wave * pacing.waveIntervalMs) } : {}),
@@ -350,6 +358,19 @@ async function recoverActiveRunsForAllTenants(
 
   if (enqueued > 0) {
     input.log?.("re-enqueued active runs on boot", { runs: enqueued });
+  }
+
+  if (reclaimOldWorkerLocks) {
+    // Nothing creates a queue row any more, but a 1.x World's jobs left one per
+    // run, and graphile never deletes them on its own: each one that holds a
+    // job costs every claim a row lock. graphile's own cleanup deletes the rows
+    // that hold no job (and are unlocked, which the reclaim above saw to). A
+    // row whose job is still queued outlives this boot and goes at the next.
+    try {
+      await input.workerUtils.cleanup({ tasks: ["GC_JOB_QUEUES"] });
+    } catch (error) {
+      input.log?.("job queue cleanup failed during boot recovery", { error: String(error) });
+    }
   }
   return enqueued;
 }

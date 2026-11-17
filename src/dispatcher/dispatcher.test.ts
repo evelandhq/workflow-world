@@ -179,7 +179,7 @@ describe("dispatch outcomes", () => {
     expect(seen["x-vqs-message-id"]).toBe("msg_1");
     expect(seen["x-vqs-message-attempt"]).toBe("1");
     expect(seen["x-vqs-message-delivery-count"]).toBe("1");
-    expect(seen[DISPATCH_VERSION_HEADER]).toBe("1");
+    expect(seen[DISPATCH_VERSION_HEADER]).toBe("2");
     expect(seen[RUNTIME_SECRET_HEADER]).toBe("s3cret");
     // The internal service token must never reach a tenant process: it
     // authorizes lease operations on every deployment on the host.
@@ -253,6 +253,72 @@ describe("dispatch outcomes", () => {
         }),
       }),
     );
+  });
+
+  test("a coalesced re-run POSTs again under the same lease, counting it as a delivery", async () => {
+    const seen: Array<{ count: string; attempt: string; id: string; body: unknown }> = [];
+    const port = await startFakeAgent(({ headers, body }) => {
+      seen.push({
+        count: headers["x-vqs-message-delivery-count"] as string,
+        attempt: headers["x-vqs-message-attempt"] as string,
+        id: headers["x-vqs-message-id"] as string,
+        body: JSON.parse(body.toString("utf8")),
+      });
+      // The second re-run is told to sleep.
+      return seen.length < 3
+        ? { status: 200, body: JSON.stringify({ ok: true }) }
+        : { status: 200, body: JSON.stringify({ timeoutSeconds: 30 }) };
+    });
+    const activation = activationClient(
+      { type: "activated", activation: { leaseId: "l", endpointPort: port } },
+      port,
+    );
+    const reenqueue = vi.fn(async () => {});
+    const d = deps({ activation, reenqueue });
+    const holder = message({
+      data: Buffer.from(JSON.stringify({ runId: "wrun_1", runSpecVersion: 9 })),
+    });
+    const rerunBodies = [
+      Buffer.from(JSON.stringify({ runId: "wrun_1", runSpecVersion: 9, hookResumeTiming: 1 })),
+      Buffer.from(JSON.stringify({ runId: "wrun_1", runSpecVersion: 9, hookResumeTiming: 2 })),
+      Buffer.from(JSON.stringify({ never: "sent" })),
+    ];
+    const rerun = vi.fn(() => rerunBodies.shift());
+
+    await expect(
+      dispatchMessage(
+        {
+          message: holder,
+          jobName: "eveland_wf_flows",
+          queueName: fullQueueName(holder),
+          attempt: 2,
+          deliveryCount: 4,
+          rerun,
+        },
+        d,
+      ),
+    ).resolves.toEqual({ type: "rescheduled", timeoutSeconds: 30 });
+
+    // Asked only after a completed POST, so not after the reschedule.
+    expect(rerun).toHaveBeenCalledTimes(2);
+    expect(seen.map(({ count, attempt, id }) => ({ count, attempt, id }))).toEqual([
+      { count: "4", attempt: "2", id: "msg_1" },
+      { count: "5", attempt: "2", id: "msg_1" },
+      { count: "6", attempt: "2", id: "msg_1" },
+    ]);
+    expect(seen[2]!.body).toMatchObject({ hookResumeTiming: 2 });
+    // One activation, one lease, for the delivery and its re-runs.
+    expect(activation.activate).toHaveBeenCalledOnce();
+    expect(activation.release).toHaveBeenCalledOnce();
+    // The continuation carries the body last delivered and every delivery so far.
+    expect(reenqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delaySeconds: 30,
+        message: expect.objectContaining({ messageId: "msg_1", deliveryOffset: 6 }),
+      }),
+    );
+    const continued = (reenqueue.mock.calls[0] as unknown as [{ message: MessageData }])[0].message;
+    expect(JSON.parse(continued.data.toString("utf8"))).toMatchObject({ hookResumeTiming: 2 });
   });
 
   test("a 5xx is retryable", async () => {
