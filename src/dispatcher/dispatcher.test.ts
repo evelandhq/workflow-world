@@ -7,6 +7,7 @@ import type { ActivationClient, ActivationOutcome } from "./activation-client.js
 import {
   createExecutorFailureTracker,
   createFairness,
+  createLiveFeedGrants,
   createMessageDedup,
   createRunLookup,
   type DispatchOutcome,
@@ -465,6 +466,59 @@ describe("fairness", () => {
     fairness.release("p_alpha");
     expect(fairness.forbiddenFlags()).toEqual([]);
     expect(fairness.snapshot()).toEqual({});
+  });
+});
+
+describe("live feed grants", () => {
+  function grantAll(
+    grants: ReturnType<typeof createLiveFeedGrants>,
+    tenantId: string,
+    attempts: number,
+  ) {
+    let granted = 0;
+    for (let i = 0; i < attempts; i++) if (grants.tryAcquire(tenantId)) granted++;
+    return granted;
+  }
+
+  test("at most half the concurrency, rounded down, across tenants", () => {
+    const grants = createLiveFeedGrants({ concurrency: 9, maxInFlightPerTenant: 16 });
+    expect(grantAll(grants, "p_alpha", 3)).toBe(3);
+    expect(grantAll(grants, "p_beta", 3)).toBe(1);
+    expect(grants.snapshot()).toMatchObject({ total: 4, limit: 4 });
+  });
+
+  test("at most half the tenant's ceiling, rounded down", () => {
+    const grants = createLiveFeedGrants({ concurrency: 32, maxInFlightPerTenant: 5 });
+    expect(grantAll(grants, "p_alpha", 5)).toBe(2);
+    // Another tenant has its own half.
+    expect(grantAll(grants, "p_beta", 5)).toBe(2);
+  });
+
+  test("a tenant ceiling of 1 still grants one", () => {
+    const grants = createLiveFeedGrants({ concurrency: 8, maxInFlightPerTenant: 1 });
+    expect(grantAll(grants, "p_alpha", 3)).toBe(1);
+  });
+
+  test("a concurrency of 1 grants none, 2 and 3 grant one", () => {
+    expect(
+      grantAll(createLiveFeedGrants({ concurrency: 1, maxInFlightPerTenant: 8 }), "p", 4),
+    ).toBe(0);
+    expect(
+      grantAll(createLiveFeedGrants({ concurrency: 2, maxInFlightPerTenant: 8 }), "p", 4),
+    ).toBe(1);
+    expect(
+      grantAll(createLiveFeedGrants({ concurrency: 3, maxInFlightPerTenant: 8 }), "p", 4),
+    ).toBe(1);
+  });
+
+  test("a release frees the grant and forgets the tenant; a stray release is a no-op", () => {
+    const grants = createLiveFeedGrants({ concurrency: 2, maxInFlightPerTenant: 8 });
+    expect(grants.tryAcquire("p_alpha")).toBe(true);
+    expect(grants.tryAcquire("p_beta")).toBe(false);
+    grants.release("p_alpha");
+    grants.release("p_alpha");
+    expect(grants.snapshot()).toMatchObject({ total: 0, tenants: {} });
+    expect(grants.tryAcquire("p_beta")).toBe(true);
   });
 });
 

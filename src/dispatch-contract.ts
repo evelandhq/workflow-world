@@ -185,9 +185,11 @@ export function secretMatches(expected: string, received: string | null | undefi
  *
  * A spec 9 run's step messages and a long wait's intermediate timer hops are
  * not orchestrator deliveries and wait in no run queue (upstream's
- * `singleOrchestratorRunIdOf`): an orchestrator that waits on a background step
- * stays live for a while, and a step queued behind it would wait out that
- * linger before it could even start.
+ * `singleOrchestratorRunIdOf`): an orchestrator runs inline steps for as long
+ * as they take, and one the dispatcher granted a live event feed
+ * (`LIVE_FEED_HEADER`) stays live up to 30 s more while it waits on a
+ * background step (eve's linger), so a step queued behind it would wait all
+ * of that out before it could even start.
  *
  * This World creates only spec 9 runs, and the runtime stamps every message of
  * one with its version. A message that names a run but carries no stamp (boot
@@ -207,15 +209,36 @@ function isSingleOrchestratorRunMessage(body: unknown): boolean {
   return (messageRunSpecVersion(body) ?? 0) >= SPEC_VERSION_SINGLE_ORCHESTRATOR;
 }
 
+/**
+ * The run a message is an orchestrator delivery for, or `undefined` when it is
+ * not one: a spec 9 run's step message or timer hop, or a body that names no
+ * run. A message that names a run but carries no spec stamp counts as one.
+ */
+export function orchestratorDeliveryRunId(body: unknown): string | undefined {
+  return isSingleOrchestratorRunMessage(body) ? singleOrchestratorRunIdOf(body) : bodyRunId(body);
+}
+
 /** The run queue a message waits in, or `undefined` when it waits in none. */
 export function runQueueFor(tenantId: string, body: unknown): string | undefined {
-  if (isSingleOrchestratorRunMessage(body)) {
-    const runId = singleOrchestratorRunIdOf(body);
-    return runId === undefined ? undefined : runQueueName(tenantId, runId);
-  }
-  const runId = bodyRunId(body);
+  const runId = orchestratorDeliveryRunId(body);
   return runId === undefined ? undefined : runQueueName(tenantId, runId);
 }
+
+/**
+ * Sent as `1` on a delivery the dispatcher grants a live event feed: the
+ * executor's `events.subscribe` opens one only inside such a delivery
+ * (`delivery-context.ts`). With a live feed the runtime holds the delivery
+ * open after its work is done (eve's linger: up to 30 s while a background
+ * step is outstanding, 5 s while only a hook is open), and the held POST is
+ * one of the dispatcher's concurrency slots, so the dispatcher grants a
+ * bounded share of them (`createLiveFeedGrants`) and only to orchestrator
+ * deliveries.
+ *
+ * An optional addition within version 1: an older dispatcher never sends it,
+ * so the World refuses every feed and no delivery lingers, as before; an
+ * older World ignores it.
+ */
+export const LIVE_FEED_HEADER = "x-eveland-live-feed";
 
 /**
  * The graphile job-key mode of a send. A spec 9 run's keyed message (a step's

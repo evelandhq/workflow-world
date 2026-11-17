@@ -5,6 +5,8 @@ import {
   deliveryAccounting,
   DISPATCH_VERSION,
   jobKeyModeFor,
+  LIVE_FEED_HEADER,
+  orchestratorDeliveryRunId,
   runQueueFor,
   runQueueName,
   secretMatches,
@@ -40,6 +42,15 @@ describe("dispatch contract", () => {
     }
   });
 
+  test("the live feed grant is an optional header within version 1", () => {
+    // A World built before the grant accepts a dispatch that carries it (an
+    // unknown header changes nothing it checks), and a dispatcher built before
+    // it sends version 1 without it, which the World reads as "no feed".
+    expect(DISPATCH_VERSION).toBe(1);
+    expect(LIVE_FEED_HEADER).toBe("x-eveland-live-feed");
+    expect(checkDispatchVersion("1")).toBeUndefined();
+  });
+
   test("secret comparison rejects mismatches and missing values", () => {
     expect(secretMatches("s3cret", "s3cret")).toBe(true);
     expect(secretMatches("s3cret", "s3creT")).toBe(false);
@@ -70,6 +81,14 @@ describe("single-orchestrator (spec 9) delivery", () => {
     // in that run's queue.
     expect(runQueueFor(TENANT, unstamped)).toBe(runQueueName(TENANT, "wrun_C"));
     expect(runQueueFor(TENANT, { __healthCheck: true })).toBeUndefined();
+  });
+
+  test("the orchestrator deliveries the dispatcher may grant a live feed are those", () => {
+    expect(orchestratorDeliveryRunId(orchestrator)).toBe("wrun_A");
+    expect(orchestratorDeliveryRunId(unstamped)).toBe("wrun_C");
+    expect(orchestratorDeliveryRunId(step)).toBeUndefined();
+    expect(orchestratorDeliveryRunId(hop)).toBeUndefined();
+    expect(orchestratorDeliveryRunId(undefined)).toBeUndefined();
   });
 
   test("a spec 9 keyed send is deduplicated while its job lives", () => {

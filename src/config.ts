@@ -31,6 +31,13 @@ export type EvelandWorldConfig = PgConnectionConfig & {
    * stripping it switches is a no-op guard.
    */
   compactStreamSnapshots?: boolean;
+  /**
+   * Live event feeds (`events.subscribe`) this process holds at most, across
+   * every World in it. Falls back to `WORKFLOW_WORLD_MAX_LIVE_EVENT_FEEDS`,
+   * then 32; `0` refuses every one. A feed is opened only in a delivery the
+   * dispatcher granted one, so this is a backstop, not the main bound.
+   */
+  maxLiveEventFeeds?: number;
 };
 
 /**
@@ -49,7 +56,20 @@ export type ResolvedWorldConfig = {
    * write-side snapshot stripping is a no-op guard.
    */
   compactStreamSnapshots: boolean;
+  maxLiveEventFeeds: number;
 };
+
+/** Resolve the per-process cap on live event feeds; unset means `fallback`. */
+export function resolveMaxLiveEventFeeds(value: string | undefined, fallback: number): number {
+  if (value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(
+      `Invalid WORKFLOW_WORLD_MAX_LIVE_EVENT_FEEDS "${value}": expected a non-negative integer.`,
+    );
+  }
+  return parsed;
+}
 
 /**
  * Resolve the emergency switch for write-side stream snapshot compaction.

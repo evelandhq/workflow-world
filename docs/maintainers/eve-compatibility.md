@@ -46,13 +46,25 @@ Its capabilities, each of which fails closed when a World leaves it unset:
 - `deploymentAffinity`: eve reads it as "this World routes each run to its own
   deployment", which Deployments on different eve versions side by side need.
 
+It implements the optional `events.subscribe` live feed, which core's spec 9
+delivery opens while it runs inline steps and while it lingers for another
+writer's event. core lingers only while the feed is live, so the World opens
+one only in a delivery the dispatcher granted one (`x-eveland-live-feed`) and
+refuses the rest through `onError`, which leaves those deliveries polling and
+returning as soon as their work is done (`docs/design.md`, The World surface).
+`src/run-events.integration.test.ts` runs core's own `LiveLogFeed` inside the
+real `createQueueHandler`, and `e2e-tests/agent-turn.test.mts` checks that a
+granted delivery of a real eve lingers.
+
 And what it leaves unset:
 
 - `hookResumeDedup` and `resolvedHookResume`, deduplicated and cached hook
   resumes. They need a `(runId, resumeId)` constraint this World does not have
   (`docs/design.md`). Without them core keeps the plain single-writer
   `hook_received` write, and eve resolves a signed inbox handle
-  (`EVE_INBOX_HANDLE_SECRET`) by token instead of using it directly.
+  (`EVE_INBOX_HANDLE_SECRET`) by token instead of using it directly. No event
+  carries a `resumeId` here either, so the live feed delivers a resume like any
+  other event rather than ending at it as upstream's does.
 - `dynamicWorkflowCode` and `invoke`, which eve does not use.
 
 The queue declares `queueAuthMode: 'skip'`, as upstream's world-postgres does:

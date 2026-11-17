@@ -8,6 +8,7 @@
  * can apply per-tenant fairness caps via graphile's `forbiddenFlags`. The dispatcher then POSTs each job back into
  * the deployment it belongs to, where `createQueueHandler` receives it.
  */
+import { runDelivery } from "./delivery-context.js";
 import { trackDelivery } from "./inflight.js";
 import { MessageId, parseQueueName, type Queue } from "@workflow/world";
 import { createWorld } from "@workflow/world-local";
@@ -22,6 +23,7 @@ import {
   DISPATCH_VERSION_HEADER,
   FLOW_JOB_NAME,
   jobKeyModeFor,
+  LIVE_FEED_HEADER,
   runQueueFor,
   readRuntimeSecretFromEnv,
   RUNTIME_SECRET_HEADER,
@@ -126,8 +128,13 @@ export function createQueue(config: ResolvedWorldConfig, pool: Pool): PostgresQu
         );
       }
       // Counted only past the checks above: a rejected request is not a step
-      // this process is running, and must not hold up a drain.
-      return trackDelivery(() => inner(req));
+      // this process is running, and must not hold up a drain. Run inside a
+      // delivery context, which is what `events.subscribe` reads: a live event
+      // feed only where the dispatcher granted one, since with a feed the
+      // runtime keeps the delivery (one of the dispatcher's slots) open after
+      // its work is done.
+      const liveFeed = req.headers.get(LIVE_FEED_HEADER) === "1";
+      return trackDelivery(() => runDelivery({ liveFeed }, () => inner(req)));
     };
   };
 
