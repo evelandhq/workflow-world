@@ -33,6 +33,9 @@ export const schema = pgSchema("workflow");
 /** The index a second claim of one hook token violates. */
 export const HOOK_TOKEN_CLAIM_UNIQUE = "workflow_hooks_token_claim_unique";
 
+/** The index a second `hook_received` under one `(run, resumeId)` violates. */
+export const HOOK_RESUME_UNIQUE = "workflow_events_hook_resume_unique";
+
 function mustBeMoreThanOne<T>(t: T[]) {
   return t as [T, ...T[]];
 }
@@ -171,6 +174,17 @@ export const events = schema.table(
     runId: varchar("run_id").notNull(),
     eventData: Cbor<unknown>()("payload_cbor"),
     specVersion: integer("spec_version"),
+    /**
+     * `resumeHook()`'s idempotency key on a `hook_received`
+     * (`CreateEventParams.resumeId`), read back as `Event.resumeId`.
+     */
+    resumeId: varchar("resume_id"),
+    /**
+     * Hex SHA-256 of the resume's payload bytes, which a retry under the same
+     * `resumeId` must match. Never read back on the event; a `$retention: 0`
+     * purge clears it with the payload.
+     */
+    resumePayloadDigest: varchar("resume_payload_digest"),
   },
   (tb) => [
     // Slot ids are only unique within a run: every run starts at `evnt_…0001`.
@@ -189,6 +203,14 @@ export const events = schema.table(
     uniqueIndex("workflow_events_entity_creation_unique")
       .on(tb.tenantId, tb.runId, tb.correlationId, tb.eventType)
       .where(sql`type IN ('step_created', 'hook_created', 'wait_created', 'attr_set')`),
+    /**
+     * One `hook_received` per `(run, resumeId)` (`capabilities.hookResumeDedup`,
+     * migration 0002). `events.create` answers a retry with the committed event
+     * before it would insert, under the run's row lock; this is the backstop.
+     */
+    uniqueIndex(HOOK_RESUME_UNIQUE)
+      .on(tb.tenantId, tb.runId, tb.resumeId)
+      .where(sql`type = 'hook_received' AND resume_id IS NOT NULL`),
   ],
 );
 

@@ -78,3 +78,13 @@ export function tenantEventsChannel(tenantId: string): string {
 export function dedupIndexName(tenantId: string): string {
   return derivePartitionName("wf_events_dedup", tenantId);
 }
+
+/**
+ * Deterministic name for this tenant's hook-resume dedup index
+ * (`workflow_events_hook_resume_unique`), for the reason {@link dedupIndexName}
+ * gives. Migration 0002 derives the same name in SQL for the partitions that
+ * existed before it; keep the two in step.
+ */
+export function resumeDedupIndexName(tenantId: string): string {
+  return derivePartitionName("wf_events_resume", tenantId);
+}

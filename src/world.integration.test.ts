@@ -175,6 +175,9 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
     expect(alpha.capabilities?.inBandFence).toBe(true);
     expect(alpha.capabilities?.hookForceClaim).toBe(true);
     expect(alpha.capabilities?.hookRetention?.active).toBe(true);
+    expect(alpha.capabilities?.hookResumeDedup).toBe(true);
+    // Not declared, as upstream's world-postgres does not: see docs/design.md.
+    expect(alpha.capabilities?.resolvedHookResume).toBeUndefined();
   });
 
   test("writing for an unprovisioned tenant fails loudly", async () => {

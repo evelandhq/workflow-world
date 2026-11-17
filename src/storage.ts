@@ -15,6 +15,7 @@
  * to their hook.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import {
   EntityConflictError,
   HookForceClaimedError,
@@ -68,6 +69,7 @@ import {
   isTerminalRunEventType,
   isTerminalStepStatus,
   isTerminalWorkflowRunStatus,
+  purgesUserDataOnFinish,
   requiresNewerWorld,
   SPEC_VERSION_LEGACY,
   SPEC_VERSION_ENV_VAR,
@@ -101,10 +103,15 @@ import {
   type SQL,
   sql,
 } from "drizzle-orm";
+import { encode as cborEncode } from "cbor-x";
 import { monotonicFactory } from "ulid";
 import { z } from "zod/v4";
 import { type Drizzle, Schema } from "./drizzle/index.js";
-import { HOOK_TOKEN_CLAIM_UNIQUE, type SerializedContent } from "./drizzle/schema.js";
+import {
+  HOOK_RESUME_UNIQUE,
+  HOOK_TOKEN_CLAIM_UNIQUE,
+  type SerializedContent,
+} from "./drizzle/schema.js";
 import { deliveryInFlight } from "./delivery-liveness.js";
 import { purgeRunUserDataIfZeroRetention } from "./run-data-purge.js";
 import { type RunEventsFeed, withRunEventFeed } from "./run-events.js";
@@ -118,7 +125,7 @@ import {
   type StartHookTx,
   startHookConflict,
 } from "./start-hook.js";
-import { dedupIndexName } from "./tenant.js";
+import { dedupIndexName, resumeDedupIndexName } from "./tenant.js";
 import { compact } from "./util.js";
 
 /**
@@ -573,6 +580,229 @@ function isCorrelatedEventUniqueViolation(
     constraint === "workflow_events_entity_creation_unique" ||
     constraint === dedupIndexName(tenantId)
   );
+}
+
+/**
+ * Whether a 23505 came from the hook-resume dedup index, under its parent name
+ * or the child name provisioning gives it (see
+ * {@link isCorrelatedEventUniqueViolation}).
+ */
+function isHookResumeUniqueViolation(error: unknown, tenantId: string): boolean {
+  const pgErr = pgErrorOf(error);
+  return (
+    pgErr.code === "23505" &&
+    (pgErr.constraint === HOOK_RESUME_UNIQUE || pgErr.constraint === resumeDedupIndexName(tenantId))
+  );
+}
+
+/** A `hook_received` write carrying `resumeHook()`'s idempotency key. */
+type HookResumeRequest = {
+  correlationId?: string;
+  specVersion?: number;
+  eventData: { token?: string; payload: unknown } & Record<string, unknown>;
+};
+
+/** Hex SHA-256 of a resume payload's bytes, as `resumeHook()` computes it. */
+function resumePayloadDigest(payload: unknown): string {
+  const bytes = payload instanceof Uint8Array ? payload : cborEncode(payload);
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * The `hook_received` of a resume that carries a `resumeId`
+ * (`capabilities.hookResumeDedup`), ported from upstream world-postgres 5.2.1's
+ * `createHookResume`: one event per `(run, resumeId)`, and a retry answered
+ * with the event it already committed.
+ *
+ * One transaction, locking the run and then the hook `FOR UPDATE`, the order
+ * the plain `hook_received` takes (see the hook force-claim notes in
+ * docs/design.md). The run lock serializes every resume of the run, so a second
+ * writer of the same `resumeId` finds the first one's row once it commits.
+ *
+ * Under the run lock, in this order:
+ *
+ * 1. A run whose data is gone or going (`expired_at` set, or terminal and
+ *    started with `$retention: 0`) answers 410 `INVOCATION_DATA_EXPIRED`, as
+ *    upstream's does. Its purge cleared the payload and digest a retry would be
+ *    compared with.
+ * 2. A committed `hook_received` with this `resumeId` is the answer when its
+ *    hook, digest and token match, even after the hook was disposed or the run
+ *    finished: the resume was accepted, and its retry must say so. Different
+ *    contents under the same id answer 422.
+ * 3. Otherwise as the plain write: a terminal run answers `RunExpiredError`; a
+ *    hook that is gone, belongs to another run or holds another token answers
+ *    `HookNotFoundError`, or `HookForceClaimedError` when it was taken over.
+ *
+ * The unique index is the backstop for a writer that bypasses the run lock. Its
+ * violation retries once, which finds the committed row in step 2.
+ */
+async function createHookResume(
+  drizzle: Drizzle,
+  tenantId: string,
+  runId: string,
+  data: HookResumeRequest,
+  params: CreateEventParams & { resumeId: string },
+  specVersion: number,
+): Promise<EventResult> {
+  const hookId = data.correlationId;
+  if (!hookId) {
+    throw new WorkflowWorldError("Hook identity is required", { status: 400 });
+  }
+  const digest = resumePayloadDigest(data.eventData.payload);
+  if (params.resumePayloadDigest && params.resumePayloadDigest !== digest) {
+    throw new WorkflowWorldError("Hook resume digest does not match its payload", {
+      status: 422,
+    });
+  }
+  const attempt = () =>
+    drizzle.transaction(async (tx) => {
+      const [run] = await tx
+        .select({
+          status: Schema.runs.status,
+          attributes: Schema.runs.attributes,
+          expiredAt: Schema.runs.expiredAt,
+        })
+        .from(Schema.runs)
+        .where(and(eq(Schema.runs.tenantId, tenantId), eq(Schema.runs.runId, runId)))
+        .for("update")
+        .limit(1);
+      if (!run) throw new WorkflowRunNotFoundError(runId);
+      if (
+        run.expiredAt !== null ||
+        (isTerminalWorkflowRunStatus(run.status) && purgesUserDataOnFinish(run.attributes))
+      ) {
+        throw new WorkflowWorldError("Invocation data has expired under the run retention policy", {
+          status: 410,
+          code: "INVOCATION_DATA_EXPIRED",
+        });
+      }
+
+      const [prior] = await tx
+        .select()
+        .from(Schema.events)
+        .where(
+          and(
+            eq(Schema.events.tenantId, tenantId),
+            eq(Schema.events.runId, runId),
+            eq(Schema.events.resumeId, params.resumeId),
+            eq(Schema.events.eventType, "hook_received"),
+          ),
+        )
+        .limit(1);
+      if (prior) {
+        const parsed = parseStoredEvent(prior);
+        const priorToken = (parsed as { eventData?: { token?: unknown } }).eventData?.token;
+        if (
+          prior.correlationId !== hookId ||
+          prior.resumePayloadDigest !== digest ||
+          priorToken !== data.eventData.token
+        ) {
+          throw new WorkflowWorldError("Hook resume identity reused with different contents", {
+            status: 422,
+          });
+        }
+        return parsed;
+      }
+
+      if (isTerminalWorkflowRunStatus(run.status)) {
+        throw new RunExpiredError(
+          `Workflow run "${runId}" is already in terminal state "${run.status}"`,
+        );
+      }
+      // Waits on a disposer's DELETE, as the plain `hook_received` does.
+      const [hook] = await tx
+        .select({ runId: Schema.hooks.runId, token: Schema.hooks.token })
+        .from(Schema.hooks)
+        .where(and(eq(Schema.hooks.tenantId, tenantId), eq(Schema.hooks.hookId, hookId)))
+        .for("update")
+        .limit(1);
+      if (!hook) {
+        const refusal = await forceClaimRefusal(tx, tenantId, runId, hookId, data.eventData);
+        if (refusal) throw refusal;
+        throw new HookNotFoundError(hookId);
+      }
+      if (
+        hook.runId !== runId ||
+        (data.eventData.token !== undefined && hook.token !== data.eventData.token)
+      ) {
+        throw new HookNotFoundError(hookId);
+      }
+      const created = await insertEventRow(tx, {
+        tenantId,
+        runId,
+        eventId: allocateEventId(tenantId, runId),
+        eventType: "hook_received",
+        correlationId: hookId,
+        eventData: data.eventData,
+        specVersion: data.specVersion ?? specVersion,
+        resumeId: params.resumeId,
+        resumePayloadDigest: digest,
+      });
+      if (!created) {
+        throw new EntityConflictError(`hook_received for hook "${hookId}" could not be created`);
+      }
+      // As stored, so a retry answered from the row returns the same event.
+      return EventSchema.parse({
+        ...data,
+        ...created,
+        runId,
+        specVersion: data.specVersion ?? specVersion,
+        resumeId: params.resumeId,
+      });
+    }, SLOT_INSERT_TRANSACTION);
+
+  let event: Event;
+  try {
+    event = await attempt();
+  } catch (error) {
+    if (!isHookResumeUniqueViolation(error, tenantId)) throw error;
+    try {
+      event = await attempt();
+    } catch (retryError) {
+      if (!isHookResumeUniqueViolation(retryError, tenantId)) throw retryError;
+      throw new EntityConflictError(
+        `hook_received with resumeId "${params.resumeId}" is being written concurrently in run "${runId}"; retry`,
+      );
+    }
+  }
+
+  const resolveData = params.resolveData ?? "all";
+  const result: EventResult = { event: stripEventDataRefs(event, resolveData) };
+  if (typeof params.sinceCursor === "string") {
+    const page = await readEventDelta(drizzle, tenantId, runId, params.sinceCursor, resolveData);
+    return { ...result, events: page.data, cursor: page.cursor, hasMore: page.hasMore };
+  }
+  return result;
+}
+
+/**
+ * The page of a run's events after `cursor` that a create with `sinceCursor`
+ * returns: at most 100, with `hasMore` past them.
+ */
+async function readEventDelta(
+  drizzle: Drizzle,
+  tenantId: string,
+  runId: string,
+  cursor: string,
+  resolveData: EventsResolveData,
+): Promise<PaginatedResponse<Event>> {
+  const limit = 100;
+  const rows = await drizzle
+    .select()
+    .from(Schema.events)
+    .where(
+      and(
+        eq(Schema.events.tenantId, tenantId),
+        eq(Schema.events.runId, runId),
+        gt(Schema.events.eventId, cursor),
+      ),
+    )
+    .orderBy(Schema.events.eventId)
+    .limit(limit + 1);
+  const data = rows
+    .slice(0, limit)
+    .map((row) => stripEventDataRefs(parseStoredEvent(row), resolveData));
+  return { data, cursor: data.at(-1)?.eventId ?? null, hasMore: rows.length > limit };
 }
 
 /**
@@ -1277,6 +1507,21 @@ function createUnfencedEventsStorage(
       }
       if (data.eventType === "attr_set" && !currentRun) {
         throw new WorkflowRunNotFoundError(effectiveRunId);
+      }
+
+      // A resume carrying `resumeHook()`'s idempotency key. Ahead of the
+      // terminal-run guard and the hook existence check, as upstream's: a
+      // committed resume stays accepted after its hook was disposed or its run
+      // finished, so its retry is answered with the event.
+      if (data.eventType === "hook_received" && params?.resumeId) {
+        return createHookResume(
+          drizzle,
+          tenantId,
+          effectiveRunId,
+          data as HookResumeRequest,
+          { ...params, resumeId: params.resumeId },
+          effectiveSpecVersion,
+        );
       }
 
       // Lazy step start: a step_started carrying step-creation data
@@ -3058,28 +3303,13 @@ function createUnfencedEventsStorage(
       }
 
       if (typeof params?.sinceCursor === "string") {
-        const limit = 100;
-        const deltaRows = await drizzle
-          .select()
-          .from(Schema.events)
-          .where(
-            and(
-              eq(Schema.events.tenantId, tenantId),
-              eq(Schema.events.runId, effectiveRunId),
-              gt(Schema.events.eventId, params.sinceCursor),
-            ),
-          )
-          .orderBy(Schema.events.eventId)
-          .limit(limit + 1);
-        const page = deltaRows.slice(0, limit);
-        const delta = page.map((row) => {
-          return stripEventDataRefs(parseStoredEvent(row), resolveData);
-        });
-        eventPage = {
-          data: delta,
-          cursor: delta.at(-1)?.eventId ?? null,
-          hasMore: deltaRows.length > limit,
-        };
+        eventPage = await readEventDelta(
+          drizzle,
+          tenantId,
+          effectiveRunId,
+          params.sinceCursor,
+          resolveData,
+        );
       }
 
       // Honor `$retention: 0` now that the terminal event row is written: that

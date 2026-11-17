@@ -138,6 +138,44 @@ describe.skipIf(!testUrl)("live event feed", () => {
     }
   });
 
+  test("a resume written with a resumeId ends the feed at its slot; a plain one is delivered", async () => {
+    const runId = await createRun(alpha);
+    const hookId = `whk_${ulid()}`;
+    const token = `tok_${ulid()}`;
+    await alpha.events.create(runId, {
+      eventType: "hook_created",
+      correlationId: hookId,
+      specVersion: 9,
+      eventData: { token },
+    });
+    const sub = subscribeGranted(alpha, runId);
+    try {
+      const receive = async (resumeId?: string) =>
+        eventIdToSlot(
+          (
+            await alpha.events.create(
+              runId,
+              {
+                eventType: "hook_received",
+                correlationId: hookId,
+                specVersion: 9,
+                eventData: { token, payload: new Uint8Array([4]) },
+              },
+              resumeId ? { resumeId } : undefined,
+            )
+          ).event!.eventId,
+        )!;
+      const plain = await receive();
+      await waitFor(() => sub.slots.includes(plain));
+      const resumed = await receive(ulid());
+      await waitFor(() => sub.errors.length === 1);
+      expect(String(sub.errors[0])).toMatch(/stopped at a hook resume/);
+      expect(sub.slots).not.toContain(resumed);
+    } finally {
+      await sub.end();
+    }
+  });
+
   test("another tenant's writes never reach a subscriber", async () => {
     const alphaChannel = new Client({ connectionString: testUrl });
     const betaChannel = new Client({ connectionString: testUrl });

@@ -2,8 +2,13 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Pool } from "pg";
-import { PARTITIONED_TABLES } from "./drizzle/schema.js";
-import { assertValidTenantId, dedupIndexName, derivePartitionName } from "./tenant.js";
+import { HOOK_RESUME_UNIQUE, PARTITIONED_TABLES } from "./drizzle/schema.js";
+import {
+  assertValidTenantId,
+  dedupIndexName,
+  derivePartitionName,
+  resumeDedupIndexName,
+} from "./tenant.js";
 
 /**
  * Migrations are hand-written SQL rather than drizzle-kit output because the
@@ -90,42 +95,60 @@ export async function ensureTenantPartitions(pool: Pool, tenantId: string): Prom
       if (sqlState(error) !== "42P07") throw error;
     }
   }
-  await renameDedupIndex(pool, tenantId);
+  await renameChildIndexes(pool, tenantId);
 }
 
 /**
- * Give this tenant's correlated-event dedup index a name the storage layer can
- * predict.
+ * The partitioned unique indexes of `workflow_events` whose violations storage
+ * recognises, each with the name its child on a tenant's partition gets.
+ *
+ * The hook-resume index comes first. Provisioning code older than migration
+ * 0002 picked "the partition's only partial unique index" for the dedup
+ * rename, so with both indexes present it could have given the resume child
+ * the dedup name; renaming the resume child first frees that name again.
+ */
+const CHILD_INDEX_NAMES: readonly { parent: string; name: (tenantId: string) => string }[] = [
+  { parent: HOOK_RESUME_UNIQUE, name: resumeDedupIndexName },
+  { parent: "workflow_events_entity_creation_unique", name: dedupIndexName },
+];
+
+/**
+ * Give this tenant's child indexes of the unique event indexes names the
+ * storage layer can predict.
  *
  * A unique violation reports the child index's name, and Postgres derives that
  * from the partition name plus columns, truncated to 63 bytes — unpredictable
  * and length-dependent. `events.create` has to recognise the conflict to
- * translate it into EntityConflictError (the dedup signal the runtime expects),
- * so the child is renamed once, here, rather than matched by guesswork.
+ * translate it (the correlated-event one into EntityConflictError, the dedup
+ * signal the runtime expects), so each child is renamed once, here, rather
+ * than matched by guesswork. Migration 0002 renamed the hook-resume children
+ * of the partitions that existed before it the same way.
  *
- * The index is selected as the partition's only *partial* unique index: the
- * primary key is unique but total, so there is no ambiguity.
+ * Each child is found through `pg_inherits` as the index attached to its
+ * parent, so the two partial unique indexes cannot be confused.
  */
-async function renameDedupIndex(pool: Pool, tenantId: string): Promise<void> {
+async function renameChildIndexes(pool: Pool, tenantId: string): Promise<void> {
   const partition = derivePartitionName("workflow_events", tenantId);
-  const target = dedupIndexName(tenantId);
-  const { rows } = await pool.query<{ relname: string }>(
-    `select ci.relname
-       from pg_index i
-       join pg_class ci on ci.oid = i.indexrelid
-       join pg_class ct on ct.oid = i.indrelid
-       join pg_namespace n on n.oid = ct.relnamespace
-      where n.nspname = 'workflow'
-        and ct.relname = $1
-        and i.indisunique
-        and i.indpred is not null`,
-    [partition],
-  );
-  const current = rows[0]?.relname;
-  if (!current || current === target) return;
-  await pool.query(
-    `alter index workflow.${quoteIdentifier(current)} rename to ${quoteIdentifier(target)}`,
-  );
+  for (const { parent, name } of CHILD_INDEX_NAMES) {
+    const target = name(tenantId);
+    const { rows } = await pool.query<{ relname: string }>(
+      `select ci.relname
+         from pg_inherits inh
+         join pg_class ci on ci.oid = inh.inhrelid
+         join pg_index i on i.indexrelid = ci.oid
+         join pg_class ct on ct.oid = i.indrelid
+         join pg_namespace n on n.oid = ct.relnamespace
+        where n.nspname = 'workflow'
+          and ct.relname = $1
+          and inh.inhparent = to_regclass($2)`,
+      [partition, `workflow.${parent}`],
+    );
+    const current = rows[0]?.relname;
+    if (!current || current === target) continue;
+    await pool.query(
+      `alter index workflow.${quoteIdentifier(current)} rename to ${quoteIdentifier(target)}`,
+    );
+  }
 }
 
 /**

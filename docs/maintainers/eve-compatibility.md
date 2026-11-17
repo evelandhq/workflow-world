@@ -45,6 +45,12 @@ Its capabilities, each of which fails closed when a World leaves it unset:
   `e2e-tests/session-handoff.test.mts` proves the handoff on the real eve.
 - `deploymentAffinity`: eve reads it as "this World routes each run to its own
   deployment", which Deployments on different eve versions side by side need.
+- `hookResumeDedup`: core's `resumeHook()` sends a `resumeId` and payload
+  digest with its `hook_received`, and a retry of that write returns the event
+  already committed instead of appending a second one (`docs/design.md`, Hook
+  resume deduplication; `src/storage.hook-resume-dedup.test.ts`). Events read
+  back carry `resumeId`, so the live feed ends at such a resume, as upstream's
+  does, and the wake delivers it.
 
 It implements the optional `events.subscribe` live feed, which core's spec 9
 delivery opens while it runs inline steps and while it lingers for another
@@ -58,13 +64,10 @@ granted delivery of a real eve lingers.
 
 And what it leaves unset:
 
-- `hookResumeDedup` and `resolvedHookResume`, deduplicated and cached hook
-  resumes. They need a `(runId, resumeId)` constraint this World does not have
-  (`docs/design.md`). Without them core keeps the plain single-writer
-  `hook_received` write, and eve resolves a signed inbox handle
-  (`EVE_INBOX_HANDLE_SECRET`) by token instead of using it directly. No event
-  carries a `resumeId` here either, so the live feed delivers a resume like any
-  other event rather than ending at it as upstream's does.
+- `resolvedHookResume`, cached hook resumes, which upstream's world-postgres
+  does not declare either (`docs/design.md`, The World surface). eve resolves a
+  signed inbox handle (`EVE_INBOX_HANDLE_SECRET`) by token instead of using it
+  directly; the write that follows is deduplicated through `hookResumeDedup`.
 - `dynamicWorkflowCode` and `invoke`, which eve does not use.
 
 The queue declares `queueAuthMode: 'skip'`, as upstream's world-postgres does:
