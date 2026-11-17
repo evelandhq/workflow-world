@@ -308,6 +308,7 @@ function buildConfig(overrides: Partial<ResolvedWorldConfig> = {}): ResolvedWorl
     tenantId: TENANT,
     deploymentId: DEPLOYMENT,
     compactStreamSnapshots: true,
+    maxLiveEventFeeds: 32,
     ...overrides,
   };
 }

@@ -14,11 +14,12 @@ import type {
 } from "@workflow/world";
 import { and, asc, eq, gt, lt, lte, sql } from "drizzle-orm";
 import { unionAll } from "drizzle-orm/pg-core";
-import { Client, type Pool } from "pg";
+import type { Pool } from "pg";
 import { monotonicFactory } from "ulid";
 import * as z from "zod";
 import { type Drizzle, Schema } from "./drizzle/index.js";
 import { packStreamChunks, unpackStreamRow } from "./stream-blocks.js";
+import type { SharedListener } from "./listener.js";
 import { compactStreamChunk } from "./stream-compaction.js";
 import { tenantStreamChannel } from "./tenant.js";
 
@@ -38,57 +39,8 @@ const READ_PAGE_ROWS = 128;
 /** Rows a reader steps over at a time on its way to a start index; no data is read. */
 const SKIP_PAGE_ROWS = 5000;
 
-/**
- * Subscribe to a PostgreSQL NOTIFY channel using a dedicated client created
- * from the pool's connection options. `channel` must be a trusted identifier.
- */
-export const listenChannel = async (
-  pool: Pool,
-  channel: string,
-  onPayload: (payload: string) => Promise<void>,
-): Promise<{ close: () => Promise<void> }> => {
-  const client = new Client(pool.options);
-
-  try {
-    await client.connect();
-    await client.query(`LISTEN "${channel}"`);
-  } catch (err) {
-    await client.end().catch(() => {});
-    throw err;
-  }
-
-  const onNotification = (msg: { payload?: string | undefined }) => {
-    onPayload(msg.payload ?? "").catch(() => {});
-  };
-
-  client.on("notification", onNotification);
-
-  // `close` has to be idempotent. `createWorld().close()` is reachable more than
-  // once in practice — a shutdown path and an error path can both call it, and a
-  // supervisor may signal twice — and a second `UNLISTEN` on the ended client
-  // would throw "Client was closed and is not queryable".
-  let closed = false;
-
-  return {
-    close: async () => {
-      if (closed) return;
-      closed = true;
-      client.removeListener("notification", onNotification);
-      try {
-        await client.query(`UNLISTEN "${channel}"`);
-      } catch {
-        // Best-effort: `client.end()` below stops delivery regardless, and a
-        // connection that has already gone away cannot be un-listened. Failing
-        // here would turn a successful teardown into a thrown error.
-      } finally {
-        await client.end().catch(() => {});
-      }
-    },
-  };
-};
-
 export type PostgresStreamer = Streamer & {
-  /** Unlisten from the LISTEN subscription and release resources. */
+  /** Stops waking readers. The LISTEN connection is the World's to close. */
   close(): Promise<void>;
 };
 
@@ -101,6 +53,7 @@ export function createStreamer(
   pool: Pool,
   drizzle: Drizzle,
   tenantId: string,
+  listener: SharedListener,
   options: StreamerOptions = {},
 ): PostgresStreamer {
   const compactSnapshots = options.compactSnapshots ?? true;
@@ -120,10 +73,26 @@ export function createStreamer(
   // every agent on the platform.
   const STREAM_TOPIC = tenantStreamChannel(tenantId);
 
-  const listenSubscription = listenChannel(pool, STREAM_TOPIC, async (msg) => {
-    const parsed = StreamPublishMessage.parse(JSON.parse(msg));
-    events.emit(`strm:${parsed.streamId}`);
-  });
+  // On the World's one LISTEN connection. A notification sent while it was
+  // down is lost, and a reader would then wait for ever on a chunk or an EOF
+  // already written, so a reconnect wakes every reader: each reads on from its
+  // own position, which surfaces exactly what it missed (upstream re-reads
+  // its active streams the same way). A drop alone ends no reader.
+  let closed = false;
+  void listener
+    .listen(STREAM_TOPIC, {
+      onPayload(msg) {
+        if (closed) return;
+        const parsed = StreamPublishMessage.parse(JSON.parse(msg));
+        events.emit(`strm:${parsed.streamId}`);
+      },
+      onReconnect() {
+        if (closed) return;
+        for (const key of events.eventNames()) events.emit(key);
+      },
+    })
+    // The listener retries on its own, and a reader reads before it waits.
+    .catch(() => {});
 
   const notifyStream = async (payload: string) => {
     await pool.query("SELECT pg_notify($1, $2)", [STREAM_TOPIC, payload]);
@@ -538,8 +507,7 @@ export function createStreamer(
     },
 
     async close() {
-      const sub = await listenSubscription.catch(() => undefined);
-      if (sub) await sub.close();
+      closed = true;
     },
   };
 }

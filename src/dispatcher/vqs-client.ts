@@ -3,6 +3,7 @@ import {
   DEPLOYMENT_HEADER,
   DISPATCH_VERSION,
   DISPATCH_VERSION_HEADER,
+  LIVE_FEED_HEADER,
   RUN_HEADER,
   RUNTIME_SECRET_HEADER,
   TENANT_HEADER,
@@ -50,6 +51,8 @@ export type VqsRequest = {
   runtimeSecret: string;
   timeoutMs: number;
   signal?: AbortSignal;
+  /** The dispatcher granted this delivery a live event feed (`LIVE_FEED_HEADER`). */
+  liveFeed?: boolean;
 };
 
 export const WORKFLOW_ROUTE_BASE = "/.well-known/workflow/v1";
@@ -100,8 +103,15 @@ export async function postVqsMessage(request: VqsRequest): Promise<VqsResult> {
     // and sending the same message again resolves to the same address.
     return { type: "error", status: 0, text: url.error, retryable: false };
   }
+  // The producer's headers travel on the message, and a producer is tenant
+  // code: a grant it wrote there itself must not reach the executor.
+  const producerHeaders = Object.fromEntries(
+    Object.entries(request.headers ?? {}).filter(
+      ([name]) => name.toLowerCase() !== LIVE_FEED_HEADER,
+    ),
+  );
   const headers: Record<string, string> = {
-    ...request.headers,
+    ...producerHeaders,
     "content-type": "application/json",
     // eve's own headers. Names are fixed by the runtime; do not rename.
     [VQS_QUEUE_NAME_HEADER]: request.queueName,
@@ -122,6 +132,7 @@ export async function postVqsMessage(request: VqsRequest): Promise<VqsResult> {
     [TENANT_HEADER]: request.tenantId,
     [DEPLOYMENT_HEADER]: request.deploymentId,
     ...(request.runId ? { [RUN_HEADER]: request.runId } : {}),
+    ...(request.liveFeed ? { [LIVE_FEED_HEADER]: "1" } : {}),
   };
 
   const timeout = AbortSignal.timeout(request.timeoutMs);

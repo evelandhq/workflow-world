@@ -119,6 +119,8 @@ export async function dispatchMessage(
     attempt: number;
     /** Every delivery of the message so far, this one included; `attempt` when absent. */
     deliveryCount?: number;
+    /** Granted a live event feed (`createLiveFeedGrants`); sent as `LIVE_FEED_HEADER`. */
+    liveFeed?: boolean;
   },
   deps: DispatcherDeps,
 ): Promise<DispatchOutcome> {
@@ -197,6 +199,7 @@ export async function dispatchMessage(
         runtimeSecret: deps.runtimeSecret,
         timeoutMs: deps.dispatchTimeoutMs,
         signal,
+        ...(input.liveFeed ? { liveFeed: true } : {}),
       }),
   );
 
@@ -360,6 +363,61 @@ export function createFairness(input: { maxInFlightPerTenant: number }) {
 }
 
 export type Fairness = ReturnType<typeof createFairness>;
+
+/**
+ * Which deliveries may linger, the executor-side half of which is
+ * `LIVE_FEED_HEADER`.
+ *
+ * A delivery granted a live event feed is held open by the runtime after its
+ * work is done (eve's linger: up to 30 s while a background step is
+ * outstanding, 5 s while only a hook is open, and every eve session has an
+ * open inbox hook), and a held delivery is a concurrency slot and one of its
+ * tenant's in-flight slots. So grants are bounded: granted deliveries in
+ * flight stay at or below half the concurrency (rounded down, so a
+ * concurrency of 1 grants none) and at or below half the tenant's ceiling
+ * (rounded down, at least 1). The other half is always left to deliveries that
+ * return as soon as their work is done. A delivery that is not granted runs
+ * exactly as it would without the feed: the runtime polls and does not linger.
+ */
+export function createLiveFeedGrants(input: { concurrency: number; maxInFlightPerTenant: number }) {
+  const total = Math.floor(input.concurrency / 2);
+  const perTenant = Math.max(1, Math.floor(input.maxInFlightPerTenant / 2));
+  const granted = new Map<string, number>();
+  let grantedTotal = 0;
+  return {
+    /** Grants one if both bounds allow it; the caller must `release` a grant. */
+    tryAcquire(tenantId: string): boolean {
+      const tenant = granted.get(tenantId) ?? 0;
+      if (grantedTotal + 1 > total || tenant + 1 > perTenant) return false;
+      grantedTotal += 1;
+      granted.set(tenantId, tenant + 1);
+      return true;
+    },
+    release(tenantId: string): void {
+      const tenant = granted.get(tenantId) ?? 0;
+      if (tenant <= 0) return;
+      grantedTotal -= 1;
+      if (tenant === 1) granted.delete(tenantId);
+      else granted.set(tenantId, tenant - 1);
+    },
+    /** Granted deliveries in flight, in total and per tenant. */
+    snapshot(): {
+      total: number;
+      limit: number;
+      perTenantLimit: number;
+      tenants: Record<string, number>;
+    } {
+      return {
+        total: grantedTotal,
+        limit: total,
+        perTenantLimit: perTenant,
+        tenants: Object.fromEntries(granted),
+      };
+    },
+  };
+}
+
+export type LiveFeedGrants = ReturnType<typeof createLiveFeedGrants>;
 
 /**
  * Suppresses a repeat delivery of a message that already completed, and collapses

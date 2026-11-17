@@ -9,13 +9,14 @@ rather than a loud one.
 
 ## Deployment side (read by the World)
 
-| variable                           | meaning                                                                                                                                      |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WORKFLOW_WORLD_URL`               | the shared database. Required; there is no fallback chain, because falling back onto a single-tenant database is worse than failing to start |
-| `WORKFLOW_WORLD_TENANT_ID`         | this deployment's tenant. Required                                                                                                           |
-| `WORKFLOW_WORLD_DEPLOYMENT_ID`     | recorded on every run, so an in-flight run stays pinned to an executor that can still run it. Required                                       |
-| `WORKFLOW_WORLD_RUNTIME_SECRET`    | authenticates platform dispatch; a deployment without it refuses every delivery                                                              |
-| `WORKFLOW_WORLD_STREAM_COMPACTION` | **Deprecated, removed in 2.0.** `on` (default); `off` is the emergency switch for write-side snapshot stripping                              |
+| variable                              | meaning                                                                                                                                            |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORKFLOW_WORLD_URL`                  | the shared database. Required; there is no fallback chain, because falling back onto a single-tenant database is worse than failing to start       |
+| `WORKFLOW_WORLD_TENANT_ID`            | this deployment's tenant. Required                                                                                                                 |
+| `WORKFLOW_WORLD_DEPLOYMENT_ID`        | recorded on every run, so an in-flight run stays pinned to an executor that can still run it. Required                                             |
+| `WORKFLOW_WORLD_RUNTIME_SECRET`       | authenticates platform dispatch; a deployment without it refuses every delivery                                                                    |
+| `WORKFLOW_WORLD_STREAM_COMPACTION`    | **Deprecated, removed in 2.0.** `on` (default); `off` is the emergency switch for write-side snapshot stripping                                    |
+| `WORKFLOW_WORLD_MAX_LIVE_EVENT_FEEDS` | live event feeds one process holds at once (`32`; `0` refuses all), behind the dispatcher's [grants](../operations/dispatcher.md#live-feed-grants) |
 
 Upstream's own names are also read on the deployment side, with upstream's
 meaning:

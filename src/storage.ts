@@ -107,6 +107,7 @@ import { type Drizzle, Schema } from "./drizzle/index.js";
 import { HOOK_TOKEN_CLAIM_UNIQUE, type SerializedContent } from "./drizzle/schema.js";
 import { deliveryInFlight } from "./delivery-liveness.js";
 import { purgeRunUserDataIfZeroRetention } from "./run-data-purge.js";
+import { type RunEventsFeed, withRunEventFeed } from "./run-events.js";
 import { resolveRunRetentionForCreation } from "./run-retention-resolution.js";
 import {
   admittedStartHook,
@@ -796,9 +797,11 @@ export function createEventsStorage(
    * when a caller omits `specVersion`.
    */
   specVersion: number = worldSpecVersion(),
+  /** The live event feed `subscribe` serves; without one it is absent. */
+  feed?: RunEventsFeed,
 ): Storage["events"] {
   const unfenced = createUnfencedEventsStorage(drizzle, tenantId, queueNamespace, specVersion);
-  return {
+  const fenced: Storage["events"] = {
     ...unfenced,
     async create(
       runId: string | null,
@@ -863,6 +866,9 @@ export function createEventsStorage(
       return snapshot ? { ...page, snapshot } : page;
     },
   };
+  // Announces every committed write to the run's live feed (run-events.ts),
+  // which reads with the unfenced `list`, as upstream's does.
+  return withRunEventFeed(fenced, { drizzle, tenantId, read: unfenced.list, feed });
 }
 
 /** The overloads of `create`, collapsed: the fenced wrapper forwards whatever it received. */

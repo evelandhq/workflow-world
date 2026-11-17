@@ -109,7 +109,15 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
         await ensureTenantPartitions(pool, tenantId);
 
         dir = buildAgent({ eveVersion: entry.version, worldTarball });
-        agent = await startAgent({ dir, port, databaseUrl, tenantId, deploymentId });
+        agent = await startAgent({
+          dir,
+          port,
+          databaseUrl,
+          tenantId,
+          deploymentId,
+          // The runtime's debug lines, which say when a delivery lingers.
+          env: { DEBUG: "workflow:runtime:*" },
+        });
         dispatcher = await startDispatcher({
           databaseUrl,
           deploymentId,
@@ -249,6 +257,27 @@ describe.skipIf(!baseUrl)("real eve agent against @evelandhq/workflow-world", ()
           },
           { required: FIRST_TURN_EVENT_TYPES },
         );
+      });
+
+      test("a delivery the dispatcher granted a live feed lingers on it", async () => {
+        // eve lingers only while `events.subscribe` is live, and the World
+        // opens a feed only inside a delivery whose dispatch carried the
+        // grant. A linger that ran its course is therefore the grant reaching
+        // `subscribe` through eve's own flow route. Every session waits on its
+        // inbox hook, so its deliveries linger for the hook window (5 s).
+        const lingered = () =>
+          [
+            ...agent
+              .log()
+              .matchAll(
+                /Lingering delivery (?:found no new work|resumed)[\s\S]{0,200}?lingeredMs: (\d+)/g,
+              ),
+          ].map((match) => Number(match[1]));
+        for (let attempt = 0; attempt < 120 && lingered().length === 0; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        expect(lingered().length).toBeGreaterThan(0);
+        expect(Math.max(...lingered())).toBeGreaterThanOrEqual(1_000);
       });
 
       test("the queue was used, not bypassed", async () => {

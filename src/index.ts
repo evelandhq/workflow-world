@@ -5,10 +5,17 @@ import {
   type EvelandWorldConfig,
   type ResolvedWorldConfig,
   resolveConnectionString,
+  resolveMaxLiveEventFeeds,
   resolveStreamCompaction,
 } from "./config.js";
 import { createClient, type Drizzle } from "./drizzle/index.js";
+import { createListener } from "./listener.js";
 import { createQueue } from "./queue.js";
+import {
+  createRunEventsFeed,
+  DEFAULT_MAX_LIVE_EVENT_FEEDS,
+  type RunEventsFeed,
+} from "./run-events.js";
 import {
   worldSpecVersion,
   createEventsStorage,
@@ -30,6 +37,7 @@ export {
   tenantPartitionsExist,
 } from "./migrate.js";
 export { inflightDeliveries } from "./inflight.js";
+export { liveEventFeeds, stopLiveEventFeeds } from "./run-events.js";
 export {
   reconcileWorkflowRuns,
   type ReconcileWorkflowRunsOptions,
@@ -54,7 +62,7 @@ export {
   type WorkflowRunRetentionResult,
 } from "./retention.js";
 export { RUN_RETENTION_ATTRIBUTE, type RunRetentionClass } from "./run-retention-policy.js";
-export { derivePartitionName, tenantStreamChannel } from "./tenant.js";
+export { derivePartitionName, tenantEventsChannel, tenantStreamChannel } from "./tenant.js";
 export * from "./drizzle/schema.js";
 
 /**
@@ -69,10 +77,11 @@ function createStorage(
   tenantId: string,
   queueNamespace: string | undefined,
   specVersion: number,
+  feed: RunEventsFeed,
 ): Storage {
   return {
     runs: createRunsStorage(drizzle, tenantId),
-    events: createEventsStorage(drizzle, tenantId, queueNamespace, specVersion),
+    events: createEventsStorage(drizzle, tenantId, queueNamespace, specVersion, feed),
     hooks: createHooksStorage(drizzle, tenantId),
     steps: createStepsStorage(drizzle, tenantId),
   };
@@ -114,6 +123,13 @@ function resolveConfig(config: EvelandWorldConfig): ResolvedWorldConfig {
     compactStreamSnapshots:
       config.compactStreamSnapshots ??
       resolveStreamCompaction(process.env.WORKFLOW_WORLD_STREAM_COMPACTION),
+    maxLiveEventFeeds:
+      config.maxLiveEventFeeds !== undefined
+        ? resolveMaxLiveEventFeeds(String(config.maxLiveEventFeeds), DEFAULT_MAX_LIVE_EVENT_FEEDS)
+        : resolveMaxLiveEventFeeds(
+            process.env.WORKFLOW_WORLD_MAX_LIVE_EVENT_FEEDS,
+            DEFAULT_MAX_LIVE_EVENT_FEEDS,
+          ),
   };
 }
 
@@ -135,8 +151,21 @@ export function createWorld(
   let closed = false;
   const drizzle = createClient(pool);
   const queue = createQueue(resolved, pool);
-  const storage = createStorage(drizzle, resolved.tenantId, resolved.queueNamespace, specVersion);
-  const streamer = createStreamer(pool, drizzle, resolved.tenantId, {
+  // The World's one LISTEN connection, shared by stream readers and the live
+  // event feed: a feed costs no connection of its own.
+  const listener = createListener(pool);
+  const feed = createRunEventsFeed(listener, {
+    tenantId: resolved.tenantId,
+    maxLiveSubscriptions: resolved.maxLiveEventFeeds,
+  });
+  const storage = createStorage(
+    drizzle,
+    resolved.tenantId,
+    resolved.queueNamespace,
+    specVersion,
+    feed,
+  );
+  const streamer = createStreamer(pool, drizzle, resolved.tenantId, listener, {
     compactSnapshots: resolved.compactStreamSnapshots,
   });
 
@@ -271,7 +300,10 @@ export function createWorld(
       // loudly after the first had done its job.
       if (closed) return;
       closed = true;
+      // Ends this World's live feeds through `onError`, then the connection.
+      await feed.close();
       await streamer.close();
+      await listener.close();
       await queue.close();
       // Only a pool this world created. A caller-supplied pool belongs to the
       // caller, who is very likely still serving that project's other traffic

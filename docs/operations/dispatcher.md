@@ -42,6 +42,39 @@ leave the pool alone. Earlier versions rejected a concurrency above
 `poolSize - 2`, on the belief that a running job holds a connection; that bound
 is gone, and only a floor of 4 on the pool itself remains.
 
+## Live feed grants
+
+A grant lets one delivery open a live event feed (`events.subscribe`) in the
+executor: the dispatcher sends `x-eveland-live-feed: 1` with it, and the World
+refuses a feed to any delivery without it. With a live feed eve keeps a delivery
+open after its work is done, in case another writer appends to the run: up to
+30 s while a background step is outstanding, 5 s while only a hook is open. Every
+eve session holds an open inbox hook, so every granted orchestrator delivery of a
+session ends with at least 5 s of waiting. What it buys is latency: a step
+outcome or a resume that lands meanwhile is handled in the same warm
+invocation instead of after a queued wake.
+
+A lingering delivery is a held POST like any other, so it holds one of
+`WORKFLOW_DISPATCHER_CONCURRENCY`'s slots and one of its tenant's
+`WORKFLOW_DISPATCHER_MAX_INFLIGHT_PER_TENANT` slots. The dispatcher therefore
+grants only orchestrator deliveries (never a step message, which returns when
+its step does), and only while granted deliveries in flight stay at or below
+half the concurrency, rounded down, and at or below half the tenant's ceiling,
+rounded down but at least 1. A grant is released when its delivery returns,
+whether it completed, rescheduled, failed or threw. At a concurrency of 1
+nothing is granted. A delivery that was not granted runs as before: the runtime
+polls the log and returns as soon as its work is done.
+
+A lingering delivery also keeps its deployment awake. The activation lease is
+held and renewed for the whole held POST, linger included, so a deployment with
+granted deliveries stays out of the idle reaper's reach for up to 30 s past its
+last work.
+
+An embedding host reads the grants in flight from
+`service.runtime.liveFeedGrants.snapshot()`. To drain an
+executor without waiting out lingers, call `stopLiveEventFeeds()` (root export)
+in it; see [executors that are always running](#executors-that-are-always-running).
+
 ## Delayed deliveries and claim cost
 
 graphile-worker 0.16 claims a job by first locking every available named queue
@@ -96,8 +129,9 @@ that differ from a platform host:
 - **Keep the flow route private.** `/.well-known/workflow/` receives dispatches
   carrying the runtime secret. Only the dispatcher should reach it; do not
   publish it through the ingress.
-- **Drain before stopping a replica.** Fail its readiness check, wait until
-  `inflightDeliveries()` (root export) is zero, then send the signal. In
+- **Drain before stopping a replica.** Fail its readiness check, call
+  `stopLiveEventFeeds()` so lingering deliveries return at once, wait until
+  `inflightDeliveries()` (both root exports) is zero, then send the signal. In
   Kubernetes that is a `preStop` hook polling a route the application serves,
   with `terminationGracePeriodSeconds` at least `WORKFLOW_DISPATCHER_DISPATCH_TIMEOUT_MS`.
   A replica stopped mid-step loses nothing, but the step runs again.

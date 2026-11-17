@@ -1,10 +1,11 @@
-import { MessageData } from "../message.js";
+import { MessageData, readBody } from "../message.js";
 import { getQueueTopicPrefix } from "@workflow/world";
 import { makeWorkerUtils, run, type Runner, type WorkerUtils } from "graphile-worker";
 import type { Pool } from "pg";
 import {
   createExecutorFailureTracker,
   createFairness,
+  createLiveFeedGrants,
   createMessageDedup,
   createRunLookup,
   dispatchMessage,
@@ -13,11 +14,17 @@ import {
   type DispatcherDeps,
   type ExecutorFailureTracker,
   type Fairness,
+  type LiveFeedGrants,
   type MessageDedup,
 } from "./dispatcher.js";
 
 /** Job names must match what the World enqueues (`FLOW_JOB_NAME`). */
-import { deliveryAccounting, FLOW_JOB_NAME, TIMER_JOB_NAME } from "../dispatch-contract.js";
+import {
+  deliveryAccounting,
+  FLOW_JOB_NAME,
+  orchestratorDeliveryRunId,
+  TIMER_JOB_NAME,
+} from "../dispatch-contract.js";
 import {
   addDelayedDelivery,
   createTimerHandler,
@@ -45,6 +52,8 @@ export type DispatcherRuntime = {
   runner: Runner;
   workerUtils: WorkerUtils;
   fairness: Fairness;
+  /** Deliveries granted a live event feed; see `createLiveFeedGrants`. */
+  liveFeedGrants: LiveFeedGrants;
   dedup: MessageDedup;
   executorFailures: ExecutorFailureTracker;
   stop(): Promise<void>;
@@ -60,6 +69,10 @@ export async function startDispatcher(input: {
   const { pool, config } = input;
   const workerUtils = input.workerUtils ?? (await makeWorkerUtils({ pgPool: pool }));
   const fairness = createFairness({ maxInFlightPerTenant: config.maxInFlightPerTenant });
+  const liveFeedGrants = createLiveFeedGrants({
+    concurrency: config.concurrency,
+    maxInFlightPerTenant: config.maxInFlightPerTenant,
+  });
   const dedup = createMessageDedup();
   const log = input.deps.log ?? (() => {});
 
@@ -138,6 +151,10 @@ export async function startDispatcher(input: {
     // registered `__<ns>_wkf_workflow_*` is an unhandled queue every time.
     const queueName = `${getQueueTopicPrefix("workflow", message.queueNamespace)}${message.id}`;
 
+    // Only an orchestrator delivery can linger on a live feed; a step message
+    // returns when its step does, so a grant on it would be one wasted.
+    const orchestrator = orchestratorDeliveryRunId(readBody(message)) !== undefined;
+    let liveFeed = false;
     fairness.acquire(message.tenantId);
     try {
       let outcome: DispatchOutcome;
@@ -145,9 +162,15 @@ export async function startDispatcher(input: {
         // `undefined` means the dedup swallowed it: already completed, or a
         // concurrent delivery of the same message that we waited on. Either way
         // there is nothing left to do and nothing to report.
-        const deduped = await dedup.run(message.idempotencyKey, () =>
-          dispatchMessage({ message, jobName, queueName, attempt, deliveryCount }, deps),
-        );
+        const deduped = await dedup.run(message.idempotencyKey, () => {
+          // Taken only by a delivery that is actually sent, and held until it
+          // returns, however it returns (released below with its fairness slot).
+          liveFeed = orchestrator && liveFeedGrants.tryAcquire(message.tenantId);
+          return dispatchMessage(
+            { message, jobName, queueName, attempt, deliveryCount, liveFeed },
+            deps,
+          );
+        });
         if (!deduped) return;
         outcome = deduped;
       } catch (error) {
@@ -180,6 +203,7 @@ export async function startDispatcher(input: {
       }
       throw new Error(outcome.reason);
     } finally {
+      if (liveFeed) liveFeedGrants.release(message.tenantId);
       fairness.release(message.tenantId);
     }
   };
@@ -255,6 +279,7 @@ export async function startDispatcher(input: {
     runner,
     workerUtils,
     fairness,
+    liveFeedGrants,
     dedup,
     executorFailures,
     async stop() {

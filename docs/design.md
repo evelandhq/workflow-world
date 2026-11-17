@@ -171,6 +171,27 @@ with its stream. `analytics` and
 `getEncryptionKeyForRun` are deliberately not implemented; both belong to work
 that is out of scope below.
 
+**`events.subscribe`, the live event feed, is offered only to a delivery the
+dispatcher granted one.** Every committed event write announces its run on the
+tenant's events channel (`tenantEventsChannel`), and a force-claim announces its
+victim run too: a `pg_notify` after the commit, never awaited, its failure
+dropped. On each announcement a subscription reads the log from the slot after
+the last one it delivered (the unfenced `events.list`) and delivers what
+continues the sequence, each slot once; a hole stops it until a later
+announcement fills it, and a lost announcement is caught up by the next. It ends
+through `onError` on a `hook_received` carrying a `resumeId` (as upstream; none
+does here, see `hookResumeDedup` below), a failed read, a lost `LISTEN`
+connection, the end of the delivery that opened it, `world.close()` and
+`stopLiveEventFeeds()`. The feed is a channel on the World's one `LISTEN`
+connection, which stream readers share; a dropped connection is replaced with
+backoff, and every stream reader then reads on from its position, so readers
+outlive it. With a live feed eve holds a delivery open after its work is done
+(its linger), which holds one of the dispatcher's slots, so `subscribe` refuses
+(asynchronously, through `onError`) outside a delivery whose dispatch carried
+`x-eveland-live-feed` (see [Request](#request)), and past
+`WORKFLOW_WORLD_MAX_LIVE_EVENT_FEEDS` per process. A refused feed costs a
+delivery nothing: the runtime polls the log tail and does not linger.
+
 Several optional members are left unimplemented on purpose. Each one fails open,
 and the reasons differ enough to be worth recording:
 
@@ -574,6 +595,17 @@ against an address that will not change.
 | `x-eveland-runtime-secret`                            | this package | what distinguishes platform dispatch from any other caller    |
 | `x-eveland-dispatch-version`                          | this package | currently `1`; the receiving side rejects what it cannot read |
 | `x-eveland-project-id` / `-deployment-id` / `-run-id` | this package | binds the request to one target                               |
+| `x-eveland-live-feed`                                 | this package | `1` when the dispatcher granted this delivery a live feed     |
+
+The live feed grant is optional within version 1. A dispatcher that does not
+send it gets a World that refuses every feed, so no delivery lingers; a World
+that does not read it ignores it. The dispatcher grants it only to orchestrator
+deliveries (those `runQueueFor` places in a run queue), and only while granted
+deliveries in flight stay at or below half its concurrency (rounded down, so a
+concurrency of 1 grants none) and at or below half the tenant's in-flight
+ceiling (rounded down, at least 1). It strips the header from a message's
+producer headers, so a deployment cannot grant itself one. See
+[live feed grants](operations/dispatcher.md#live-feed-grants).
 
 The queue name carries eve's queue namespace when one is configured, and that
 namespace travels **on the message** rather than being re-derived by the
@@ -647,13 +679,14 @@ not-activatable: its messages are dead-lettered, which is the alarm for having
 removed an entry too early.
 
 Replacing a replica without running a step twice is the host's job, with one
-number from this package. A delivery cut off by a stopping process is delivered
+number and one switch from this package. A delivery cut off by a stopping process is delivered
 again — correct, but the step and its side effects run a second time. So the
-host first stops routing to the replica (its readiness check fails), waits for
-`inflightDeliveries()` to reach zero, and only then sends the signal. The count
-is process-wide and lives on `globalThis`, because the runtime loads the World
-from its package name while the host route that reports the number is usually
-bundled separately.
+host first stops routing to the replica (its readiness check fails), calls
+`stopLiveEventFeeds()` so a delivery lingering on a live feed acknowledges at
+once instead of waiting its linger out, waits for `inflightDeliveries()` to
+reach zero, and only then sends the signal. Both are process-wide and live on
+`globalThis`, because the runtime loads the World from its package name while
+the host route that reports the number is usually bundled separately.
 
 Note what the lease does **not** cover. A _sleeping_ run holds no lease and no
 connection, by design — that is the whole point of moving the claimant out. Such
@@ -676,12 +709,14 @@ definition (`runQueueFor` in `src/dispatch-contract.ts`).
 **Only a run's orchestrator deliveries wait in its run queue, and nothing
 bypasses it.** Every run is a spec 9 (single-orchestrator) run. Its step
 messages and a long wait's intermediate timer hops take no queue name: an
-orchestrator delivery can run an inline step for a long time, and a step
-queued behind it would wait that out before it could start. Its hook wakes
-wait in the queue too: a running orchestrator picks up new events by polling
-the run's log tail, so a resume or a cancel reaches it without a second
-delivery, and a second orchestrator would run an inline step the first is
-still running again. What the queue still lets through (a delivery that outlives its dispatch
+orchestrator runs its inline steps for as long as they take, and one the
+dispatcher granted a live feed stays live up to 30 s more while it waits on a
+background step (eve's linger; 5 s while only a hook is open), so a step queued
+behind it would wait all of that out before it could start. A delivery that was
+not granted a feed does not linger. Its hook wakes wait in the queue too: the
+running orchestrator tails the run's log, so a resume or a cancel reaches it
+without a second delivery, and a second orchestrator would run an inline step
+the first is still running again. What the queue still lets through (a delivery that outlives its dispatch
 timeout) the in-band writer fence refuses. A message that names a run but
 carries no spec stamp (boot recovery rebuilds one from the run row) also waits
 in that run's queue.

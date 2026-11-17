@@ -55,6 +55,15 @@ export function tenantStreamChannel(tenantId: string): string {
 }
 
 /**
+ * The live event feed's LISTEN/NOTIFY channel (`run-events.ts`), per tenant
+ * for the same reason as the stream channel: upstream's single
+ * `workflow_run_events` topic would wake every agent on every event write.
+ */
+export function tenantEventsChannel(tenantId: string): string {
+  return derivePartitionName("wf_events", tenantId);
+}
+
+/**
  * Deterministic name for this tenant's correlated-event dedup index.
  *
  * Postgres names a partition's child indexes itself, from the partition name

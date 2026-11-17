@@ -62,6 +62,22 @@ describe("postVqsMessage", () => {
     });
   });
 
+  it("sends the live feed grant only when the dispatcher grants it, whatever the producer wrote", async () => {
+    const received: Array<string | string[] | undefined> = [];
+    const port = await listen((req, res) => {
+      received.push(req.headers["x-eveland-live-feed"]);
+      req.resume();
+      res.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
+    });
+    // A producer's headers travel on the message; it cannot grant itself one.
+    const forged = { headers: { "X-Eveland-Live-Feed": "1", traceparent: "t" } };
+
+    await postVqsMessage(request(port, { ...forged }));
+    await postVqsMessage(request(port, { ...forged, liveFeed: false }));
+    await postVqsMessage(request(port, { ...forged, liveFeed: true }));
+    expect(received).toEqual([undefined, undefined, "1"]);
+  });
+
   it("delivers to an executor named by URL, and prefers it over the loopback port", async () => {
     // An executor behind a service is not on loopback. The port is what a
     // control plane already sends; the URL wins so it can be added beside it.
