@@ -27,8 +27,11 @@ on:
 permissions:
   contents: read
 
+# One queue per branch. main and each release/*.x line release independently, and
+# a shared group lets only one run wait per group: merging into two branches
+# together cancelled the earlier queued run.
 concurrency:
-  group: release
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
