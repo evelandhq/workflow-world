@@ -16,7 +16,7 @@ import {
   tenantPartitionsExist,
 } from "./migrate.js";
 import { PARTITIONED_TABLES } from "./drizzle/schema.js";
-import { dedupIndexName, derivePartitionName } from "./tenant.js";
+import { dedupIndexName, derivePartitionName, resumeDedupIndexName } from "./tenant.js";
 
 /**
  * Tenancy is enforced by WHERE-clause discipline across ~50 query sites, which
@@ -240,7 +240,7 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
     await expect(create()).rejects.toThrow(EntityConflictError);
   });
 
-  test("the dedup index is renamed to the predictable name", async () => {
+  test("the partial unique indexes are renamed to their predictable names", async () => {
     const { rows } = await admin.query<{ relname: string }>(
       `select ci.relname
          from pg_index i
@@ -251,6 +251,9 @@ describe.skipIf(!testUrl)("multi-tenant world", () => {
           and i.indisunique and i.indpred is not null`,
       [derivePartitionName("workflow_events", ALPHA)],
     );
-    expect(rows[0]?.relname).toBe(dedupIndexName(ALPHA));
+    // Two partial unique indexes since migration 0002, in no guaranteed order.
+    expect(rows.map((row) => row.relname).sort()).toEqual(
+      [dedupIndexName(ALPHA), resumeDedupIndexName(ALPHA)].sort(),
+    );
   });
 });
