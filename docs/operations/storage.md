@@ -58,6 +58,28 @@ member is active, has a later deadline, is persistent, or owns a hook token whos
 reservation has not expired. This protects terminal parents while background
 children, approvals, callbacks, or task-input capabilities remain live.
 
+### Zero retention
+
+A run started with `$retention: 0` loses its user data when it reaches a
+terminal state, whether the workflow finished it or `reconcileWorkflowRuns`
+failed or cancelled it. In one transaction the run gets `expired_at`, and the
+payload columns of the run, its steps, its events (except `hook_disposed`,
+which holds only the token and force-claim routing) and its retained hooks are
+set to NULL; the run's non-EOF stream rows are deleted, and its dead letters
+keep their row with an empty message body. Ids, statuses, timestamps,
+attributes and EOF rows stay, so the run still lists and its streams still end.
+Any other value keeps the data and logs a warning.
+
+eve 1.0 asks for zero retention by default unless its tracing records inputs and
+outputs (`experimental.workflow.retention` overrides it), so most eve runs take
+this path. Stream rows belong to the run id their writer passed. An eve session's stream
+is written under its first run's id, so a handoff successor finishing does not
+touch it; the stream goes when the first run ends.
+
+The purge does not change the run's retention class or deadlines. The class
+still decides when the purged rows are deleted, and a `persistent` run keeps
+them, empty, indefinitely.
+
 ### Manual stream cleanup
 
 A caller-selected primitive is available for hosts that need to cap stream

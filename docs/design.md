@@ -506,6 +506,19 @@ Expiring chunks expires replay from old raw cursors even though EOF still makes
 the stream resolve as complete. Normal deletes make pages reusable but do not
 promise to shrink relation files.
 
+`$retention: 0` is the per-run exception to waiting for a deadline
+(`run-data-purge.ts`). The writer that wins a run's terminal transition clears
+the run's payload columns and stamps `expired_at` after writing the terminal
+event, so the event's own payload goes too; the response it returns is a
+pre-purge snapshot. Host reconciliation does the same inside its settle
+transaction. A purge failure is logged and never fails the transition. Stream
+rows are deleted rather than blanked, since a packed block cannot be blanked
+without losing its chunk ids, and EOF stays. The purge writes no column the
+deadline trigger or the expiry predicates read, so the retention class still
+removes the rows later. `hook_disposed` payloads stay: they are the token and
+force-claim routing that `forceClaimRefusal` reads, and an eve handoff victim
+finishes right after it is taken over.
+
 ### `queue_namespace` is provenance, not tenancy
 
 eve registers its workflow handlers under a namespace: a deployment whose

@@ -65,6 +65,15 @@ runtime replays with it, and a World may leave step inputs out of `step_created`
 and `step_started` under it but must otherwise read it as `'all'`. This World
 reads it as `'all'`; `src/storage.events.test.ts` pins that.
 
+eve 1.0 starts sessions with `$retention: 0` unless its tracing records inputs
+and outputs. Zero retention is purged per run at that run's terminal transition, and stream
+rows by the run id their writer passed. eve writes a session's stream under the
+session's first run, which stays running for the whole session, so a handoff
+successor that finishes purges its own data and leaves the session stream
+alone. eve reads `expiredAt` from `runs.get(id, { resolveData: 'none' })` to
+tell that a session's history is gone; `src/run-data-purge.integration.test.ts`
+pins both.
+
 The other surface an eve release can move is the message stream, which the
 World touches through write-side snapshot stripping. eve's appends carry a
 delta and no cumulative snapshot, so the stripping is a no-op guard.
