@@ -8,11 +8,13 @@ Start with the [project README](../README.md) for user and developer quick start
   provisioning, deployment configuration, and running the dispatcher.
 - [Configuration reference](./reference/configuration.md): environment variables
   and defaults for deployments and the dispatcher.
+- [Upgrading to 1.0](./guides/upgrading-to-1.0.md): recreating a database set
+  up by 0.x, renamed configuration, and the maintenance lines.
 
 ## Operations
 
 - [Dispatcher operations](./operations/dispatcher.md): pool sizing, readiness,
-  ownership liveness, boot recovery, dead letters, and upgrades.
+  ownership liveness, boot recovery, and dead letters.
 - [Storage and retention](./operations/storage.md): stream storage, retention
   classes, and bounded cleanup.
 
