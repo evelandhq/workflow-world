@@ -17,9 +17,11 @@ deletes soon after. Packing at write time and reading both row formats are
 unchanged; the settings and exports that went with them are listed under
 [configuration](#configuration-changes) and [code](#code-changes) changes.
 
-The database needs **no rebuild and no migration**: the schema is unchanged,
-and the jobs a 1.x World or dispatcher left behind are handled as described
-[below](#what-happens-to-jobs-1x-left-behind).
+The database needs **no rebuild**, and 2.0 adds no migration of its own: the
+schema is the one 1.2 has. A database last set up by 1.0 or 1.1 still needs
+1.2's `0002_hook_resume_dedup.sql`, which 2.0's `workflow-world-setup` applies;
+see [the cutover](#the-cutover). The jobs a 1.x World or dispatcher left behind
+are handled as described [below](#what-happens-to-jobs-1x-left-behind).
 
 ## The dispatcher and every deployment move together
 
@@ -65,10 +67,19 @@ log), and resolve their dead letters afterwards.
 ## The cutover
 
 1. **Build every deployment with 2.0**, without serving it yet.
-2. **Stop the 1.x dispatcher.** Deliveries pause; jobs keep queueing.
-3. **Switch traffic to the 2.0 builds** and retire the 1.x ones once their
+2. **Coming from 1.0 or 1.1, run 2.0's `workflow-world-setup`** against the
+   database. It applies `0002_hook_resume_dedup.sql`, and a 2.0 deployment's
+   event queries name the columns it adds, so it has to be in place before a
+   2.0 build serves anything. 1.x deployments keep working with it applied. It
+   blocks event writes while it builds its index; see
+   [upgrading within 1.x](./getting-started.md#upgrading-within-1x). The 2.0
+   dispatcher also applies pending migrations when it starts, but that is step
+   5, after the 2.0 builds take traffic. Coming from 1.2 there is nothing to
+   apply.
+3. **Stop the 1.x dispatcher.** Deliveries pause; jobs keep queueing.
+4. **Switch traffic to the 2.0 builds** and retire the 1.x ones once their
    pinned runs are done (see above).
-4. **Start the 2.0 dispatcher.** Its boot recovery releases the 1.x
+5. **Start the 2.0 dispatcher.** Its boot recovery releases the 1.x
    dispatcher's locks and handles the jobs 1.x left.
 
 To see what is still in flight before you start:
@@ -97,10 +108,13 @@ select tenant_id, deployment_id, status, count(*)
   ```
 
 - **Held timers** (`eveland_wf_timers` jobs, a 1.x dispatcher's delayed
-  deliveries) are not migrated, and nothing claims them. Boot recovery treats a
-  run whose only job is such a timer as having none, and replays it, which
-  re-arms its sleep from the wait's own deadline. The timer rows themselves wake
-  nothing; to retire them through graphile's public API:
+  deliveries) are not migrated, and nothing claims them. Boot recovery does not
+  count such a timer as its run's job. A run inside a `sleep()` (a waiting wait
+  with a deadline), or one that holds no hook, is therefore replayed, which
+  re-arms the sleep from the wait's own deadline. A run that holds a hook and
+  is not sleeping is not replayed, as on any boot: its next hook resume drives
+  it. The timer rows themselves wake nothing; to retire them through graphile's
+  public API:
 
   ```sql
   select graphile_worker.permanently_fail_jobs(
@@ -114,7 +128,9 @@ select tenant_id, deployment_id, status, count(*)
   );
   ```
 
-  graphile's `DELETE_PERMAFAILED_JOBS` cleanup then deletes them.
+  That marks them permanently failed; the rows stay until graphile's
+  `DELETE_PERMAFAILED_JOBS` cleanup deletes them (`WorkerUtils.cleanup`), which
+  this package does not run.
 
 ## Configuration changes
 
