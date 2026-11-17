@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v1.1.0...workflow-world-v1.2.0) (2026-11-17)
+
+
+### Features
+
+* deduplicate hook resumes by resume id (hookResumeDedup) ([#153](https://github.com/evelandhq/workflow-world/issues/153)) ([54cfde2](https://github.com/evelandhq/workflow-world/commit/54cfde2f1a9a170ae2da38ef9700d68949733002))
+* push a run's new events to its running orchestrator (events.subscribe) ([#151](https://github.com/evelandhq/workflow-world/issues/151)) ([478327c](https://github.com/evelandhq/workflow-world/commit/478327c0b8ebe2907917985b8acc898b4fcd3382))
+
 ## [1.1.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v1.0.1...workflow-world-v1.1.0) (2026-11-17)
 
 
