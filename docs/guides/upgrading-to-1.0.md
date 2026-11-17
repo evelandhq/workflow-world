@@ -103,6 +103,9 @@ The World and the dispatcher read only `WORKFLOW_WORLD_*` names. Rename:
 | `EVELAND_SCHEDULER_RUNTIME_SECRET`     | `WORKFLOW_WORLD_RUNTIME_SECRET`    |
 | `EVELAND_WORKFLOW_STREAM_COMPACTION`   | `WORKFLOW_WORLD_STREAM_COMPACTION` |
 
+`WORKFLOW_WORLD_STREAM_COMPACTION` exists in 1.x only: 2.0 no longer reads it
+([upgrading to 2.0](./upgrading-to-2.0.md#configuration-changes)).
+
 These are no longer read. Remove them:
 
 - `WORKFLOW_WORLD_RUNNER` / `EVELAND_WORKFLOW_RUNNER` and
