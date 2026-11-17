@@ -5,7 +5,7 @@
  * is the dispatcher's own version plus whatever revision/channel the host
  * chooses to pass through.
  */
-export const DISPATCHER_VERSION = "1.0.1"; // x-release-please-version
+export const DISPATCHER_VERSION = "1.1.0"; // x-release-please-version
 
 export type DispatcherBuildInfo = {
   service: string;

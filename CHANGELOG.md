@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v1.0.1...workflow-world-v1.1.0) (2026-11-17)
+
+
+### Features
+
+* delete a run's user data when it ends, for runs started with $retention: 0 ([#149](https://github.com/evelandhq/workflow-world/issues/149)) ([11a4da5](https://github.com/evelandhq/workflow-world/commit/11a4da5bd244cf18bbcf2bd3fd29ab3af16e7d82))
+
 ## [1.0.1](https://github.com/evelandhq/workflow-world/compare/workflow-world-v1.0.0...workflow-world-v1.0.1) (2026-11-16)
 
 
