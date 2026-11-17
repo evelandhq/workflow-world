@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.0.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v1.2.0...workflow-world-v2.0.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* the dispatch contract version is 2. A 2.0 World refuses a 1.x dispatcher and a 2.0 dispatcher is refused by a 1.x World, so the dispatcher and every deployment move to 2.0 together; see docs/guides/upgrading-to-2.0.md. runQueueName, runQueueFor and the timer job are gone, and WORKFLOW_DISPATCHER_TIMER_SWEEP_INTERVAL_MS and WORKFLOW_DISPATCHER_QUEUE_GC_INTERVAL_MS are no longer read. No database rebuild is needed.
+* packTerminalStreamBlocks, PackTerminalStreamBlocksOptions, PackTerminalStreamBlocksResult and resolveStreamCompaction are no longer exported. The World config option compactStreamSnapshots and the DispatcherConfiguration fields maintenanceMaxStreamsToPack and maintenanceCompactSnapshots are gone, and WORKFLOW_WORLD_STREAM_COMPACTION and WORKFLOW_DISPATCHER_MAINTENANCE_MAX_STREAMS_TO_PACK are no longer read. The maintenance result no longer has a blocks entry. No migration: the compact_after column and its trigger stay in the schema, unread.
+
+### Features
+
+* remove stream snapshot stripping and terminal block repacking ([#155](https://github.com/evelandhq/workflow-world/issues/155)) ([98c0302](https://github.com/evelandhq/workflow-world/commit/98c0302d27ccd56eac3990517941bcfe7876cdc5))
+* serialize a run's deliveries in the dispatcher instead of a Graphile queue per run ([#157](https://github.com/evelandhq/workflow-world/issues/157)) ([be06204](https://github.com/evelandhq/workflow-world/commit/be06204f0e5f244cdb1f46fd9d5c92adfd7e5f28))
+
 ## [1.2.0](https://github.com/evelandhq/workflow-world/compare/workflow-world-v1.1.0...workflow-world-v1.2.0) (2026-11-17)
 
 
