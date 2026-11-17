@@ -36,6 +36,9 @@ await pool.end();
 There is no default partition, so a deployment of an unprovisioned tenant fails
 on its first write.
 
+A database set up by a 0.x version cannot be upgraded in place: see
+[upgrading to 1.0](./upgrading-to-1.0.md).
+
 ## Configure deployments
 
 The SDK loads the World through these environment variables:
@@ -71,4 +74,4 @@ deployment in one of two ways:
 
 See the [configuration reference](../reference/configuration.md) for every
 setting, and [dispatcher operations](../operations/dispatcher.md) for pool
-sizing, readiness, recovery, and upgrades.
+sizing, readiness, and recovery.

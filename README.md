@@ -22,6 +22,9 @@ the database and tenants, configure deployments, and run the dispatcher. See
 the [documentation index](./docs/README.md) for configuration, operations, and
 architecture.
 
+**Coming from 0.x?** 1.0 cannot migrate a 0.x database: it has to be recreated.
+Read [upgrading to 1.0](./docs/guides/upgrading-to-1.0.md) first.
+
 ## Development
 
 Requires Node.js 24+, the pinned pnpm version, and a disposable PostgreSQL
