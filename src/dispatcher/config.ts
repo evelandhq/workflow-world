@@ -1,5 +1,4 @@
 import os from "node:os";
-import { resolveStreamCompaction } from "../config.js";
 import { MIN_OWNERSHIP_LIVENESS_MS } from "./ownership.js";
 import { parseStaticEndpoints } from "./static-activation.js";
 import { DEFAULT_TIMER_SWEEP_INTERVAL_MS } from "../timers.js";
@@ -33,17 +32,7 @@ export type DispatcherConfiguration = {
   maintenanceIntervalMs: number;
   maintenanceStreamBatchSize: number;
   maintenanceMaxBatches: number;
-  /**
-   * @deprecated Will be removed in 2.0 with terminal stream block repacking
-   * (`WORKFLOW_DISPATCHER_MAINTENANCE_MAX_STREAMS_TO_PACK`); `writeMulti` packs at write time.
-   */
-  maintenanceMaxStreamsToPack: number;
   maintenanceRunBatchSize: number;
-  /**
-   * @deprecated Will be removed in 2.0 with write-side snapshot stripping
-   * (`WORKFLOW_WORLD_STREAM_COMPACTION`), a no-op now that eve 1.0 writes delta appends.
-   */
-  maintenanceCompactSnapshots: boolean;
   /**
    * The liveness budget for the session holding the ownership lock: how long a
    * dead owner may keep it before the server reclaims it. See `ownership.ts`.
@@ -253,15 +242,10 @@ export function resolveDispatcherConfig(env: NodeJS.ProcessEnv): DispatcherConfi
       50_000,
     ),
     maintenanceMaxBatches: positiveNumber(env.WORKFLOW_DISPATCHER_MAINTENANCE_MAX_BATCHES, 20),
-    maintenanceMaxStreamsToPack: positiveNumber(
-      env.WORKFLOW_DISPATCHER_MAINTENANCE_MAX_STREAMS_TO_PACK,
-      100,
-    ),
     maintenanceRunBatchSize: positiveNumber(
       env.WORKFLOW_DISPATCHER_MAINTENANCE_RUN_BATCH_SIZE,
       1_000,
     ),
-    maintenanceCompactSnapshots: resolveStreamCompaction(env.WORKFLOW_WORLD_STREAM_COMPACTION),
     leaseRenewIntervalMs,
     activationLeaseTtlMs,
   };

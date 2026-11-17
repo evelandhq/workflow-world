@@ -163,8 +163,7 @@ below). And `events.create` reports `maxEvents` on every
 response that carries a run, because the runtime enforces the ceiling and a World
 that omits the field leaves a runaway workflow with no bound at all.
 
-`streams.writeMulti` generates monotonic logical ids up front, strips Eve's
-cumulative snapshots, and packs up to 64 logical chunks / 256 KiB into each v2
+`streams.writeMulti` generates monotonic logical ids up front and packs up to 64 logical chunks / 256 KiB into each v2
 physical row. One NOTIFY names one block; readers expand both one-row-per-chunk
 rows and v2 blocks before applying cursor or index semantics. A `streams.get`
 reader takes in a page of rows when its consumer has room for it and treats a
@@ -508,7 +507,7 @@ retention guard, partial so it stays small as terminal runs accumulate; and
 `workflow_runs (tenant_id, created_at DESC)` for listing surfaces. The
 caller-selected stream cleanup uses the partial expression index on
 `coalesce(completed_at, updated_at), tenant_id, id`; deadline-driven maintenance
-uses the `compact_after`, `expire_after`, and `detail_expire_after` indexes, then
+uses the `expire_after` and `detail_expire_after` indexes, then
 the `(tenant_id, retention_root_run_id, status)` index to validate whole-lineage
 eligibility. `workflow_hooks (tenant_id, hook_token_digest(token)) WHERE
 claims_token` is unique: it is what makes a token's owner one row (see
@@ -516,15 +515,11 @@ claims_token` is unique: it is what makes a token's owner one row (see
 
 graphile's own tables live in the same database, in their own schema, untouched.
 
-### Stream compaction and terminal retention
+### Stream storage and terminal retention
 
-The stream boundary is logical, not physical. Write-side snapshot stripping turns
-an append carrying a cumulative `messageSoFar` / `reasoningSoFar` back into a
-delta; eve writes deltas, so the guard is normally a no-op. Readers serve stored bytes verbatim: rebuilding snapshots on read
-would re-inflate every read to O(n²) bytes that the runtime normalizes away
-again. Packed rows retain every logical chunk id, so a
-terminal rewrite and a rolling upgrade do not change cursors, `startIndex`, or
-`tailIndex`.
+The stream boundary is logical, not physical. Readers serve stored bytes
+verbatim, and packed rows retain every logical chunk id, so cursors,
+`startIndex`, and `tailIndex` do not depend on how rows are stored.
 
 Eligibility is joined through both `tenant_id` and `run_id`; only non-EOF chunks
 of completed, failed or cancelled runs older than the caller's window are
@@ -535,11 +530,11 @@ session advisory lock across the batch loop, preventing independently scheduled
 workers from multiplying database load.
 
 New runs record an explicit retention class. A database trigger converts a
-terminal transition into `compact_after`, `expire_after`, and
+terminal transition into `expire_after` and
 `detail_expire_after`, which prevents write-time deletion from racing final
-NOTIFY/read delivery. Successful scheduled runs use 1 minute / 15 minutes / 24
-hours. Failed scheduled runs use 1 minute / 1 hour / 7 days, and cancelled ones
-use 1 minute / 1 hour / 3 days. Interactive runs use 5 minutes / 24 hours / 30
+NOTIFY/read delivery. Successful scheduled runs use 15 minutes / 24
+hours. Failed scheduled runs use 1 hour / 7 days, and cancelled ones
+use 1 hour / 3 days. Interactive runs use 24 hours / 30
 days; persistent runs receive no deadlines. Active runs receive none either.
 
 Creation resolves explicit input, the public run attribute, tenant-scoped SDK
@@ -551,8 +546,8 @@ trigger policy, and a later delivery to an existing graph cannot reclassify it.
 Every member also stores the resolved root id, avoiding recursive JSON lineage
 walks during maintenance.
 
-The dispatcher runs bounded maintenance once at startup and every minute. Block
-packing, stream expiry, and graph expiry are failure-isolated and protected by
+The dispatcher runs bounded maintenance once at startup and every minute. Stream
+expiry and graph expiry are failure-isolated and protected by
 advisory locks. Eligibility is decided across the complete stored lineage: any
 active member, later member deadline, persistent member, or unexpired retained
 hook holds both stream and graph data. Stream and graph expiry preserve EOF

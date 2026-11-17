@@ -25,13 +25,6 @@ export type EvelandWorldConfig = PgConnectionConfig & {
    */
   streamFlushIntervalMs?: number;
   /**
-   * Strip Eve's accumulated stream snapshots before persistence (default true).
-   *
-   * @deprecated Will be removed in 2.0. eve 1.0 only writes delta appends, so the
-   * stripping it switches is a no-op guard.
-   */
-  compactStreamSnapshots?: boolean;
-  /**
    * Live event feeds (`events.subscribe`) this process holds at most, across
    * every World in it. Falls back to `WORKFLOW_WORLD_MAX_LIVE_EVENT_FEEDS`,
    * then 32; `0` refuses every one. A feed is opened only in a delivery the
@@ -51,11 +44,6 @@ export type ResolvedWorldConfig = {
   /** Resolved once at construction; `undefined` means the default prefix. */
   queueNamespace?: string;
   streamFlushIntervalMs?: number;
-  /**
-   * @deprecated Will be removed in 2.0. eve 1.0 only writes delta appends, so
-   * write-side snapshot stripping is a no-op guard.
-   */
-  compactStreamSnapshots: boolean;
   maxLiveEventFeeds: number;
 };
 
@@ -69,22 +57,6 @@ export function resolveMaxLiveEventFeeds(value: string | undefined, fallback: nu
     );
   }
   return parsed;
-}
-
-/**
- * Resolve the emergency switch for write-side stream snapshot compaction.
- *
- * @deprecated Will be removed in 2.0 with write-side snapshot stripping, which
- * is a no-op now that eve 1.0 only writes delta appends.
- */
-export function resolveStreamCompaction(value: string | undefined): boolean {
-  if (value === undefined || value === "" || value === "on" || value === "true" || value === "1") {
-    return true;
-  }
-  if (value === "off" || value === "false" || value === "0") return false;
-  throw new Error(
-    `Invalid stream compaction setting "${value}": expected "on"/"true"/"1" or "off"/"false"/"0".`,
-  );
 }
 
 /**

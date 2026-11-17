@@ -6,7 +6,6 @@ import {
   type ResolvedWorldConfig,
   resolveConnectionString,
   resolveMaxLiveEventFeeds,
-  resolveStreamCompaction,
 } from "./config.js";
 import { createClient, type Drizzle } from "./drizzle/index.js";
 import { createListener } from "./listener.js";
@@ -45,11 +44,6 @@ export {
   type ReconciledWorkflowRun,
   type WorkflowRunReconciliationDisposition,
 } from "./reconciliation.js";
-export {
-  packTerminalStreamBlocks,
-  type PackTerminalStreamBlocksOptions,
-  type PackTerminalStreamBlocksResult,
-} from "./stream-block-maintenance.js";
 export {
   pruneExpiredStreamChunks,
   pruneExpiredWorkflowRuns,
@@ -120,9 +114,6 @@ function resolveConfig(config: EvelandWorldConfig): ResolvedWorldConfig {
     ...(config.streamFlushIntervalMs !== undefined
       ? { streamFlushIntervalMs: config.streamFlushIntervalMs }
       : {}),
-    compactStreamSnapshots:
-      config.compactStreamSnapshots ??
-      resolveStreamCompaction(process.env.WORKFLOW_WORLD_STREAM_COMPACTION),
     maxLiveEventFeeds:
       config.maxLiveEventFeeds !== undefined
         ? resolveMaxLiveEventFeeds(String(config.maxLiveEventFeeds), DEFAULT_MAX_LIVE_EVENT_FEEDS)
@@ -165,9 +156,7 @@ export function createWorld(
     specVersion,
     feed,
   );
-  const streamer = createStreamer(pool, drizzle, resolved.tenantId, listener, {
-    compactSnapshots: resolved.compactStreamSnapshots,
-  });
+  const streamer = createStreamer(pool, drizzle, resolved.tenantId, listener);
 
   return {
     /**

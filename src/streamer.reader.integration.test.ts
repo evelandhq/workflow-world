@@ -42,7 +42,6 @@ describe.skipIf(!testUrl)("stream readers", () => {
       pool,
       tenantId: TENANT,
       deploymentId: "dep_stream_reader",
-      compactStreamSnapshots: false,
     });
   }, 60_000);
 

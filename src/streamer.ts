@@ -20,7 +20,6 @@ import * as z from "zod";
 import { type Drizzle, Schema } from "./drizzle/index.js";
 import { packStreamChunks, unpackStreamRow } from "./stream-blocks.js";
 import type { SharedListener } from "./listener.js";
-import { compactStreamChunk } from "./stream-compaction.js";
 import { tenantStreamChannel } from "./tenant.js";
 
 const StreamPublishMessage = z.object({
@@ -44,20 +43,12 @@ export type PostgresStreamer = Streamer & {
   close(): Promise<void>;
 };
 
-export type StreamerOptions = {
-  /** Strip Eve's cumulative snapshot fields before persistence. */
-  compactSnapshots?: boolean;
-};
-
 export function createStreamer(
   pool: Pool,
   drizzle: Drizzle,
   tenantId: string,
   listener: SharedListener,
-  options: StreamerOptions = {},
 ): PostgresStreamer {
-  const compactSnapshots = options.compactSnapshots ?? true;
-  const compact = (chunk: Buffer): Buffer => (compactSnapshots ? compactStreamChunk(chunk) : chunk);
   const ulid = monotonicFactory();
   // A notification carries no data: it wakes the readers of that stream, and
   // each reads on from its own position when its consumer asks for more.
@@ -153,7 +144,7 @@ export function createStreamer(
           chunkId,
           streamId: name,
           runId,
-          chunkData: compact(toBuffer(chunk)),
+          chunkData: toBuffer(chunk),
           eof: false,
           codecVersion: 1,
           chunkCount: 1,
@@ -185,7 +176,7 @@ export function createStreamer(
         const blocks = packStreamChunks(
           chunks.map((chunk, index) => ({
             id: chunkIds[index]!,
-            data: compact(toBuffer(chunk)),
+            data: toBuffer(chunk),
           })),
         );
 

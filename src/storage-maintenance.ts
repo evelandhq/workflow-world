@@ -1,9 +1,5 @@
 import type { Pool } from "pg";
 import {
-  packTerminalStreamBlocks,
-  type PackTerminalStreamBlocksResult,
-} from "./stream-block-maintenance.js";
-import {
   pruneExpiredStreamChunks,
   pruneExpiredWorkflowRuns,
   type StreamRetentionResult,
@@ -13,16 +9,10 @@ import {
 export type StorageMaintenanceOptions = {
   streamBatchSize: number;
   maxBatches: number;
-  maxStreamsToPack: number;
   runBatchSize: number;
-  compactSnapshots?: boolean;
 };
 
 type StorageMaintenanceDependencies = {
-  packBlocks: (
-    pool: Pool,
-    options: { maxStreams: number; compactSnapshots?: boolean },
-  ) => Promise<PackTerminalStreamBlocksResult | { streamsCompacted: number }>;
   pruneStreams: (
     pool: Pool,
     options: { batchSize: number; maxBatches: number },
@@ -34,7 +24,6 @@ type StorageMaintenanceDependencies = {
 };
 
 const defaultDependencies: StorageMaintenanceDependencies = {
-  packBlocks: packTerminalStreamBlocks,
   pruneStreams: pruneExpiredStreamChunks,
   pruneRuns: pruneExpiredWorkflowRuns,
 };
@@ -45,12 +34,6 @@ export async function runStorageMaintenanceOnce(
   options: StorageMaintenanceOptions,
   dependencies: StorageMaintenanceDependencies = defaultDependencies,
 ) {
-  const blocks = await settle(() =>
-    dependencies.packBlocks(pool, {
-      maxStreams: options.maxStreamsToPack,
-      compactSnapshots: options.compactSnapshots ?? true,
-    }),
-  );
   const streams = await settle(() =>
     dependencies.pruneStreams(pool, {
       batchSize: options.streamBatchSize,
@@ -63,7 +46,7 @@ export async function runStorageMaintenanceOnce(
       maxBatches: options.maxBatches,
     }),
   );
-  return { blocks, streams, runs };
+  return { streams, runs };
 }
 
 export function startStorageMaintenanceLoop(
