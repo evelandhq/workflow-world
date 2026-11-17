@@ -1,6 +1,8 @@
+import { drizzle } from "drizzle-orm/node-postgres";
 import type { Pool, PoolClient } from "pg";
 import { runQueueName } from "./dispatch-contract.js";
 import { MessageData } from "./message.js";
+import { requestsZeroRetention, writeRunUserDataPurge } from "./run-data-purge.js";
 import { assertValidTenantId } from "./tenant.js";
 
 /**
@@ -116,7 +118,8 @@ export async function reconcileWorkflowRuns(
  * state concurrently drops out rather than being overwritten), hooks deleted
  * except retained tokens, waits deleted. `completed_at` flips the retention
  * trigger, which recomputes the row's compaction and expiry deadlines exactly
- * as it would for a workflow-authored terminal transition.
+ * as it would for a workflow-authored terminal transition. A run that asked for
+ * `$retention: 0` loses its user data in the same transaction.
  */
 async function settleRuns(
   client: PoolClient,
@@ -141,6 +144,7 @@ async function settleRuns(
     name: string;
     deployment_id: string;
     previous_status: "pending" | "running";
+    attributes: Record<string, string> | null;
   }>(
     `update workflow.workflow_runs as runs
         set status = '${status}', completed_at = now(), updated_at = now()${settleClause}
@@ -152,7 +156,8 @@ async function settleRuns(
               for update) as active
       where runs.tenant_id = active.tenant_id
         and runs.id = active.id
-      returning runs.id, runs.name, runs.deployment_id, active.previous_status`,
+      returning runs.id, runs.name, runs.deployment_id, active.previous_status,
+                runs.attributes`,
     settleParams,
   );
   if (settled.rows.length > 0) {
@@ -172,6 +177,12 @@ async function settleRuns(
         where tenant_id = $1 and run_id = any($2)`,
       [options.tenantId, runIds],
     );
+    const purgedAt = new Date();
+    for (const row of settled.rows) {
+      if (requestsZeroRetention(row.id, row.attributes ?? undefined)) {
+        await purgeInSavepoint(client, options.tenantId, row.id, purgedAt);
+      }
+    }
   }
   return settled.rows.map((row) => ({
     runId: row.id,
@@ -179,6 +190,34 @@ async function settleRuns(
     deploymentId: row.deployment_id,
     previousStatus: row.previous_status,
   }));
+}
+
+/**
+ * Honors `$retention: 0` for a run this settle just made terminal, inside the
+ * settle's transaction: the run becomes terminal and loses its data in one
+ * commit, so no reader sees a settled run that still holds data it asked to
+ * have deleted, and no crash between the two can leave it that way for good —
+ * a settled run is never offered to reconciliation again. A savepoint, so a
+ * failed purge is logged and the settle still commits, as on the World's own
+ * terminal path (`purgeRunUserDataIfZeroRetention`).
+ */
+async function purgeInSavepoint(
+  client: PoolClient,
+  tenantId: string,
+  runId: string,
+  purgedAt: Date,
+): Promise<void> {
+  await client.query("savepoint zero_retention_purge");
+  try {
+    await writeRunUserDataPurge(drizzle(client), tenantId, runId, purgedAt);
+    await client.query("release savepoint zero_retention_purge");
+  } catch (cause) {
+    await client.query("rollback to savepoint zero_retention_purge");
+    console.error(
+      `[workflow] failed to purge user data for zero-retention run "${runId}" (tenant "${tenantId}")`,
+      cause,
+    );
+  }
 }
 
 /**

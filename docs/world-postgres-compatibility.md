@@ -16,6 +16,7 @@ behavior since.
 | Retained hooks remain visible until expiry, then become invisible and release their token | `src/storage.hook-retention.test.ts`                                 |
 | Logical stream bytes, indices, cursors, EOF and mixed legacy/v2 reads                     | `src/streamer.storage-v2.integration.test.ts` and stream unit suites |
 | Graphile delivery budget is 49, for the World's sends and the dispatcher's reschedules    | `src/queue.test.ts` and `src/dispatcher/runner.test.ts`              |
+| `$retention: 0` deletes a run's user data at its terminal transition, marking it expired  | `src/run-data-purge.integration.test.ts`                             |
 | Public World conformance and supported Eve integration                                    | `conformance/` and `e2e-tests/`                                      |
 
 These behaviors are release blockers. An upstream version bump must re-run this
@@ -35,6 +36,14 @@ without an explicit architecture decision:
   logical chunks and cursors remain compatible.
 - Explicit retention classes and automatic expiry. Use `persistent` when the
   upstream no-automatic-expiry behavior is required.
+- A `$retention: 0` purge deletes the run's non-EOF stream rows instead of
+  blanking them, because a packed block holds its chunk ids in its data. It also
+  empties the body of the run's dead letters, keeps the payload of
+  `hook_disposed` events (World-written token and force-claim routing, which
+  the hook redirect reads), and a purged event reads back as
+  its envelope without `eventData` (upstream's event reads reject it). The
+  purged rows themselves are removed later by the run's retention class, like
+  any other run's.
 - Configuration names and migration history.
 - Internal page sizes when `cursor`/`hasMore` semantics remain correct. In
   particular, callers must not assume one `events.list()` call returns every

@@ -33,8 +33,16 @@ export type DispatcherConfiguration = {
   maintenanceIntervalMs: number;
   maintenanceStreamBatchSize: number;
   maintenanceMaxBatches: number;
+  /**
+   * @deprecated Will be removed in 2.0 with terminal stream block repacking
+   * (`WORKFLOW_DISPATCHER_MAINTENANCE_MAX_STREAMS_TO_PACK`); `writeMulti` packs at write time.
+   */
   maintenanceMaxStreamsToPack: number;
   maintenanceRunBatchSize: number;
+  /**
+   * @deprecated Will be removed in 2.0 with write-side snapshot stripping
+   * (`WORKFLOW_WORLD_STREAM_COMPACTION`), a no-op now that eve 1.0 writes delta appends.
+   */
   maintenanceCompactSnapshots: boolean;
   /**
    * The liveness budget for the session holding the ownership lock: how long a

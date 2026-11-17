@@ -7,7 +7,7 @@
 Logical chunks stay intact at the public boundary, while the database uses two
 internal optimizations:
 
-- `messageSoFar` and `reasoningSoFar` are stripped before persistence. Every
+- **Deprecated, removed in 2.0.** `messageSoFar` and `reasoningSoFar` are stripped before persistence. Every
   supported Eve line writes delta-only appends (message stream v25), so this is
   a no-op guard against a v24-shaped write rather than a transform in daily
   use. Unknown framing and event shapes pass through unchanged; the
@@ -16,7 +16,8 @@ internal optimizations:
 - `writeMulti` packs up to 64 logical chunks into a physical v2 block, capped at
   256 KiB. Readers expand single-chunk rows and v2 blocks into the same logical stream.
   `packTerminalStreamBlocks` is the bounded, advisory-locked fallback for streams
-  written one row at a time before EOF.
+  written one row at a time before EOF. **Deprecated, removed in 2.0**; write-time
+  packing stays.
 
 Logical chunk IDs remain inside each block and continue to drive cursor and
 `startIndex` behavior. Repacking physical rows therefore does not invalidate an
@@ -56,6 +57,28 @@ non-overlapping, and failure-isolated. A lineage remains ineligible while any
 member is active, has a later deadline, is persistent, or owns a hook token whose
 reservation has not expired. This protects terminal parents while background
 children, approvals, callbacks, or task-input capabilities remain live.
+
+### Zero retention
+
+A run started with `$retention: 0` loses its user data when it reaches a
+terminal state, whether the workflow finished it or `reconcileWorkflowRuns`
+failed or cancelled it. In one transaction the run gets `expired_at`, and the
+payload columns of the run, its steps, its events (except `hook_disposed`,
+which holds only the token and force-claim routing) and its retained hooks are
+set to NULL; the run's non-EOF stream rows are deleted, and its dead letters
+keep their row with an empty message body. Ids, statuses, timestamps,
+attributes and EOF rows stay, so the run still lists and its streams still end.
+Any other value keeps the data and logs a warning.
+
+eve 1.0 asks for zero retention by default unless its tracing records inputs and
+outputs (`experimental.workflow.retention` overrides it), so most eve runs take
+this path. Stream rows belong to the run id their writer passed. An eve session's stream
+is written under its first run's id, so a handoff successor finishing does not
+touch it; the stream goes when the first run ends.
+
+The purge does not change the run's retention class or deadlines. The class
+still decides when the purged rows are deleted, and a `persistent` run keeps
+them, empty, indefinitely.
 
 ### Manual stream cleanup
 

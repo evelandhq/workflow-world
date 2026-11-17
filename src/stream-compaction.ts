@@ -104,6 +104,9 @@ function withoutSnapshot(data: Record<string, unknown>, soFarKey: string): Recor
  * Nothing rebuilds the snapshot on read: that would re-inflate every read to
  * O(n²) bytes the runtime immediately normalizes away again. Stored bytes are
  * what readers get.
+ *
+ * @deprecated Will be removed in 2.0. eve 1.0 only writes delta appends, so
+ * this guard never changes anything.
  */
 export function compactStreamChunk(chunk: Buffer): Buffer {
   const frames = parseFrames(chunk);

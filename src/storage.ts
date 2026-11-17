@@ -54,6 +54,7 @@ import type {
 import {
   ATTRIBUTE_MAX_PER_RUN,
   AttributeValidationError,
+  BaseEventSchema,
   EVENT_ID_BODY_LENGTH,
   EVENT_ID_PREFIX,
   EventSchema,
@@ -101,9 +102,11 @@ import {
   sql,
 } from "drizzle-orm";
 import { monotonicFactory } from "ulid";
+import { z } from "zod/v4";
 import { type Drizzle, Schema } from "./drizzle/index.js";
 import { HOOK_TOKEN_CLAIM_UNIQUE, type SerializedContent } from "./drizzle/schema.js";
 import { deliveryInFlight } from "./delivery-liveness.js";
+import { purgeRunUserDataIfZeroRetention } from "./run-data-purge.js";
 import { resolveRunRetentionForCreation } from "./run-retention-resolution.js";
 import {
   admittedStartHook,
@@ -470,7 +473,7 @@ async function reportSkippedSlots(
     )
     .orderBy(Schema.events.eventId);
   const skipped = rows.map((row) => {
-    return stripEventDataRefs(EventSchema.parse(compact(row)), resolveData);
+    return stripEventDataRefs(parseStoredEvent(row), resolveData);
   });
   return {
     events: skipped,
@@ -502,6 +505,35 @@ function getMaxEventsPerRun(): number {
   const raw = process.env.WORKFLOW_MAX_EVENTS;
   const parsed = raw !== undefined ? Number(raw) : Number.NaN;
   return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_EVENTS_PER_RUN;
+}
+
+/**
+ * What is left of an event whose payload a `$retention: 0` purge cleared
+ * (`run-data-purge.ts`): the envelope without `eventData`.
+ */
+const PurgedEventSchema = BaseEventSchema.extend({
+  runId: z.string(),
+  eventId: z.string(),
+  createdAt: z.coerce.date(),
+  resumeId: z.string().optional(),
+});
+
+/**
+ * A stored event row as an `Event`.
+ *
+ * Most event types require `eventData`, and a zero-retention purge sets it to
+ * NULL. Such a row reads back as its envelope rather than failing the whole
+ * listing, the same shape `resolveData: 'none'` already hands out for an event
+ * whose data was all refs. A row that still has its data parses exactly as
+ * before.
+ */
+function parseStoredEvent(row: typeof Schema.events.$inferSelect): Event {
+  const value = compact(row);
+  if (value.eventData === undefined) {
+    const parsed = EventSchema.safeParse(value);
+    return parsed.success ? parsed.data : (PurgedEventSchema.parse(value) as Event);
+  }
+  return EventSchema.parse(value);
 }
 
 /** A run row as the runtime's run: `error` is already CBOR-decoded `SerializedData`. */
@@ -3009,7 +3041,7 @@ function createUnfencedEventsStorage(
           .where(and(eq(Schema.events.tenantId, tenantId), eq(Schema.events.runId, effectiveRunId)))
           .orderBy(Schema.events.eventId);
         const allEvents = eventRows.map((e) => {
-          const parsed = EventSchema.parse(compact(e));
+          const parsed = parseStoredEvent(e);
           return stripEventDataRefs(parsed, resolveData);
         });
         eventPage = {
@@ -3035,13 +3067,33 @@ function createUnfencedEventsStorage(
           .limit(limit + 1);
         const page = deltaRows.slice(0, limit);
         const delta = page.map((row) => {
-          return stripEventDataRefs(EventSchema.parse(compact(row)), resolveData);
+          return stripEventDataRefs(parseStoredEvent(row), resolveData);
         });
         eventPage = {
           data: delta,
           cursor: delta.at(-1)?.eventId ?? null,
           hasMore: deltaRows.length > limit,
         };
+      }
+
+      // Honor `$retention: 0` now that the terminal event row is written: that
+      // event is itself payload-bearing (`run_completed` carries the output), so
+      // this is the first point a purge covers the whole run. `run` is set on a
+      // terminal event only by the writer whose conditional UPDATE won, so this
+      // fires once per run; the idempotent `run_cancelled` returned earlier.
+      // The response below is a pre-purge snapshot, as upstream's is.
+      if (
+        run &&
+        isTerminalRunEventType(data.eventType) &&
+        isTerminalWorkflowRunStatus(run.status)
+      ) {
+        await purgeRunUserDataIfZeroRetention(
+          drizzle,
+          tenantId,
+          effectiveRunId,
+          run.attributes,
+          now,
+        );
       }
 
       const eventResult: EventResult = {
@@ -3079,7 +3131,7 @@ function createUnfencedEventsStorage(
         throw new WorkflowWorldError(`Event not found: ${eventId}`);
       }
 
-      const parsed = EventSchema.parse(compact(value));
+      const parsed = parseStoredEvent(value);
       const resolveData = params?.resolveData ?? "all";
       return stripEventDataRefs(parsed, resolveData);
     },
@@ -3108,7 +3160,7 @@ function createUnfencedEventsStorage(
       const resolveData = params?.resolveData ?? "all";
       return {
         data: values.map((v) => {
-          const parsed = EventSchema.parse(compact(v));
+          const parsed = parseStoredEvent(v);
           return stripEventDataRefs(parsed, resolveData);
         }),
         cursor: values.at(-1)?.eventId ?? null,
@@ -3153,7 +3205,7 @@ function createUnfencedEventsStorage(
       const resolveData = params?.resolveData ?? "all";
       return {
         data: values.map((v) => {
-          const parsed = EventSchema.parse(compact(v));
+          const parsed = parseStoredEvent(v);
           return stripEventDataRefs(parsed, resolveData);
         }),
         cursor: values.at(-1)?.eventId ?? null,
