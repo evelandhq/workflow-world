@@ -89,10 +89,6 @@ alone. eve reads `expiredAt` from `runs.get(id, { resolveData: 'none' })` to
 tell that a session's history is gone; `src/run-data-purge.integration.test.ts`
 pins both.
 
-The other surface an eve release can move is the message stream, which the
-World touches through write-side snapshot stripping. eve's appends carry a
-delta and no cumulative snapshot, so the stripping is a no-op guard.
-
 ## The conformance harness
 
 `@workflow/world-testing` ships its own runtime bundle and tracks its own

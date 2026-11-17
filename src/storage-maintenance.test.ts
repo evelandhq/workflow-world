@@ -3,16 +3,12 @@ import { describe, expect, test, vi } from "vitest";
 import { runStorageMaintenanceOnce, startStorageMaintenanceLoop } from "./storage-maintenance.js";
 
 describe("runStorageMaintenanceOnce", () => {
-  test("runs block packing, stream expiry, and detail expiry", async () => {
+  test("runs stream expiry and run expiry", async () => {
     const calls: string[] = [];
     const result = await runStorageMaintenanceOnce(
       {} as Pool,
-      { streamBatchSize: 50, maxBatches: 2, maxStreamsToPack: 10, runBatchSize: 5 },
+      { streamBatchSize: 50, maxBatches: 2, runBatchSize: 5 },
       {
-        packBlocks: async () => {
-          calls.push("pack");
-          return { streamsCompacted: 1 };
-        },
         pruneStreams: async () => {
           calls.push("streams");
           return { deletedRows: 2 };
@@ -24,31 +20,28 @@ describe("runStorageMaintenanceOnce", () => {
       },
     );
 
-    expect(calls).toEqual(["pack", "streams", "runs"]);
+    expect(calls).toEqual(["streams", "runs"]);
     expect(result).toEqual({
-      blocks: { status: "fulfilled", value: { streamsCompacted: 1 } },
       streams: { status: "fulfilled", value: { deletedRows: 2 } },
       runs: { status: "fulfilled", value: { deletedRuns: 3 } },
     });
   });
 
   test("one maintenance failure does not suppress the remaining work", async () => {
-    const pruneStreams = vi.fn(async () => ({ deletedRows: 2 }));
+    const pruneStreams = vi.fn(async () => {
+      throw new Error("streams failed");
+    });
     const pruneRuns = vi.fn(async () => ({ deletedRuns: 3 }));
     const result = await runStorageMaintenanceOnce(
       {} as Pool,
-      { streamBatchSize: 50, maxBatches: 2, maxStreamsToPack: 10, runBatchSize: 5 },
+      { streamBatchSize: 50, maxBatches: 2, runBatchSize: 5 },
       {
-        packBlocks: async () => {
-          throw new Error("pack failed");
-        },
         pruneStreams,
         pruneRuns,
       },
     );
 
-    expect(result.blocks.status).toBe("rejected");
-    expect(result.streams.status).toBe("fulfilled");
+    expect(result.streams.status).toBe("rejected");
     expect(result.runs.status).toBe("fulfilled");
     expect(pruneStreams).toHaveBeenCalledOnce();
     expect(pruneRuns).toHaveBeenCalledOnce();
@@ -67,7 +60,6 @@ describe("startStorageMaintenanceLoop", () => {
           maintenance: {
             streamBatchSize: 50,
             maxBatches: 2,
-            maxStreamsToPack: 10,
             runBatchSize: 5,
           },
         },
@@ -94,7 +86,7 @@ describe("startStorageMaintenanceLoop", () => {
         maintenance: {
           streamBatchSize: 50,
           maxBatches: 2,
-          maxStreamsToPack: 10,
+
           runBatchSize: 5,
         },
       },

@@ -128,9 +128,7 @@ describe("shared environment contract", () => {
       expect(config.maintenanceIntervalMs).toBe(60_000);
       expect(config.maintenanceStreamBatchSize).toBe(50_000);
       expect(config.maintenanceMaxBatches).toBe(20);
-      expect(config.maintenanceMaxStreamsToPack).toBe(100);
       expect(config.maintenanceRunBatchSize).toBe(1_000);
-      expect(config.maintenanceCompactSnapshots).toBe(true);
     });
 
     test("accepts explicit bounds and zero disables only the timer", () => {
@@ -140,17 +138,13 @@ describe("shared environment contract", () => {
         WORKFLOW_DISPATCHER_MAINTENANCE_INTERVAL_MS: "0",
         WORKFLOW_DISPATCHER_MAINTENANCE_STREAM_BATCH_SIZE: "10",
         WORKFLOW_DISPATCHER_MAINTENANCE_MAX_BATCHES: "2",
-        WORKFLOW_DISPATCHER_MAINTENANCE_MAX_STREAMS_TO_PACK: "3",
         WORKFLOW_DISPATCHER_MAINTENANCE_RUN_BATCH_SIZE: "4",
-        WORKFLOW_WORLD_STREAM_COMPACTION: "off",
       });
 
       expect(config.maintenanceIntervalMs).toBe(0);
       expect(config.maintenanceStreamBatchSize).toBe(10);
       expect(config.maintenanceMaxBatches).toBe(2);
-      expect(config.maintenanceMaxStreamsToPack).toBe(3);
       expect(config.maintenanceRunBatchSize).toBe(4);
-      expect(config.maintenanceCompactSnapshots).toBe(false);
     });
   });
 });

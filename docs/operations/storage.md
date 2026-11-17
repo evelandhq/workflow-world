@@ -4,36 +4,26 @@
 
 ## Stream storage safety boundary
 
-Logical chunks stay intact at the public boundary, while the database uses two
-internal optimizations:
-
-- **Deprecated, removed in 2.0.** `messageSoFar` and `reasoningSoFar` are stripped before persistence. Every
-  supported Eve line writes delta-only appends (message stream v25), so this is
-  a no-op guard against a v24-shaped write rather than a transform in daily
-  use. Unknown framing and event shapes pass through unchanged; the
-  deployment-side `WORKFLOW_WORLD_STREAM_COMPACTION=off` switch disables only new stripping. Readers serve the
-  stored bytes verbatim: nothing rebuilds a snapshot on read.
-- `writeMulti` packs up to 64 logical chunks into a physical v2 block, capped at
-  256 KiB. Readers expand single-chunk rows and v2 blocks into the same logical stream.
-  `packTerminalStreamBlocks` is the bounded, advisory-locked fallback for streams
-  written one row at a time before EOF. **Deprecated, removed in 2.0**; write-time
-  packing stays.
+Logical chunks stay intact at the public boundary, while the database stores
+them physically in two shapes: one row per chunk, and v2 blocks. `writeMulti`
+packs up to 64 logical chunks into one block, capped at 256 KiB. Readers expand
+single-chunk rows and v2 blocks into the same logical stream, and serve stored
+bytes verbatim.
 
 Logical chunk IDs remain inside each block and continue to drive cursor and
-`startIndex` behavior. Repacking physical rows therefore does not invalidate an
-existing cursor.
+`startIndex` behavior.
 
 ## Retention classes and maintenance
 
 Every run has one internal retention class:
 
-| class / outcome                      | compact after | expire non-EOF stream data | expire workflow graph |
-| ------------------------------------ | ------------: | -------------------------: | --------------------: |
-| `scheduled`, completed               |      1 minute |                 15 minutes |              24 hours |
-| `scheduled`, failed                  |      1 minute |                     1 hour |                7 days |
-| `scheduled`, cancelled               |      1 minute |                     1 hour |                3 days |
-| `interactive` (default), any outcome |     5 minutes |                   24 hours |               30 days |
-| `persistent`                         |         never |                      never |                 never |
+| class / outcome                      | expire non-EOF stream data | expire workflow graph |
+| ------------------------------------ | -------------------------: | --------------------: |
+| `scheduled`, completed               |                   1 minute |            15 minutes | 24 hours |
+| `scheduled`, failed                  |                   1 minute |                1 hour | 7 days   |
+| `scheduled`, cancelled               |                   1 minute |                1 hour | 3 days   |
+| `interactive` (default), any outcome |                  5 minutes |              24 hours | 30 days  |
+| `persistent`                         |                      never |                 never | never    |
 
 EOF rows survive both stream expiry and workflow-graph expiry, so an old stream
 still resolves as complete. Active or waiting runs have no deadlines. A database
@@ -51,7 +41,7 @@ existing conversation's policy. The resolved root is materialized on every run
 for indexed graph-level maintenance. Unresolvable lineage is rejected instead
 of silently changing class.
 
-The dispatcher runs block packing, deadline-driven stream expiry, and full graph
+The dispatcher runs deadline-driven stream expiry, and full graph
 expiry once at startup and every minute. Each task is bounded, advisory-locked,
 non-overlapping, and failure-isolated. A lineage remains ineligible while any
 member is active, has a later deadline, is persistent, or owns a hook token whose

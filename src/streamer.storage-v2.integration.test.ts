@@ -7,7 +7,6 @@ import {
   resolveMigrationsDir,
   runMigrations,
 } from "./migrate.js";
-import { compactStreamChunk } from "./stream-compaction.js";
 
 const testUrl = process.env.WORKFLOW_WORLD_TEST_URL;
 const suffix = `${String(process.pid)}${Date.now().toString(36)}`;
@@ -40,7 +39,6 @@ function encodeMessage(delta: string, soFar: string): Buffer {
 describe.skipIf(!testUrl)("stream storage v2", () => {
   let pool: Pool;
   let world: ReturnType<typeof createWorld>;
-  let uncompacted: ReturnType<typeof createWorld>;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: testUrl, max: 3 });
@@ -51,22 +49,15 @@ describe.skipIf(!testUrl)("stream storage v2", () => {
       tenantId: TENANT,
       deploymentId: "dep_stream_v2",
     });
-    uncompacted = createWorld({
-      pool,
-      tenantId: TENANT,
-      deploymentId: "dep_stream_v2",
-      compactStreamSnapshots: false,
-    });
   }, 60_000);
 
   afterAll(async () => {
     await world?.close?.();
-    await uncompacted?.close?.();
     await dropTenantPartitions(pool, TENANT).catch(() => {});
     await pool?.end().catch(() => {});
   });
 
-  test("single writes strip snapshots and every read path serves the stored delta-only bytes", async () => {
+  test("single writes are stored verbatim and every read path serves the stored bytes", async () => {
     const streamId = `strm_snapshots_${suffix}`;
     let soFar = "";
     const wire = ["one ", "two ", "three ", "four"].map((delta) => {
@@ -81,13 +72,8 @@ describe.skipIf(!testUrl)("stream storage v2", () => {
         where tenant_id = $1 and stream_id = $2 and eof = false order by id`,
       [TENANT, streamId],
     );
-    expect(stored.rows.map((row) => row.data)).not.toEqual(wire);
-    expect(stored.rows.reduce((total, row) => total + row.data.length, 0)).toBeLessThan(
-      wire.reduce((total, chunk) => total + chunk.length, 0),
-    );
-
     const stored_bytes = stored.rows.map((row) => row.data);
-    expect(stored_bytes).toEqual(wire.map(compactStreamChunk));
+    expect(stored_bytes).toEqual(wire);
     const page = await world.streams.getChunks("wrun_snapshots", streamId, { limit: 10 });
     expect(page.data.map(({ data }) => Buffer.from(data))).toEqual(stored_bytes);
     expect(await collect(await world.streams.get("wrun_snapshots", streamId, 2))).toEqual(
@@ -105,18 +91,8 @@ describe.skipIf(!testUrl)("stream storage v2", () => {
     await world.streams.writeMulti!("wrun_live", streamId, rest);
     await world.streams.close("wrun_live", streamId);
 
-    expect(await reading).toEqual([first, ...rest].map(compactStreamChunk));
+    expect(await reading).toEqual([first, ...rest]);
   }, 20_000);
-
-  test("the kill switch writes snapshots unchanged and readers serve them unchanged", async () => {
-    const streamId = `strm_kill_${suffix}`;
-    const wire = [encodeMessage("fat", "fat"), encodeMessage(" row", "fat row")];
-    await uncompacted.streams.writeMulti!("wrun_kill", streamId, wire);
-    await uncompacted.streams.close("wrun_kill", streamId);
-
-    const page = await world.streams.getChunks("wrun_kill", streamId, { limit: 10 });
-    expect(page.data.map(({ data }) => Buffer.from(data))).toEqual(wire);
-  });
 
   test("writeMulti stores 130 logical chunks in three physical blocks", async () => {
     const streamId = `strm_blocks_${suffix}`;
@@ -163,7 +139,7 @@ describe.skipIf(!testUrl)("stream storage v2", () => {
       cursor: first.cursor!,
     });
     expect([...first.data, ...second.data].map(({ data }) => Buffer.from(data))).toEqual(
-      wire.slice(0, 128).map(compactStreamChunk),
+      wire.slice(0, 128),
     );
     expect(second.data.map(({ index }) => index)).toEqual(
       Array.from({ length: 64 }, (_, offset) => 64 + offset),
@@ -192,23 +168,23 @@ describe.skipIf(!testUrl)("stream storage v2", () => {
     // read must not try to enqueue on the controller it already closed.
     const streamId = `strm_retried_eof_${suffix}`;
     const text = (value: string) => new TextEncoder().encode(value);
-    await uncompacted.streams.write("wrun_retried_eof", streamId, text("one"));
-    await uncompacted.streams.write("wrun_retried_eof", streamId, text("two"));
-    await uncompacted.streams.close("wrun_retried_eof", streamId);
-    await uncompacted.streams.write("wrun_retried_eof", streamId, text("two"));
-    await uncompacted.streams.close("wrun_retried_eof", streamId);
+    await world.streams.write("wrun_retried_eof", streamId, text("one"));
+    await world.streams.write("wrun_retried_eof", streamId, text("two"));
+    await world.streams.close("wrun_retried_eof", streamId);
+    await world.streams.write("wrun_retried_eof", streamId, text("two"));
+    await world.streams.close("wrun_retried_eof", streamId);
 
-    const page = await uncompacted.streams.getChunks("wrun_retried_eof", streamId, { limit: 10 });
+    const page = await world.streams.getChunks("wrun_retried_eof", streamId, { limit: 10 });
     expect(page.data.map((chunk) => new TextDecoder().decode(chunk.data))).toEqual(["one", "two"]);
     expect(page).toMatchObject({ done: true, hasMore: false });
-    expect(await uncompacted.streams.getInfo("wrun_retried_eof", streamId)).toEqual({
+    expect(await world.streams.getInfo("wrun_retried_eof", streamId)).toEqual({
       tailIndex: 1,
       done: true,
     });
 
     const readAll = async (startIndex?: number) => {
       const reader = (
-        await uncompacted.streams.get("wrun_retried_eof", streamId, startIndex)
+        await world.streams.get("wrun_retried_eof", streamId, startIndex)
       ).getReader();
       const seen: string[] = [];
       for (;;) {

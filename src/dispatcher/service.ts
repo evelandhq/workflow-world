@@ -253,9 +253,7 @@ export async function startDispatcherService(
         maintenance: {
           streamBatchSize: config.maintenanceStreamBatchSize,
           maxBatches: config.maintenanceMaxBatches,
-          maxStreamsToPack: config.maintenanceMaxStreamsToPack,
           runBatchSize: config.maintenanceRunBatchSize,
-          compactSnapshots: config.maintenanceCompactSnapshots,
         },
         onResult: (result) => {
           for (const [role, outcome] of Object.entries(result)) {
