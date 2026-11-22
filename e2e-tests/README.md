@@ -58,8 +58,12 @@ release. An unknown or disabled value fails instead of silently running nothing.
 Each enabled eve version costs an `npm install` plus a full `eve build`, so
 `eve-versions.mts` enables them deliberately rather than all at once. This
 package pins the `@workflow/*` set eve 1.0.0 bundles, the Workflow 5.5 runtime
-(core 5.5.0, world 5.2.0, world-local 5.3.0). A minor does not reliably identify a `@workflow/*` set, so
-the entries name exact patches; `eve-versions.mts` records why each one earns
+(core 5.5.0, world 5.2.0, world-local 5.3.0). The matrix also runs eve 1.1.0
+(core 5.6.1, world 5.2.2, world-local 5.4.1) and eve 1.3.0 (core 5.7.0,
+world 5.3.0, world-local 5.5.0) to prove newer bundled runtimes drive this
+World; eve 1.2.0 bundles 1.3.0's set and stays documented but disabled, so
+`EVE_VERSION=1.2.0` fails. A minor does not reliably identify a `@workflow/*`
+set, so the entries name exact patches; `eve-versions.mts` records why each one earns
 its install. eve moves a session to a fresh run by force-claiming its hook
 tokens (`capabilities.hookForceClaim`), which `session-handoff.test.mts` drives
 through two compactions. The suites drive the agent through `eve/client`, the
