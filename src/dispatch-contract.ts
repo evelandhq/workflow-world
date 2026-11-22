@@ -166,8 +166,8 @@ export function secretMatches(expected: string, received: string | null | undefi
  * not orchestrator deliveries and never take the gate (upstream's
  * `singleOrchestratorRunIdOf`): an orchestrator runs inline steps for as long
  * as they take, and one the dispatcher granted a live event feed
- * (`LIVE_FEED_HEADER`) stays live up to 30 s more while it waits on a
- * background step (eve's linger), so a step held behind it would wait all of
+ * (`LIVE_FEED_HEADER`) stays live up to 30 s more (5 s under Workflow 5.7,
+ * eve 1.2+) while it waits on a background step (eve's linger), so a step held behind it would wait all of
  * that out before it could even start. A hop must never be coalesced either:
  * its delivery sends the next hop, and a re-run that finds the wait not yet
  * due would not.
@@ -224,7 +224,8 @@ export function isCoalescibleWake(body: unknown): boolean {
  * executor's `events.subscribe` opens one only inside such a delivery
  * (`delivery-context.ts`). With a live feed the runtime holds the delivery
  * open after its work is done (eve's linger: up to 30 s while a background
- * step is outstanding, 5 s while only a hook is open), and the held POST is
+ * step is outstanding, 5 s under Workflow 5.7 / eve 1.2+, and 5 s while only a
+ * hook is open), and the held POST is
  * one of the dispatcher's concurrency slots, so the dispatcher grants a
  * bounded share of them (`createLiveFeedGrants`) and only to orchestrator
  * deliveries.

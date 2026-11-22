@@ -761,8 +761,8 @@ it.** Every run is a spec 9 (single-orchestrator) run. Its step messages and a
 long wait's intermediate timer hops never take it (`orchestratorDeliveryRunId`
 in `src/dispatch-contract.ts`): an orchestrator runs its inline steps for as
 long as they take, and one the dispatcher granted a live feed stays live up to
-30 s more while it waits on a background step (eve's linger; 5 s while only a
-hook is open), so a step held behind it would wait all of that out before it
+30 s more while it waits on a background step (eve's linger; 5 s under Workflow
+5.7, eve 1.2+, and 5 s while only a hook is open), so a step held behind it would wait all of that out before it
 could start. A delivery that was not granted a feed does not linger. Its hook
 wakes take the gate too: the running orchestrator tails the run's log, so a
 resume or a cancel reaches it without a second delivery, and a second

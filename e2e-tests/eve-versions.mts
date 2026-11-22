@@ -5,15 +5,20 @@
  *
  * eve bundles the Workflow runtime rather than installing it, and records the
  * set in `dist/src/compiled/.vendor-stamp.json`. 1.0.0 bundles the Workflow
- * 5.5 runtime the pins here follow:
+ * 5.5 runtime the pins here follow. The newer entries do not move the pins;
+ * they prove a newer bundled runtime drives this World:
  *
- * | package                 | 1.0.0 |
- * | ----------------------- | ----- |
- * | `@workflow/core`        | 5.5.0 |
- * | `@workflow/world`       | 5.2.0 |
- * | `@workflow/world-local` | 5.3.0 |
- * | `@workflow/errors`      | 5.1.1 |
- * | `@workflow/utils`       | 5.1.0 |
+ * | package                 | 1.0.0 | 1.1.0 | 1.2.0, 1.3.0 |
+ * | ----------------------- | ----- | ----- | ------------ |
+ * | `@workflow/core`        | 5.5.0 | 5.6.1 | 5.7.0        |
+ * | `@workflow/world`       | 5.2.0 | 5.2.2 | 5.3.0        |
+ * | `@workflow/world-local` | 5.3.0 | 5.4.1 | 5.5.0        |
+ * | `@workflow/errors`      | 5.1.1 | 5.1.3 | 5.1.4        |
+ * | `@workflow/utils`       | 5.1.0 |       |              |
+ *
+ * Only 1.0.0's stamp lists `@workflow/utils`; 1.1.0 and later do not. 1.2.0
+ * and 1.3.0 bundle the same set, so 1.2.0 stays documented and disabled and
+ * 1.3.0 covers that set.
  *
  * eve 1.0 creates spec 9 (single-orchestrator) runs (`WORKFLOW_SPEC_VERSION=9`)
  * on a World that declares `capabilities.inBandFence`. It moves a session to a
@@ -34,7 +39,12 @@ export type EveVersion = {
   enabled: boolean;
 };
 
-export const EVE_VERSIONS: readonly EveVersion[] = [{ version: "1.0.0", enabled: true }];
+export const EVE_VERSIONS: readonly EveVersion[] = [
+  { version: "1.0.0", enabled: true },
+  { version: "1.1.0", enabled: true },
+  { version: "1.2.0", enabled: false },
+  { version: "1.3.0", enabled: true },
+];
 
 const eveVersionUnderTest = process.env.EVE_VERSION;
 

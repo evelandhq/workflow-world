@@ -10,6 +10,13 @@ than installing it, and records each version in
 `e2e-tests/eve-versions.mts` is the table of record. Exact patches matter:
 Workflow pins can move within an eve line, so a line is not a set.
 
+The real-eve e2e runs more than the pinned set. It also runs eve 1.1.0 (core
+5.6.1, world 5.2.2, world-local 5.4.1, errors 5.1.3) and eve 1.3.0 (core 5.7.0,
+world 5.3.0, world-local 5.5.0, errors 5.1.4), so a newer bundled runtime is
+proven to drive this World while the pins stay on 1.0.0's set. eve 1.2.0
+bundles the same set as 1.3.0, so it is documented and disabled. A new eve
+release earns an enabled entry only when its stamp lists a set not yet covered.
+
 ## What this World declares
 
 eve checks the World's `specVersion` against the range its runtime reads and,
